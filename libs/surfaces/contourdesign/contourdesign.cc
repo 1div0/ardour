@@ -440,7 +440,7 @@ ContourDesignControlProtocol::handle_event () {
 	new_state.jog = _buf[1];
 	new_state.buttons = (_buf[4] << 8) + _buf[3];
 
-//	cout << "event " << (int)new_state.shuttle << " " << (int)new_state.jog << " " << (int)new_state.buttons << endl;;
+	cout << "event " << (int)new_state.shuttle << " " << (int)new_state.jog << " " << (int)new_state.buttons << endl;;
 
 	for (uint8_t btn=0; btn<16; btn++) {
                 if ( (new_state.buttons & (1<<btn)) && !(_state.buttons & (1<<btn)) ) {
