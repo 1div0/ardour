@@ -33,6 +33,7 @@
 #include "pbd/types_convert.h"
 #include "pbd/xml++.h"
 
+#include "ardour/audioregion.h"
 #include "ardour/debug.h"
 #include "ardour/filter.h"
 #include "ardour/playlist.h"
@@ -73,7 +74,6 @@ namespace ARDOUR {
 		PBD::PropertyDescriptor<timecnt_t> length;
 		PBD::PropertyDescriptor<double> beat;
 		PBD::PropertyDescriptor<timepos_t> sync_position;
-		PBD::PropertyDescriptor<timepos_t> position;
 		PBD::PropertyDescriptor<layer_t> layer;
 		PBD::PropertyDescriptor<timepos_t> ancestral_start;
 		PBD::PropertyDescriptor<timecnt_t> ancestral_length;
@@ -82,11 +82,14 @@ namespace ARDOUR {
 		PBD::PropertyDescriptor<uint64_t> layering_index;
 		PBD::PropertyDescriptor<std::string> tags;
 		PBD::PropertyDescriptor<bool> contents;
+
+/* these properties are used as a convenience for announcing changes to state, but aren't stored as properties */
 		PBD::PropertyDescriptor<Temporal::TimeDomain> time_domain;
+
 	}
 }
 
-PBD::Signal2<void,boost::shared_ptr<ARDOUR::RegionList>,const PropertyChange&> Region::RegionsPropertyChanged;
+PBD::Signal2<void,std::shared_ptr<ARDOUR::RegionList>,const PropertyChange&> Region::RegionsPropertyChanged;
 
 void
 Region::make_property_quarks ()
@@ -125,8 +128,6 @@ Region::make_property_quarks ()
 	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for length = %1\n", Properties::length.property_id));
 	Properties::beat.property_id = g_quark_from_static_string (X_("beat"));
 	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for beat = %1\n", Properties::beat.property_id));
-	Properties::position.property_id = g_quark_from_static_string (X_("position"));
-	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for position = %1\n", Properties::position.property_id));
 	Properties::sync_position.property_id = g_quark_from_static_string (X_("sync-position"));
 	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for sync-position = %1\n", Properties::sync_position.property_id));
 	Properties::layer.property_id = g_quark_from_static_string (X_("layer"));
@@ -145,6 +146,8 @@ Region::make_property_quarks ()
 	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for tags = %1\n",	Properties::tags.property_id));
 	Properties::contents.property_id = g_quark_from_static_string (X_("contents"));
 	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for contents = %1\n",	Properties::contents.property_id));
+	Properties::time_domain.property_id = g_quark_from_static_string (X_("time_domain"));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for time_domain = %1\n",	Properties::time_domain.property_id));
 }
 
 void
@@ -277,7 +280,7 @@ Region::Region (const SourceList& srcs)
 }
 
 /** Create a new Region from an existing one */
-Region::Region (boost::shared_ptr<const Region> other)
+Region::Region (std::shared_ptr<const Region> other)
 	: SessionObject(other->session(), other->name())
 	, _type (other->data_type())
 	, REGION_COPY_STATE (other)
@@ -335,7 +338,7 @@ Region::Region (boost::shared_ptr<const Region> other)
  * the start within \a other is given by \a offset
  * (i.e. relative to the start of \a other's sources, the start is \a offset + \a other.start()
  */
-Region::Region (boost::shared_ptr<const Region> other, timecnt_t const & offset)
+Region::Region (std::shared_ptr<const Region> other, timecnt_t const & offset)
 	: SessionObject(other->session(), other->name())
 	, _type (other->data_type())
 	, REGION_COPY_STATE (other)
@@ -356,7 +359,7 @@ Region::Region (boost::shared_ptr<const Region> other, timecnt_t const & offset)
 	use_sources (other->_sources);
 	set_master_sources (other->_master_sources);
 
-	_length.call().set_position (other->position() + offset);
+	_length = timecnt_t (_length.val().distance(), other->position() + offset);
 	_start = other->_start.val() + offset;
 
 	/* if the other region had a distinct sync point
@@ -379,8 +382,8 @@ Region::Region (boost::shared_ptr<const Region> other, timecnt_t const & offset)
 	assert (_type == other->data_type());
 }
 
-/** Create a copy of @param other but with different sources. Used by filters */
-Region::Region (boost::shared_ptr<const Region> other, const SourceList& srcs)
+/** Create a copy of @p other but with different sources. Used by filters */
+Region::Region (std::shared_ptr<const Region> other, const SourceList& srcs)
 	: SessionObject (other->session(), other->name())
 	, _type (srcs.front()->type())
 	, REGION_COPY_STATE (other)
@@ -413,7 +416,7 @@ Region::~Region ()
 }
 
 void
-Region::set_playlist (boost::weak_ptr<Playlist> wpl)
+Region::set_playlist (std::weak_ptr<Playlist> wpl)
 {
 	_playlist = wpl.lock();
 }
@@ -436,7 +439,7 @@ Region::set_selected_for_solo(bool yn)
 {
 	if (_soloSelected != yn) {
 
-		boost::shared_ptr<Playlist> pl (playlist());
+		std::shared_ptr<Playlist> pl (playlist());
 		if (pl){
 			if (yn) {
 				pl->AddToSoloSelectedList(this);
@@ -455,8 +458,17 @@ Region::set_length (timecnt_t const & len)
 	if (locked()) {
 		return;
 	}
+	if (_length == len) {
+		return;
+	}
 
-	if (_length == len || len.zero()) {
+	set_length_unchecked (len);
+}
+
+void
+Region::set_length_unchecked (timecnt_t const & len)
+{
+	if (len.is_zero ()) {
 		return;
 	}
 
@@ -474,7 +486,6 @@ Region::set_length (timecnt_t const & len)
 		return;
 	}
 
-
 	set_length_internal (l);
 	_whole_file = false;
 	first_edit ();
@@ -491,12 +502,14 @@ Region::set_length (timecnt_t const & len)
 void
 Region::set_length_internal (timecnt_t const & len)
 {
-	timecnt_t l (len);
-
-	l.set_position (position());
-
-	_last_length = l;
-	_length = l;
+	/* maintain position value of both _last_length and _length.
+	 *
+	 * This is very important: set_length() can only be used to the length
+	 * component of _length, and set_position() can only be used to set the
+	 * position component.
+	 */
+	_last_length = timecnt_t (_length.val().distance(), _last_length.position());
+	_length = timecnt_t (len.distance(), _length.val().position());
 }
 
 void
@@ -508,7 +521,7 @@ Region::maybe_uncopy ()
 void
 Region::first_edit ()
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 
 	if (_first_edit != EditChangesNothing && pl) {
 
@@ -524,13 +537,13 @@ Region::first_edit ()
 bool
 Region::at_natural_position () const
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 
 	if (!pl) {
 		return false;
 	}
 
-	boost::shared_ptr<Region> whole_file_region = get_parent();
+	std::shared_ptr<Region> whole_file_region = get_parent();
 
 	if (whole_file_region) {
 		if (position() == whole_file_region->position() + _start) {
@@ -544,13 +557,13 @@ Region::at_natural_position () const
 void
 Region::move_to_natural_position ()
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 
 	if (!pl) {
 		return;
 	}
 
-	boost::shared_ptr<Region> whole_file_region = get_parent();
+	std::shared_ptr<Region> whole_file_region = get_parent();
 
 	if (whole_file_region) {
 		set_position (whole_file_region->position() + _start);
@@ -564,18 +577,42 @@ Region::special_set_position (timepos_t const & pos)
 	 * a way to store its "natural" or "captured" position.
 	 */
 
-	_length.call().set_position (pos);
+	_length = timecnt_t (_length.val().distance(), pos);
 }
 
 void
 Region::set_position_time_domain (Temporal::TimeDomain td)
 {
-	if (_length.val().time_domain() != td) {
-
-		_length.call().set_time_domain (td);
-
-		send_change (Properties::time_domain);
+	if (position_time_domain() == td) {
+		return;
 	}
+
+	/* _length is a property so we cannot directly call
+	 * ::set_time_domain() on it. Create a temporary timecnt_t,
+	 * change it's time domain, and then assign to _length.
+	 *
+	 * The region's duration (distance) time-domain must not change (!)
+	 *
+	 * An Audio region's duration must always be given in samples,
+	 * and a MIDI region's duration in beats.
+	 * (Beat granularity is coarser than samples. If an Audio-region's duration
+	 * is specified in beats, the disk-reader can try to read more samples than
+	 * are present in the source. This causes various follow up bugs.
+	 *
+	 * This can change in the future:
+	 * - When events inside a MIDI region can use Audio-time, a MIDI region's duration must also be specified in in audio-time.
+	 * - When Ardour support time-strech of Audio regions at disk-reader level, Audio regions can be stretched to match music-time.
+	 */
+	timepos_t p (position ());
+	p.set_time_domain (td);
+
+	timecnt_t t (length ().distance (), p);
+	_length = t;
+
+	/* ensure time-domain matches Datatype -- this may trigger in old broken sessions */
+	assert (_length.val().time_domain () == time_domain ());
+
+	send_change (Properties::time_domain);
 }
 
 void
@@ -589,7 +626,7 @@ Region::recompute_position_from_time_domain ()
 void
 Region::update_after_tempo_map_change (bool send)
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 
 	if (!pl) {
 		return;
@@ -599,7 +636,7 @@ Region::update_after_tempo_map_change (bool send)
 	 * change
 	 */
 
-	if (_length.val().time_domain() == Temporal::AudioTime) {
+	if (_length.val().time_domain() == Temporal::AudioTime && position_time_domain () == Temporal::AudioTime) {
 		return;
 	}
 
@@ -621,7 +658,6 @@ Region::update_after_tempo_map_change (bool send)
 
 	what_changed.add (Properties::start);
 	what_changed.add (Properties::length);
-	what_changed.add (Properties::position);
 
 	/* do this even if the position is the same. this helps out
 	 * a GUI that has moved its representation already.
@@ -636,42 +672,39 @@ Region::set_position (timepos_t const & pos)
 	if (!can_move()) {
 		return;
 	}
+	set_position_unchecked (pos);
+}
+
+void
+Region::set_position_unchecked (timepos_t const & pos)
+{
+	set_position_internal (pos);
 
 	/* do this even if the position is the same. this helps out
 	 * a GUI that has moved its representation already.
 	 */
-	PropertyChange p_and_l;
-
-	p_and_l.add (Properties::position);
-
-	set_position_internal (pos);
-
-	/* if locked to beats or bbt, changing position can potentially change
-	 * the length, because the tempo map may differ at the two different
-	 * positions. Theoretically we could check this, but the cost of
-	 * notifying about a (potential) length change is not that expensive
-	 * given that we already are notifying about position change.
-	 */
-
-	if (position_time_domain() != Temporal::AudioTime) {
-		p_and_l.add (Properties::length);
-	}
-
-	send_change (p_and_l);
+	send_change (Properties::length);
 
 }
 
 void
 Region::set_position_internal (timepos_t const & pos)
 {
-	/* We emit a change of Properties::position even if the position hasn't changed
+	/* We emit a change of Properties::length even if the position hasn't changed
 	 * (see Region::set_position), so we must always set this up so that
 	 * e.g. Playlist::notify_region_moved doesn't use an out-of-date last_position.
+	 *
+	 * maintain length value of both _last_length and _length.
+	 *
+	 * This is very important: set_length() can only be used to the length
+	 * component of _length, and set_position() can only be used to set the
+	 * position component.
 	 */
-	_last_length.set_position (position());
 
 	if (position() != pos) {
-		_length.call().set_position (pos);
+
+		_last_length.set_position (position());
+		_length = timecnt_t (_length.val().distance(), pos);
 
 		/* check that the new _position wouldn't make the current
 		 * length impossible - if so, change the length.
@@ -699,7 +732,7 @@ Region::set_initial_position (timepos_t const & pos)
 
 	if (position() != pos) {
 
-		_length.call().set_position (pos);
+		_length = timecnt_t (_length.val().distance(), pos);
 
 		/* check that the new _position wouldn't make the current
 		 * length impossible - if so, change the length.
@@ -721,7 +754,7 @@ Region::set_initial_position (timepos_t const & pos)
 	/* do this even if the position is the same. this helps out
 	 * a GUI that has moved its representation already.
 	 */
-	send_change (Properties::position);
+	send_change (Properties::length);
 }
 
 void
@@ -731,13 +764,13 @@ Region::nudge_position (timecnt_t const & n)
 		return;
 	}
 
-	if (n.zero()) {
+	if (n.is_zero()) {
 		return;
 	}
 
 	timepos_t new_position = position();
 
-	if (n.positive()) {
+	if (n.is_positive()) {
 		if (position() > timepos_t::max (n.time_domain()).earlier (n)) {
 			new_position = timepos_t::max (n.time_domain());
 		} else {
@@ -754,7 +787,7 @@ Region::nudge_position (timecnt_t const & n)
 	/* assumes non-musical nudge */
 	set_position_internal (new_position);
 
-	send_change (Properties::position);
+	send_change (Properties::length);
 }
 
 void
@@ -803,8 +836,8 @@ Region::move_start (timecnt_t const & distance)
 
 	timepos_t new_start (_start);
 	timepos_t current_start (_start);
-	
-	if (distance.positive()) {
+
+	if (distance.is_positive()) {
 
 		if (current_start > timepos_t::max (current_start.time_domain()).earlier (distance)) {
 			new_start = timecnt_t::max(current_start.time_domain()); // makes no sense
@@ -840,28 +873,34 @@ Region::move_start (timecnt_t const & distance)
 void
 Region::trim_front (timepos_t const & new_position)
 {
-	modify_front (new_position, false);
+	if (locked()) {
+		return;
+	}
+	modify_front_unchecked (new_position, false);
 }
 
 void
 Region::cut_front (timepos_t const & new_position)
 {
-	modify_front (new_position, true);
+	if (locked()) {
+		return;
+	}
+	modify_front_unchecked (new_position, true);
 }
 
 void
 Region::cut_end (timepos_t const & new_endpoint)
 {
-	modify_end (new_endpoint, true);
-}
-
-void
-Region::modify_front (timepos_t const & new_position, bool reset_fade)
-{
 	if (locked()) {
 		return;
 	}
+	modify_end_unchecked (new_endpoint, true);
+}
 
+
+void
+Region::modify_front_unchecked (timepos_t const & new_position, bool reset_fade)
+{
 	timepos_t last = end().decrement();
 	timepos_t source_zero;
 
@@ -902,12 +941,8 @@ Region::modify_front (timepos_t const & new_position, bool reset_fade)
 }
 
 void
-Region::modify_end (timepos_t const & new_endpoint, bool reset_fade)
+Region::modify_end_unchecked (timepos_t const & new_endpoint, bool reset_fade)
 {
-	if (locked()) {
-		return;
-	}
-
 	if (new_endpoint > position()) {
 		trim_to_internal (position(), position().distance (new_endpoint));
 		if (reset_fade) {
@@ -925,7 +960,10 @@ Region::modify_end (timepos_t const & new_endpoint, bool reset_fade)
 void
 Region::trim_end (timepos_t const & new_endpoint)
 {
-	modify_end (new_endpoint, false);
+	if (locked()) {
+		return;
+	}
+	modify_end_unchecked (new_endpoint, false);
 }
 
 void
@@ -948,13 +986,9 @@ Region::trim_to_internal (timepos_t const & pos, timecnt_t const & len)
 {
 	timepos_t new_start (len.time_domain());
 
-	if (locked()) {
-		return;
-	}
-
 	timecnt_t const start_shift = position().distance (pos);
 
-	if (start_shift.positive()) {
+	if (start_shift.is_positive()) {
 
 		if (start() > timecnt_t::max() - start_shift) {
 			new_start = timepos_t::max (start().time_domain());
@@ -962,7 +996,7 @@ Region::trim_to_internal (timepos_t const & pos, timecnt_t const & len)
 			new_start = start() + start_shift;
 		}
 
-	} else if (start_shift.negative()) {
+	} else if (start_shift.is_negative()) {
 
 		if (start() < -start_shift && !can_trim_start_before_source_start ()) {
 			new_start = timecnt_t (start().time_domain());
@@ -1001,7 +1035,7 @@ Region::trim_to_internal (timepos_t const & pos, timecnt_t const & len)
 			_last_length.set_position (position());
 		}
 		set_position_internal (pos);
-		what_changed.add (Properties::position);
+		what_changed.add (Properties::length);
 	}
 
 	if (length() != nl) {
@@ -1186,7 +1220,7 @@ Region::sync_position() const
 void
 Region::raise ()
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 	if (pl) {
 		pl->raise_region (shared_from_this ());
 	}
@@ -1195,7 +1229,7 @@ Region::raise ()
 void
 Region::lower ()
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 	if (pl) {
 		pl->lower_region (shared_from_this ());
 	}
@@ -1205,7 +1239,7 @@ Region::lower ()
 void
 Region::raise_to_top ()
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 	if (pl) {
 		pl->raise_region_to_top (shared_from_this());
 	}
@@ -1214,7 +1248,7 @@ Region::raise_to_top ()
 void
 Region::lower_to_bottom ()
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 	if (pl) {
 		pl->lower_region_to_bottom (shared_from_this());
 	}
@@ -1227,7 +1261,7 @@ Region::set_layer (layer_t l)
 }
 
 XMLNode&
-Region::state ()
+Region::state () const
 {
 	XMLNode *node = new XMLNode ("Region");
 	char buf2[64];
@@ -1309,7 +1343,7 @@ Region::state ()
 }
 
 XMLNode&
-Region::get_state ()
+Region::get_state () const
 {
 	return state ();
 }
@@ -1322,13 +1356,40 @@ Region::set_state (const XMLNode& node, int version)
 }
 
 int
-Region::_set_state (const XMLNode& node, int /*version*/, PropertyChange& what_changed, bool send)
+Region::_set_state (const XMLNode& node, int version, PropertyChange& what_changed, bool send)
 {
 	Temporal::BBT_Time bbt_time;
 
 	Stateful::save_extra_xml (node);
 
 	what_changed = set_values (node);
+
+	if (version < 7000) {
+
+		/* Older versions saved position and length as separate XML
+		 * node properties.
+		 */
+
+		samplepos_t p;
+		samplepos_t l;
+
+		if (node.get_property (X_("position"), p) && node.get_property (X_("length"), l)) {
+			_length = timecnt_t (l, timepos_t (p));
+		}
+
+		std::string lock_style;
+		if (node.get_property (X_("positional-lock-style"), lock_style)) {
+			if (lock_style == "MusicTime") {
+				double beat, start_beats, length_beats;
+				if (node.get_property (X_("beat"), beat) && node.get_property (X_("length-beats"), length_beats)) {
+					_length = timecnt_t (Temporal::Beats::from_double (length_beats), timepos_t (Temporal::Beats::from_double (beat)));
+				}
+				if (node.get_property (X_("start-beats"), start_beats)) {
+					_start = timepos_t (Temporal::Beats::from_double (start_beats));
+				}
+			}
+		}
+	}
 
 	/* Regions derived from "Destructive/Tape" mode tracks in earlier
 	 * versions will have their length set to an extremely large value
@@ -1341,9 +1402,16 @@ Region::_set_state (const XMLNode& node, int /*version*/, PropertyChange& what_c
 	 */
 
 	if (!_sources.empty() && _type == DataType::AUDIO) {
-		if ((length().time_domain() == Temporal::AudioTime) && (length() > _sources.front()->length())) {
-			_length = _sources.front()->length() - start();
-		 }
+		/* both region and source length must be audio time for this to
+		   actually be a case of a destructive track/region. And also
+		   for the operator>() in the 3rd conditional clause to be
+		   legal, since these values are timepos_t IS-A int62_t and
+		   that requires the same "flagged" status (i.e. domain) to be
+		   match.
+		*/
+		if ((length().time_domain() == Temporal::AudioTime) && (_sources.front()->length().time_domain() == Temporal::AudioTime) && (length().distance() > _sources.front()->length())) {
+			_length = timecnt_t (start().distance (_sources.front()->length()), _length.val().position());
+		}
 	}
 
 	set_id (node);
@@ -1379,6 +1447,25 @@ Region::_set_state (const XMLNode& node, int /*version*/, PropertyChange& what_c
 	return 0;
 }
 
+PropertyList
+Region::derive_properties (bool with_times, bool with_envelope) const
+{
+	PropertyList plist (properties ());
+	plist.remove (Properties::automatic);
+	plist.remove (Properties::sync_marked);
+	plist.remove (Properties::left_of_split);
+	plist.remove (Properties::valid_transients);
+	plist.remove (Properties::whole_file);
+	if (!with_envelope) {
+		plist.remove (Properties::envelope);
+	}
+	if (!with_times) {
+		plist.remove (Properties::start);
+		plist.remove (Properties::length);
+	}
+	return plist;
+}
+
 void
 Region::suspend_property_changes ()
 {
@@ -1390,7 +1477,7 @@ void
 Region::mid_thaw (const PropertyChange& what_changed)
 {
 	if (what_changed.contains (Properties::length)) {
-		if (what_changed.contains (Properties::position)) {
+		if (length().position() != last_position()) {
 			recompute_at_start ();
 		}
 		recompute_at_end ();
@@ -1413,11 +1500,11 @@ Region::send_change (const PropertyChange& what_changed)
 		 */
 
 		try {
-			boost::shared_ptr<Region> rptr = shared_from_this();
-			if (_changemap) { 
+			std::shared_ptr<Region> rptr = shared_from_this();
+			if (_changemap) {
 				(*_changemap)[what_changed].push_back (rptr);
 			} else {
-				boost::shared_ptr<RegionList> rl (new RegionList);
+				std::shared_ptr<RegionList> rl (new RegionList);
 				rl->push_back (rptr);
 				RegionsPropertyChanged (rl, what_changed);
 			}
@@ -1428,20 +1515,20 @@ Region::send_change (const PropertyChange& what_changed)
 }
 
 bool
-Region::overlap_equivalent (boost::shared_ptr<const Region> other) const
+Region::overlap_equivalent (std::shared_ptr<const Region> other) const
 {
 	return coverage (other->position(), other->nt_last()) != Temporal::OverlapNone;
 }
 
 bool
-Region::enclosed_equivalent (boost::shared_ptr<const Region> other) const
+Region::enclosed_equivalent (std::shared_ptr<const Region> other) const
 {
 	return ((position() >= other->position() && end() <= other->end()) ||
 	        (position() <= other->position() && end() >= other->end()));
 }
 
 bool
-Region::layer_and_time_equivalent (boost::shared_ptr<const Region> other) const
+Region::layer_and_time_equivalent (std::shared_ptr<const Region> other) const
 {
 	return _layer == other->_layer &&
 		position() == other->position() &&
@@ -1449,7 +1536,7 @@ Region::layer_and_time_equivalent (boost::shared_ptr<const Region> other) const
 }
 
 bool
-Region::exact_equivalent (boost::shared_ptr<const Region> other) const
+Region::exact_equivalent (std::shared_ptr<const Region> other) const
 {
 	return _start == other->_start &&
 		position() == other->position() &&
@@ -1457,14 +1544,14 @@ Region::exact_equivalent (boost::shared_ptr<const Region> other) const
 }
 
 bool
-Region::size_equivalent (boost::shared_ptr<const Region> other) const
+Region::size_equivalent (std::shared_ptr<const Region> other) const
 {
 	return _start == other->_start &&
 		_length == other->_length;
 }
 
 void
-Region::source_deleted (boost::weak_ptr<Source>)
+Region::source_deleted (std::weak_ptr<Source>)
 {
 	drop_sources ();
 
@@ -1510,7 +1597,7 @@ Region::set_master_sources (const SourceList& srcs)
 }
 
 bool
-Region::source_equivalent (boost::shared_ptr<const Region> other) const
+Region::source_equivalent (std::shared_ptr<const Region> other) const
 {
 	if (!other)
 		return false;
@@ -1539,7 +1626,7 @@ Region::source_equivalent (boost::shared_ptr<const Region> other) const
 }
 
 bool
-Region::any_source_equivalent (boost::shared_ptr<const Region> other) const
+Region::any_source_equivalent (std::shared_ptr<const Region> other) const
 {
 	if (!other) {
 		return false;
@@ -1579,11 +1666,11 @@ Region::source_string () const
 }
 
 void
-Region::deep_sources (std::set<boost::shared_ptr<Source> > & sources) const
+Region::deep_sources (std::set<std::shared_ptr<Source> > & sources) const
 {
 	for (SourceList::const_iterator i = _sources.begin(); i != _sources.end(); ++i) {
 
-		boost::shared_ptr<PlaylistSource> ps = boost::dynamic_pointer_cast<PlaylistSource> (*i);
+		std::shared_ptr<PlaylistSource> ps = std::dynamic_pointer_cast<PlaylistSource> (*i);
 
 		if (ps) {
 			if (sources.find (ps) == sources.end()) {
@@ -1600,7 +1687,7 @@ Region::deep_sources (std::set<boost::shared_ptr<Source> > & sources) const
 
 	for (SourceList::const_iterator i = _master_sources.begin(); i != _master_sources.end(); ++i) {
 
-		boost::shared_ptr<PlaylistSource> ps = boost::dynamic_pointer_cast<PlaylistSource> (*i);
+		std::shared_ptr<PlaylistSource> ps = std::dynamic_pointer_cast<PlaylistSource> (*i);
 
 		if (ps) {
 			if (sources.find (ps) == sources.end()) {
@@ -1617,7 +1704,7 @@ Region::deep_sources (std::set<boost::shared_ptr<Source> > & sources) const
 }
 
 bool
-Region::uses_source (boost::shared_ptr<const Source> source, bool shallow) const
+Region::uses_source (std::shared_ptr<const Source> source, bool shallow) const
 {
 	for (SourceList::const_iterator i = _sources.begin(); i != _sources.end(); ++i) {
 		if (*i == source) {
@@ -1625,7 +1712,7 @@ Region::uses_source (boost::shared_ptr<const Source> source, bool shallow) const
 		}
 
 		if (!shallow) {
-			boost::shared_ptr<PlaylistSource> ps = boost::dynamic_pointer_cast<PlaylistSource> (*i);
+			std::shared_ptr<PlaylistSource> ps = std::dynamic_pointer_cast<PlaylistSource> (*i);
 
 			if (ps) {
 				if (ps->playlist()->uses_source (source)) {
@@ -1641,7 +1728,7 @@ Region::uses_source (boost::shared_ptr<const Source> source, bool shallow) const
 		}
 
 		if (!shallow) {
-			boost::shared_ptr<PlaylistSource> ps = boost::dynamic_pointer_cast<PlaylistSource> (*i);
+			std::shared_ptr<PlaylistSource> ps = std::dynamic_pointer_cast<PlaylistSource> (*i);
 
 			if (ps) {
 				if (ps->playlist()->uses_source (source)) {
@@ -1655,7 +1742,7 @@ Region::uses_source (boost::shared_ptr<const Source> source, bool shallow) const
 }
 
 
-timecnt_t
+timepos_t
 Region::source_length (uint32_t n) const
 {
 	assert (n < _sources.size());
@@ -1672,10 +1759,12 @@ Region::verify_length (timecnt_t& len)
 	timecnt_t maxlen;
 
 	for (uint32_t n = 0; n < _sources.size(); ++n) {
-		maxlen = max (maxlen, source_length(n) - _start);
+		/* this is computing the distance between _start and the end of the source */
+		timecnt_t max_possible_length = _start.val().distance (source_length(n));
+		maxlen = max (maxlen, max_possible_length);
 	}
 
-	len = min (len, maxlen);
+	len = timecnt_t (min (len, maxlen), len.position());
 
 	return true;
 }
@@ -1690,7 +1779,7 @@ Region::verify_start_and_length (timepos_t const & new_start, timecnt_t& new_len
 	timecnt_t maxlen;
 
 	for (uint32_t n = 0; n < _sources.size(); ++n) {
-		maxlen = max (maxlen, source_length(n) - new_start);
+		maxlen = max (maxlen, new_start.distance (source_length(n)));
 	}
 
 	new_length = min (new_length, maxlen);
@@ -1706,44 +1795,29 @@ Region::verify_start (timepos_t const & pos)
 	}
 
 	for (uint32_t n = 0; n < _sources.size(); ++n) {
-		if (pos > source_length(n) - _length) {
+		/* _start can't be before the start of the region as defined by its length */
+		if (pos > source_length(n).earlier (_length)) {
 			return false;
 		}
 	}
 	return true;
 }
 
-bool
-Region::verify_start_mutable (timecnt_t & new_start)
-{
-	if (source() && source()->length_mutable()) {
-		return true;
-	}
-
-	for (uint32_t n = 0; n < _sources.size(); ++n) {
-		if (new_start > source_length(n) - _length) {
-			new_start = source_length(n) - _length;
-		}
-	}
-
-	return true;
-}
-
-boost::shared_ptr<Region>
+std::shared_ptr<Region>
 Region::get_parent() const
 {
-	boost::shared_ptr<Playlist> pl (playlist());
+	std::shared_ptr<Playlist> pl (playlist());
 
 	if (pl) {
-		boost::shared_ptr<Region> r;
-		boost::shared_ptr<Region const> grrr2 = boost::dynamic_pointer_cast<Region const> (shared_from_this());
+		std::shared_ptr<Region> r;
+		std::shared_ptr<Region const> grrr2 = std::dynamic_pointer_cast<Region const> (shared_from_this());
 
 		if (grrr2 && (r = _session.find_whole_file_parent (grrr2))) {
-			return boost::static_pointer_cast<Region> (r);
+			return std::static_pointer_cast<Region> (r);
 		}
 	}
 
-	return boost::shared_ptr<Region>();
+	return std::shared_ptr<Region>();
 }
 
 int
@@ -1884,7 +1958,7 @@ Region::drop_sources ()
 void
 Region::use_sources (SourceList const & s)
 {
-	set<boost::shared_ptr<Source> > unique_srcs;
+	set<std::shared_ptr<Source> > unique_srcs;
 
 	for (SourceList::const_iterator i = s.begin (); i != s.end(); ++i) {
 
@@ -1898,7 +1972,7 @@ Region::use_sources (SourceList const & s)
 
 		if (unique_srcs.find (*i) == unique_srcs.end ()) {
 			unique_srcs.insert (*i);
-			(*i)->DropReferences.connect_same_thread (*this, boost::bind (&Region::source_deleted, this, boost::weak_ptr<Source>(*i)));
+			(*i)->DropReferences.connect_same_thread (*this, boost::bind (&Region::source_deleted, this, std::weak_ptr<Source>(*i)));
 		}
 	}
 }
@@ -1973,7 +2047,7 @@ Region::latest_possible_sample () const
 		/* non-audio regions have a length that may vary based on their
 		 * position, so we have to pass it in the call.
 		 */
-		minlen = min (minlen, (*i)->length ());
+		minlen = min (minlen, timecnt_t ((*i)->length (), (*i)->natural_position()));
 	}
 
 	/* the latest possible last sample is determined by the current
@@ -2020,6 +2094,12 @@ Region::source_beats_to_absolute_beats (Temporal::Beats beats) const
 	return source_position().beats() + beats;
 }
 
+Temporal::Beats
+Region::absolute_time_to_region_beats(timepos_t const & b) const
+{
+	 return (position().distance (b)).beats () + start().beats();;
+}
+
 Temporal::timepos_t
 Region::region_beats_to_absolute_time (Temporal::Beats beats) const
 {
@@ -2036,45 +2116,70 @@ Region::source_beats_to_absolute_time (Temporal::Beats beats) const
 	return source_position() + timepos_t (beats);
 }
 
+/** Calculate  (time - source_position) in Beats
+ *
+ * Measure the distance between the absolute time and the position of
+ * the source start, in beats. The result is positive if time is later
+ * than source position.
+ *
+ * @param p is an absolute time
+ * @returns time offset from p to the region's source position as the origin in Beat units
+ */
 Temporal::Beats
-Region::absolute_time_to_source_beats(timepos_t const & time) const
+Region::absolute_time_to_source_beats(timepos_t const& p) const
 {
-	/* measure the distance between the absolute time and the position of
-	   the source start, in beats. positive if time is later than source
-	   position.
-	*/
-
-	return source_position().distance (time).beats();
+	return source_position().distance (p).beats();
 }
 
-timepos_t
+/** Calculate (pos - source-position)
+ *
+ * @param p is an absolute time
+ * @returns time offset from p to the region's source position as the origin.
+ */
+timecnt_t
 Region::source_relative_position (timepos_t const & p) const
 {
-	/* p is an absolute time, return the time with the source position as
-	   the origin.
-
-	   Note that conventionally we would return a timecnt_t, expressing a
-	   distance from the source position. But we return timepos_t for which
-	   the origin is implicit, and in this case, the origin is the region
-	   position, not zero.
-
-	   XXX this seems likely to cause problems.
-	*/
-	return p.earlier (source_position());
+	return source_position().distance (p);
 }
 
-timepos_t
+/** Calculate (p - region-position)
+ *
+ * @param p is an absolute time
+ * @returns the time offset using the region (timeline) position as origin
+ */
+timecnt_t
 Region::region_relative_position (timepos_t const & p) const
 {
-	/* p is an absolute time, return the time with the region position as
-	   the origin.
+	return position().distance (p);
+}
 
-	   Note that conventionally we would return a timecnt_t, expressing a
-	   distance from the region position. But we return timepos_t for which
-	   the origin is implicit, and in this case, the origin is the region
-	   position, not zero.
+Temporal::TimeDomain
+Region::time_domain() const
+{
+	std::shared_ptr<Playlist> pl (_playlist.lock());
 
-	   XXX this seems likely to cause problems.
-	*/
-	return p.earlier (position());
+	if (pl) {
+		return pl->time_domain ();
+	}
+
+	switch (_type) {
+	case DataType::AUDIO:
+		return Temporal::AudioTime;
+	default:
+		break;
+	}
+
+	return Temporal::BeatTime;
+}
+
+void
+Region::globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to)
+{
+	assert (Temporal::domain_swap);
+
+	if (_length.val().time_domain() == from) {
+		timecnt_t& l (_length.non_const_val());
+		l.set_time_domain (to);
+		Temporal::domain_swap->add (l);
+	}
 }

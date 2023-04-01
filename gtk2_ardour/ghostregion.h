@@ -122,7 +122,8 @@ public:
 	void update_hit (GhostEvent* hit);
 	void remove_note (NoteBase*);
 
-	void redisplay_model();
+	void model_changed();
+	void view_changed();
 	void clear_events();
 
 private:
@@ -133,9 +134,9 @@ private:
 
 	MidiRegionView& parent_mrv;
 	typedef Evoral::Note<Temporal::Beats> NoteType;
-	MidiGhostRegion::GhostEvent* find_event (boost::shared_ptr<NoteType>);
+	MidiGhostRegion::GhostEvent* find_event (std::shared_ptr<NoteType>);
 
-	typedef boost::unordered_map<boost::shared_ptr<NoteType>, MidiGhostRegion::GhostEvent* > EventList;
+	typedef boost::unordered_map<std::shared_ptr<NoteType>, MidiGhostRegion::GhostEvent* > EventList;
 	EventList events;
 	EventList::iterator _optimization_iterator;
 };

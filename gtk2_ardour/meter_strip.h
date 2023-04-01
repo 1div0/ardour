@@ -35,6 +35,7 @@
 #include "ardour/ardour.h"
 
 #include "widgets/ardour_button.h"
+#include "widgets/ardour_knob.h"
 
 #include "level_meter.h"
 #include "route_ui.h"
@@ -48,18 +49,18 @@ namespace ARDOUR {
 class MeterStrip : public Gtk::VBox, public AxisView, public RouteUI
 {
 public:
-	MeterStrip (ARDOUR::Session*, boost::shared_ptr<ARDOUR::Route>);
+	MeterStrip (ARDOUR::Session*, std::shared_ptr<ARDOUR::Route>);
 	MeterStrip (int, ARDOUR::MeterType);
 	~MeterStrip ();
 
 	std::string name() const;
 	Gdk::Color color () const;
 
-	boost::shared_ptr<ARDOUR::Stripable> stripable() const { return RouteUI::stripable(); }
+	std::shared_ptr<ARDOUR::Stripable> stripable() const { return RouteUI::stripable(); }
 
 	void set_session (ARDOUR::Session* s);
 	void fast_update ();
-	boost::shared_ptr<ARDOUR::Route> route() { return _route; }
+	std::shared_ptr<ARDOUR::Route> route() { return _route; }
 
 	static PBD::Signal1<void,MeterStrip*> CatchDeletion;
 	static PBD::Signal0<void> MetricChanged;
@@ -82,7 +83,7 @@ public:
 	bool selected() const { return false; }
 
 protected:
-	boost::shared_ptr<ARDOUR::Route> _route;
+	std::shared_ptr<ARDOUR::Route> _route;
 	PBD::ScopedConnectionList meter_route_connections;
 	PBD::ScopedConnectionList level_meter_connection;
 	void self_delete ();
@@ -121,6 +122,7 @@ private:
 	Gtk::HBox recbox;
 	Gtk::HBox mon_in_box;
 	Gtk::HBox mon_disk_box;
+	Gtk::HBox gain_box;
 
 	Gtk::Alignment meter_align;
 	Gtk::Alignment peak_align;
@@ -140,12 +142,17 @@ private:
 
 	LevelMeterHBox *level_meter;
 
+	ArdourWidgets::ArdourKnob gain_control;
+
 	void route_property_changed (const PBD::PropertyChange&);
 	void meter_configuration_changed (ARDOUR::ChanCount);
 	void meter_type_changed (ARDOUR::MeterType);
 	void update_background (ARDOUR::MeterType);
 
 	bool peak_button_release (GdkEventButton*);
+
+	void gain_start_touch ();
+	void gain_end_touch ();
 
 	void parameter_changed (std::string const & p);
 	void redraw_metrics ();

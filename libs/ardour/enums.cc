@@ -71,6 +71,7 @@ setup_enum_writer ()
 	DiskIOPoint _DiskIOPoint;
 	MeterType _MeterType;
 	TrackMode _TrackMode;
+	RecordMode _RecordMode;
 	NoteMode _NoteMode;
 	ChannelMode _ChannelMode;
 	ColorMode _ColorMode;
@@ -80,6 +81,7 @@ setup_enum_writer ()
 	MeterLineUp _MeterLineUp;
 	InputMeterLayout _InputMeterLayout;
 	EditMode _EditMode;
+	RippleMode _RippleMode;
 	RegionPoint _RegionPoint;
 	Placement _Placement;
 	MonitorModel _MonitorModel;
@@ -141,6 +143,8 @@ setup_enum_writer ()
 	WaveformScale _WaveformScale;
 	WaveformShape _WaveformShape;
 	ScreenSaverMode _ScreenSaverMode;
+	PluginGUIBehavior _PluginGUIBehavior;
+	AppleNSGLViewMode _AppleNSGLViewMode;
 	Session::PostTransportWork _Session_PostTransportWork;
 	MTC_Status _MIDI_MTC_Status;
 	BufferingPreset _BufferingPreset;
@@ -156,7 +160,11 @@ setup_enum_writer ()
 	TransportState _TransportState;
 	LocateTransportDisposition _LocateTransportDisposition;
 	Trigger::State _TriggerState;
-	
+	Trigger::LaunchStyle _TriggerLaunchStyle;
+	FollowAction::Type _FollowAction;
+	Trigger::StretchMode _TriggerStretchMode;
+	CueBehavior _CueBehavior;
+
 #define REGISTER(e) enum_writer.register_distinct (typeid(e).name(), i, s); i.clear(); s.clear()
 #define REGISTER_BITS(e) enum_writer.register_bits (typeid(e).name(), i, s); i.clear(); s.clear()
 #define REGISTER_ENUM(e) i.push_back (e); s.push_back (#e)
@@ -197,6 +205,7 @@ setup_enum_writer ()
 	REGISTER_ENUM (MonitoringAutomation);
 	REGISTER_ENUM (BusSendLevel);
 	REGISTER_ENUM (BusSendEnable);
+	REGISTER_ENUM (InsertReturnLevel);
 	REGISTER_ENUM (MainOutVolume);
 	REGISTER (_AutomationType);
 
@@ -252,6 +261,11 @@ setup_enum_writer ()
 	REGISTER_ENUM (Destructive);
 	REGISTER (_TrackMode);
 
+	REGISTER_ENUM (RecLayered);
+	REGISTER_ENUM (RecNonLayered);
+	REGISTER_ENUM (RecSoundOnSound);
+	REGISTER (_RecordMode);
+
 	REGISTER_ENUM (Sustained);
 	REGISTER_ENUM (Percussive);
 	REGISTER (_NoteMode);
@@ -300,9 +314,13 @@ setup_enum_writer ()
 	REGISTER_ENUM (LayoutAutomatic);
 	REGISTER (_InputMeterLayout);
 
+	REGISTER_ENUM (RippleSelected);
+	REGISTER_ENUM (RippleAll);  //enum had to be disambiguated from EditMode:RippleAll
+	REGISTER_ENUM (RippleInterview);
+	REGISTER (_RippleMode);
+
 	REGISTER_ENUM (Slide);
 	REGISTER_ENUM (Ripple);
-	REGISTER_ENUM (RippleAll);
 	REGISTER_ENUM (Lock);
 	REGISTER (_EditMode);
 	/*
@@ -464,6 +482,7 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (SessionEvent, EndRoll);
 	REGISTER_CLASS_ENUM (SessionEvent, TransportStateChange);
 	REGISTER_CLASS_ENUM (SessionEvent, AutoLoop);
+	REGISTER_CLASS_ENUM (SessionEvent, SyncCues);
 	REGISTER (_SessionEvent_Type);
 
 	REGISTER_CLASS_ENUM (SessionEvent, Add);
@@ -566,6 +585,8 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (Location, IsRangeMarker);
 	REGISTER_CLASS_ENUM (Location, IsSkip);
 	REGISTER_CLASS_ENUM (Location, IsClockOrigin);
+	REGISTER_CLASS_ENUM (Location, IsXrun);
+	REGISTER_CLASS_ENUM (Location, IsCueMarker);
 	REGISTER_BITS (_Location_Flags);
 
 	REGISTER_CLASS_ENUM (Track, NoFreeze);
@@ -614,6 +635,7 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (ExportFormatBase, F_Ogg);
 	REGISTER_CLASS_ENUM (ExportFormatBase, F_CAF);
 	REGISTER_CLASS_ENUM (ExportFormatBase, F_FFMPEG);
+	REGISTER_CLASS_ENUM (ExportFormatBase, F_MPEG);
 	REGISTER (_ExportFormatBase_FormatId);
 
 	REGISTER_CLASS_ENUM (ExportFormatBase, E_FileDefault);
@@ -631,6 +653,8 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (ExportFormatBase, SF_Float);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SF_Double);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SF_Vorbis);
+	REGISTER_CLASS_ENUM (ExportFormatBase, SF_Opus);
+	REGISTER_CLASS_ENUM (ExportFormatBase, SF_MPEG_LAYER_III);
 	REGISTER (_ExportFormatBase_SampleFormat);
 
 	REGISTER_CLASS_ENUM (ExportFormatBase, D_None);
@@ -650,6 +674,7 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_Session);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_8);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_22_05);
+	REGISTER_CLASS_ENUM (ExportFormatBase, SR_24);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_44_1);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_48);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_88_2);
@@ -732,6 +757,16 @@ setup_enum_writer ()
 	REGISTER_ENUM(InhibitAlways);
 	REGISTER(_ScreenSaverMode);
 
+	REGISTER_ENUM(PluginGUIHide);
+	REGISTER_ENUM(PluginGUIDestroyAny);
+	REGISTER_ENUM(PluginGUIDestroyVST);
+	REGISTER(_PluginGUIBehavior);
+
+	REGISTER_ENUM(NSGLHiRes);
+	REGISTER_ENUM(NSGLLoRes);
+	REGISTER_ENUM(NSGLDisable);
+	REGISTER(_AppleNSGLViewMode);
+
 	REGISTER_ENUM (Small);
 	REGISTER_ENUM (Medium);
 	REGISTER_ENUM (Large);
@@ -755,6 +790,10 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (PresentationInfo, Hidden);
 	REGISTER_CLASS_ENUM (PresentationInfo, OrderSet);
 	REGISTER_CLASS_ENUM (PresentationInfo, FoldbackBus);
+	REGISTER_CLASS_ENUM (PresentationInfo, TriggerTrack);
+#ifdef MIXBUS
+	REGISTER_CLASS_ENUM (PresentationInfo, MixbusEditorHidden);
+#endif
 	REGISTER_BITS (_PresentationInfo_Flag);
 
 	REGISTER_CLASS_ENUM (MusicalMode,Dorian);
@@ -839,14 +878,40 @@ setup_enum_writer ()
 	REGISTER_ENUM (RollIfAppropriate);
 	REGISTER (_LocateTransportDisposition);
 
-	REGISTER_CLASS_ENUM (Trigger, None);
 	REGISTER_CLASS_ENUM (Trigger, Stopped);
 	REGISTER_CLASS_ENUM (Trigger, WaitingToStart);
 	REGISTER_CLASS_ENUM (Trigger, Running);
 	REGISTER_CLASS_ENUM (Trigger, WaitingForRetrigger);
 	REGISTER_CLASS_ENUM (Trigger, WaitingToStop);
+	REGISTER_CLASS_ENUM (Trigger, WaitingToSwitch);
 	REGISTER_CLASS_ENUM (Trigger, Stopping);
 	REGISTER (_TriggerState);
+
+	REGISTER_CLASS_ENUM (FollowAction, None);
+	REGISTER_CLASS_ENUM (FollowAction, Stop);
+	REGISTER_CLASS_ENUM (FollowAction, Again);
+	REGISTER_CLASS_ENUM (FollowAction, ForwardTrigger);
+	REGISTER_CLASS_ENUM (FollowAction, ReverseTrigger);
+	REGISTER_CLASS_ENUM (FollowAction, FirstTrigger);
+	REGISTER_CLASS_ENUM (FollowAction, LastTrigger);
+	REGISTER_CLASS_ENUM (FollowAction, JumpTrigger);
+	REGISTER (_FollowAction);
+
+	REGISTER_CLASS_ENUM (Trigger, OneShot);
+	REGISTER_CLASS_ENUM (Trigger, ReTrigger);
+	REGISTER_CLASS_ENUM (Trigger, Gate);
+	REGISTER_CLASS_ENUM (Trigger, Toggle);
+	REGISTER_CLASS_ENUM (Trigger, Repeat);
+	REGISTER (_TriggerLaunchStyle);
+
+	REGISTER_CLASS_ENUM (Trigger, Crisp);
+	REGISTER_CLASS_ENUM (Trigger, Mixed);
+	REGISTER_CLASS_ENUM (Trigger, Smooth);
+	REGISTER (_TriggerStretchMode);
+
+	REGISTER_ENUM (FollowCues);
+	REGISTER_ENUM (ImplicitlyIgnoreCues);
+	REGISTER_BITS (_CueBehavior);
 }
 
 } /* namespace ARDOUR */

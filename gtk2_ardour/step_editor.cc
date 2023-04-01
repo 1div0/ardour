@@ -36,7 +36,7 @@ using namespace Gtk;
 using namespace std;
 using namespace Temporal;
 
-StepEditor::StepEditor (PublicEditor& e, boost::shared_ptr<MidiTrack> t, MidiTimeAxisView& mtv)
+StepEditor::StepEditor (PublicEditor& e, std::shared_ptr<MidiTrack> t, MidiTimeAxisView& mtv)
 	: _editor (e)
 	, _track (t)
 	, _mtv (mtv)
@@ -104,10 +104,10 @@ StepEditor::resync_step_edit_to_edit_point ()
 void
 StepEditor::prepare_step_edit_region ()
 {
-	boost::shared_ptr<Region> r = _track->playlist()->top_region_at (step_edit_insert_position);
+	std::shared_ptr<Region> r = _track->playlist()->top_region_at (step_edit_insert_position);
 
 	if (r) {
-		step_edit_region = boost::dynamic_pointer_cast<MidiRegion>(r);
+		step_edit_region = std::dynamic_pointer_cast<MidiRegion>(r);
 	}
 
 	if (step_edit_region) {
@@ -135,7 +135,7 @@ StepEditor::reset_step_edit_beat_pos ()
 	const timepos_t ep = _editor.get_preferred_edit_position();
 	timecnt_t distance_from_start (step_edit_region->position().distance (ep));
 
-	if (distance_from_start.negative()) {
+	if (distance_from_start.is_negative()) {
 		/* this can happen with snap enabled, and the edit point == Playhead. we snap the
 		   position of the new region, and it can end up after the edit point.
 		*/
@@ -272,7 +272,7 @@ StepEditor::step_add_note (uint8_t channel, uint8_t pitch, uint8_t velocity, Tem
 		beat_duration = StepEntry::instance().note_length();
 	} else if (beat_duration == 0.0) {
 		bool success;
-		beat_duration = _editor.get_grid_type_as_beats (success, step_edit_insert_position);
+		beat_duration = _editor.get_draw_length_as_beats (success, step_edit_insert_position);
 
 		if (!success) {
 			return -1;
@@ -387,7 +387,7 @@ StepEditor::step_edit_rest (Temporal::Beats beats)
 	bool success;
 
 	if (beats == 0.0) {
-		beats = _editor.get_grid_type_as_beats (success, step_edit_insert_position);
+		beats = _editor.get_draw_length_as_beats (success, step_edit_insert_position);
 	} else {
 		success = true;
 	}
@@ -420,7 +420,7 @@ StepEditor::step_edit_bar_sync ()
 
 	/* have to go to BBT to round up to bar, unfortunately */
 	TempoMap::SharedPtr tmap (TempoMap::use());
-	BBT_Time bbt (tmap->bbt_at (pos).round_up_to_bar ());
+	BBT_Argument bbt (tmap->bbt_at (pos).round_up_to_bar ());
 
 	/* now back to beats */
 	pos = timepos_t (tmap->quarters_at (bbt));
@@ -438,9 +438,9 @@ StepEditor::playlist_changed ()
 }
 
 void
-StepEditor::region_removed (boost::weak_ptr<Region> wr)
+StepEditor::region_removed (std::weak_ptr<Region> wr)
 {
-	boost::shared_ptr<Region> r (wr.lock());
+	std::shared_ptr<Region> r (wr.lock());
 
 	if (!r) {
 		return;

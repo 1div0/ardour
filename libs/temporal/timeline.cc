@@ -24,11 +24,12 @@
 #include "pbd/enumwriter.h"
 #include "pbd/error.h"
 #include "pbd/compose.h"
-#include "pbd/i18n.h"
 
 #include "temporal/debug.h"
 #include "temporal/timeline.h"
 #include "temporal/tempo.h"
+
+#include "pbd/i18n.h"
 
 using namespace PBD;
 using namespace Temporal;
@@ -81,6 +82,27 @@ timecnt_t::timecnt_t (timecnt_t const & tc, timepos_t const & pos)
 	_distance = tc.distance();
 }
 
+timecnt_t::timecnt_t (samplepos_t s, timepos_t const & pos)
+	: _position (pos)
+{
+	assert (_position.time_domain() == AudioTime);
+
+	if (s == max_samplepos) {
+		_distance = int62_t (false, int62_t::max);
+	} else {
+		_distance = int62_t (false, samples_to_superclock (s, TEMPORAL_SAMPLE_RATE));
+	}
+}
+
+timecnt_t::timecnt_t (samplepos_t s)
+	: _position (AudioTime)
+{
+	if (s == max_samplepos) {
+		_distance = int62_t (false, int62_t::max);
+	} else {
+		_distance = int62_t (false, samples_to_superclock (s, TEMPORAL_SAMPLE_RATE));
+	}
+}
 
 timepos_t
 timecnt_t::end (TimeDomain return_domain) const
@@ -176,10 +198,13 @@ timecnt_t::compute_beats() const
 }
 
 timecnt_t
-timecnt_t::operator*(ratio_t const & r) const
+timecnt_t::scale (ratio_t const & r) const
 {
-	const int62_t v (_distance.flagged(), int_div_round (_distance.val() * r.numerator(), r.denominator()));
-	return timecnt_t (v, _position);
+	if (time_domain() == AudioTime) {
+		return timecnt_t::from_superclock (PBD::muldiv_round (_distance.val(), r.numerator(), r.denominator()), _position);
+	} else {
+		return timecnt_t::from_ticks (PBD::muldiv_round (_distance.val(), r.numerator(), r.denominator()), _position);
+	}
 }
 
 ratio_t
@@ -190,30 +215,37 @@ timecnt_t::operator/ (timecnt_t const & other) const
 	}
 
 	if (time_domain() == AudioTime) {
-		return ratio_t (distance().val(), other.samples());
+		return ratio_t (distance().val(), other.superclocks());
 	}
 
 	return ratio_t (beats().to_ticks(), other.beats().to_ticks());
 }
 
 timecnt_t
-timecnt_t::operator/(ratio_t const & r) const
-{
-	/* note: x / (N/D) => x * (D/N) => (x * D) / N */
-
-	const int62_t v (_distance.flagged(), int_div_round (_distance.val() * r.denominator(), r.numerator()));
-	return timecnt_t (v, _position);
-}
-
-timecnt_t
 timecnt_t::operator% (timecnt_t const & d) const
 {
-	return timecnt_t (_distance % d.distance(), _position);
+	if (time_domain() == d.time_domain()) {
+		return timecnt_t (_distance % d.distance(), _position);
+	} else if (time_domain() == AudioTime) {
+		timecnt_t dd = d;
+		dd.set_time_domain (AudioTime);
+		return timecnt_t (_distance % dd.distance(), _position);
+	} else {
+		assert (0); // This path should never be used because..
+		timecnt_t self = *this;
+		self.set_time_domain (AudioTime);
+		timecnt_t rv (self.distance() % d.distance(), _position);
+		rv.set_time_domain (BeatTime); // it looses precision
+		return rv;
+	}
 }
 
 timecnt_t &
 timecnt_t::operator%= (timecnt_t const & d)
 {
+	if (time_domain() != d.time_domain()) {
+		assert (0); // TODO FIXME
+	}
 	_distance %= d.distance();
 	return *this;
 }
@@ -248,6 +280,8 @@ timecnt_t::string_to (std::string const & str)
 		ss >> ticks;
 		_distance = int62_t (true, ticks);
 		break;
+	default:
+		return false;
 	}
 
 	/* eat separator character */
@@ -265,7 +299,7 @@ timecnt_t::string_to (std::string const & str)
 }
 
 std::string
-timecnt_t::to_string () const
+timecnt_t::str () const
 {
 	std::stringstream ss;
 
@@ -283,7 +317,7 @@ timecnt_t::to_string () const
 	*/
 
 	ss << '@';
-	ss << _position.to_string();
+	ss << _position.str();
 
 	return ss.str();
 }
@@ -313,7 +347,7 @@ timecnt_t::operator- (timecnt_t const & other) const
 		if (other.time_domain() == AudioTime) {
 			return timecnt_t (_distance - other.distance(), _position);
 		} else {
-			return timecnt_t (_distance - other.samples(), _position);
+			return timecnt_t (_distance - other.superclocks(), _position);
 		}
 	}
 
@@ -327,7 +361,7 @@ timecnt_t::operator+= (timecnt_t const & other)
 		if (other.time_domain() == AudioTime) {
 			_distance += other.distance();
 		} else {
-			_distance += other.samples();
+			_distance += other.superclocks();
 		}
 	} else {
 		_distance += other.ticks ();
@@ -344,7 +378,7 @@ timecnt_t::operator+ (timepos_t const & other) const
 			/* both audio, just add and use an arbitrary position */
 			return timecnt_t (_distance + other.val(), _position);
 		} else {
-			return timecnt_t (_distance + other.samples(), _position);
+			return timecnt_t (_distance + other.superclocks(), _position);
 		}
 	}
 
@@ -358,7 +392,7 @@ timecnt_t::operator- (timepos_t const & other) const
 		if (other.time_domain() == AudioTime) {
 			return timecnt_t (_distance - other.val(), _position);
 		} else {
-			return timecnt_t (_distance - other.samples(), _position);
+			return timecnt_t (_distance - other.superclocks(), _position);
 		}
 	}
 
@@ -371,7 +405,7 @@ timecnt_t::operator-= (timecnt_t const & other)
 	if (time_domain() == other.time_domain()) {
 		_distance -= other.distance();
 	} else if (time_domain() == AudioTime) {
-		_distance -= other.samples();
+		_distance -= other.superclocks();
 	} else {
 		_distance -= other.ticks ();
 	}
@@ -428,7 +462,7 @@ timecnt_t::expensive_gte (timecnt_t const & other) const
 std::ostream&
 std::operator<< (std::ostream & o, timecnt_t const & tc)
 {
-	return o << tc.to_string();
+	return o << tc.str();
 }
 
 std::istream&
@@ -445,12 +479,16 @@ std::operator>> (std::istream & o, timecnt_t & tc)
 
 timepos_t::timepos_t (timecnt_t const & t)
 {
-	if (t.distance() < 0) {
-		std::cerr << "timecnt_t has negative distance distance " << " val " << t.distance().val() << " flagged " << t.distance().flagged() << std::endl;
-		throw  std::domain_error("negative value for timepos_t constructor");
-	}
-
 	v = build (t.distance().flagged(), t.distance ().val());
+}
+
+timepos_t::timepos_t (samplepos_t s)
+{
+	if (s == max_samplepos) {
+		v = build (false, int62_t::max);
+	} else {
+		v = build (false, samples_to_superclock (s, TEMPORAL_SAMPLE_RATE));
+	}
 }
 
 void
@@ -551,35 +589,13 @@ timepos_t::_ticks () const
 }
 
 timepos_t
-timepos_t::operator/(ratio_t const & n) const
+timepos_t::scale (ratio_t const & n) const
 {
-	/* this cannot make the value negative, since ratio_t is always positive */
-	/* note: v / (N/D) = (v * D) / N */
-
-	return timepos_t (is_beats(), int_div_round (val() * n.denominator(), n.numerator()));
-}
-
-timepos_t
-timepos_t::operator*(ratio_t const & n) const
-{
-	/* this cannot make the value negative, since ratio_t is always positive */
-	return timepos_t (is_beats(), int_div_round (val() * n.numerator(), n.denominator()));
-}
-
-timepos_t &
-timepos_t::operator/=(ratio_t const & n)
-{
-	/* this cannot make the value negative, since ratio_t is always positive */
-	v = build (flagged(), int_div_round (val() * n.numerator(), n.denominator()));
-	return *this;
-}
-
-timepos_t &
-timepos_t::operator*=(ratio_t const & n)
-{
-	/* this cannot make the value negative, since ratio_t is always positive */
-	v = build (flagged(), int_div_round (val() * n.denominator(), n.numerator()));
-	return *this;
+	if (time_domain() == AudioTime) {
+		return timepos_t::from_superclock (PBD::muldiv_round (val(), n.numerator(), n.denominator()));
+	} else {
+		return timepos_t::from_ticks (PBD::muldiv_round (val(), n.numerator(), n.denominator()));
+	}
 }
 
 timepos_t
@@ -603,7 +619,7 @@ timepos_t::expensive_add (timepos_t const & other) const
 
 /* */
 
-/* ::distance() assumes that @param other is later on the timeline than this, and
+/* ::distance() assumes that @p other is later on the timeline than this, and
  * thus returns a positive value if this condition is satisfied.
  */
 
@@ -648,7 +664,7 @@ timepos_t::earlier (Temporal::BBT_Offset const & offset) const
 	TempoMap::SharedPtr tm (TempoMap::use());
 
 	if (is_superclock()) {
-		return timepos_t (tm->superclock_at (tm->bbt_walk (tm->bbt_at (*this), -offset)));
+		return timepos_t (tm->superclock_at (BBT_Argument (*this, tm->bbt_walk (BBT_Argument (*this, tm->bbt_at (*this)), -offset))));
 	}
 
 	return timepos_t (tm->bbtwalk_to_quarters (beats(), -offset));
@@ -747,7 +763,7 @@ timepos_t::shift_earlier (Temporal::BBT_Offset const & offset)
 	TempoMap::SharedPtr tm (TempoMap::use());
 
 	if (is_superclock()) {
-		v = build (false, (tm->superclock_at (tm->bbt_walk (tm->bbt_at (*this), -offset))));
+		v = build (false, (tm->superclock_at (tm->bbt_walk (BBT_Argument (*this, tm->bbt_at (*this)), -offset))));
 	} else {
 		v = build (true, tm->bbtwalk_to_quarters (beats(), -offset).to_ticks());
 	}
@@ -764,7 +780,7 @@ timepos_t::operator+= (Temporal::BBT_Offset const & offset)
 	if (is_beats()) {
 		v = build (true, tm->bbtwalk_to_quarters (beats(), offset).to_ticks());
 	} else {
-		v = build (false, tm->superclock_at (tm->bbt_walk (tm->bbt_at (*this), offset)));
+		v = build (false, tm->superclock_at (tm->bbt_walk (BBT_Argument (*this, tm->bbt_at (*this)), offset)));
 	}
 
 	return *this;
@@ -775,20 +791,41 @@ timepos_t::operator+= (Temporal::BBT_Offset const & offset)
 timepos_t
 timepos_t::operator+(timecnt_t const & d) const
 {
-	if (d.time_domain() == AudioTime) {
-		return operator+ (timepos_t::from_superclock (d.superclocks()));
+	if (d.time_domain() == time_domain()) {
+		if (time_domain() == AudioTime) {
+			return operator+ (timepos_t::from_superclock (d.superclocks()));
+		} else {
+			return operator+ (timepos_t::from_ticks (d.ticks()));
+		}
 	}
 
-	return operator+ (timepos_t::from_ticks (d.ticks()));
+	TempoMap::SharedPtr tm (TempoMap::use());
+
+	timecnt_t dur_at_this = tm->convert_duration (d, *this, time_domain());
+
+	assert (dur_at_this.time_domain() == time_domain());
+
+	return operator+ (dur_at_this);
 }
 
 timepos_t &
 timepos_t::operator+=(timecnt_t const & d)
 {
-	if (d.time_domain() == AudioTime) {
-		return operator+= (timepos_t::from_superclock (d.superclocks()));
+	if (d.time_domain() == time_domain()) {
+		if (time_domain() == AudioTime) {
+			return operator+= (timepos_t::from_superclock (d.superclocks()));
+		} else {
+			return operator+= (timepos_t::from_ticks (d.ticks()));
+		}
 	}
-	return operator+= (timepos_t::from_ticks (d.ticks()));
+
+	TempoMap::SharedPtr tm (TempoMap::use());
+
+	timecnt_t dur_at_this = tm->convert_duration (d, *this, time_domain());
+
+	assert (dur_at_this.time_domain() == time_domain());
+
+	return operator+= (dur_at_this);
 }
 
 /* */
@@ -822,7 +859,7 @@ timepos_t::operator+=(timepos_t const & d)
 std::ostream&
 std::operator<< (std::ostream & o, timepos_t const & tp)
 {
-	return o << tp.to_string();
+	return o << tp.str();
 }
 
 std::istream&
@@ -835,7 +872,7 @@ std::operator>> (std::istream & o, timepos_t & tp)
 }
 
 std::string
-timepos_t::to_string () const
+timepos_t::str () const
 {
 	if (is_beats()) {
 		return string_compose ("b%1", val());
@@ -856,7 +893,8 @@ timepos_t::string_to (std::string const & str)
 	int64_t ticks;
 	Beats beats;
 
-	if (isdigit (str[0])) {
+	if (isdigit (str[0]) || (str[0] == '-' && str.length() > 1)) {
+
 		/* old school position format: we assume samples */
 		std::stringstream ss (str);
 		ss >> sm;

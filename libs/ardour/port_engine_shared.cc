@@ -81,7 +81,7 @@ BackendPort::connect (BackendPortHandle port, BackendPortHandle self)
 			<< " (" << name () << ") -> (" << port->name () << ")"
 			<< endmsg;
 #endif
-		return -1;
+		return 0;
 	}
 
 	store_connection (port);
@@ -186,14 +186,93 @@ BackendPort::update_connected_latency (bool for_playback)
 	set_latency_range (lr, for_playback);
 }
 
+bool
+BackendMIDIEvent::operator< (const BackendMIDIEvent &other) const {
+	if (timestamp() == other.timestamp ()) {
+		/* concurrent MIDI events, sort
+		 * - CC first (may include bank/patch)
+		 * - Program Change
+		 * - Note Off
+		 * - Note On
+		 * - Note Pressure
+		 * - Channel Pressure
+		 * - Pitch Bend
+		 * - SysEx/RT, etc
+		 *
+		 * see Evoral::Sequence<Time>::const_iterator::choose_next
+		 * and MidiBuffer::second_simultaneous_midi_byte_is_first
+		 */
+		uint8_t ta = 9;
+		uint8_t tb = 9;
+		if (size () > 0 && size () < 4) {
+			switch (data ()[0] & 0xf0) {
+				case 0xB0: /* Control Change */
+					ta = 1;
+					break;
+				case 0xC0: /* Program Change */
+					ta = 2;
+					break;
+				case 0x80: /* Note Off */
+					ta = 3;
+					break;
+				case 0x90: /* Note On */
+					ta = 4;
+					break;
+				case 0xA0: /* Key Pressure */
+					ta = 5;
+					break;
+				case 0xD0: /* Channel Pressure */
+					ta = 6;
+					break;
+				case 0xE0: /* Pitch Bend */
+					ta = 7;
+					break;
+				default:
+					ta = 8;
+					break;
+			}
+		}
 
+		if (other.size () > 0 && other.size () < 4) {
+			switch (other.data ()[0] & 0xf0) {
+				case 0xB0: /* Control Change */
+					tb = 1;
+					break;
+				case 0xC0: /* Program Change */
+					tb = 2;
+					break;
+				case 0x80: /* Note Off */
+					tb = 3;
+					break;
+				case 0x90: /* Note On */
+					tb = 4;
+					break;
+				case 0xA0: /* Key Pressure */
+					tb = 5;
+					break;
+				case 0xD0: /* Channel Pressure */
+					tb = 6;
+					break;
+				case 0xE0: /* Pitch Bend */
+					tb = 7;
+					break;
+				default:
+					tb = 8;
+					break;
+			}
+		}
+		return ta < tb;
+	}
+	return timestamp () < other.timestamp ();
+};
 
 PortEngineSharedImpl::PortEngineSharedImpl (PortManager& mgr, std::string const & str)
 	: _instance_name (str)
 	, _portmap (new PortMap)
 	, _ports (new PortIndex)
+	, _portregistry (new PortRegistry)
 {
-	g_atomic_int_set (&_port_change_flag, 0);
+	_port_change_flag.store (0);
 	pthread_mutex_init (&_port_callback_mutex, 0);
 }
 
@@ -217,7 +296,7 @@ PortEngineSharedImpl::get_ports (
 		}
 	}
 
-	boost::shared_ptr<PortIndex> p = _ports.reader ();
+	std::shared_ptr<PortIndex> p = _ports.reader ();
 
 	for (PortIndex::const_iterator i = p->begin (); i != p->end (); ++i) {
 		BackendPortPtr port = *i;
@@ -239,17 +318,17 @@ PortEngineSharedImpl::get_ports (
 bool
 PortEngineSharedImpl::port_is_physical (PortEngine::PortHandle port) const
 {
-	if (!valid_port (boost::dynamic_pointer_cast<BackendPort>(port))) {
+	if (!valid_port (std::dynamic_pointer_cast<BackendPort>(port))) {
 		PBD::warning << _("BackendPort::port_is_physical (): invalid port.") << endmsg;
 		return false;
 	}
-	return boost::dynamic_pointer_cast<BackendPort>(port)->is_physical ();
+	return std::dynamic_pointer_cast<BackendPort>(port)->is_physical ();
 }
 
 void
 PortEngineSharedImpl::get_physical_outputs (DataType type, std::vector<std::string>& port_names)
 {
-	boost::shared_ptr<PortIndex> p = _ports.reader();
+	std::shared_ptr<PortIndex> p = _ports.reader();
 
 	for (PortIndex::iterator i = p->begin (); i != p->end (); ++i) {
 		BackendPortPtr port = *i;
@@ -262,7 +341,7 @@ PortEngineSharedImpl::get_physical_outputs (DataType type, std::vector<std::stri
 void
 PortEngineSharedImpl::get_physical_inputs (DataType type, std::vector<std::string>& port_names)
 {
-	boost::shared_ptr<PortIndex> p = _ports.reader();
+	std::shared_ptr<PortIndex> p = _ports.reader();
 
 	for (PortIndex::iterator i = p->begin (); i != p->end (); ++i) {
 		BackendPortPtr port = *i;
@@ -278,7 +357,7 @@ PortEngineSharedImpl::n_physical_outputs () const
 	int n_midi = 0;
 	int n_audio = 0;
 
-	boost::shared_ptr<PortIndex> p = _ports.reader();
+	std::shared_ptr<PortIndex> p = _ports.reader();
 
 	for (PortIndex::const_iterator i = p->begin (); i != p->end (); ++i) {
 		BackendPortPtr port = *i;
@@ -302,7 +381,7 @@ PortEngineSharedImpl::n_physical_inputs () const
 	int n_midi = 0;
 	int n_audio = 0;
 
-	boost::shared_ptr<PortIndex> p = _ports.reader();
+	std::shared_ptr<PortIndex> p = _ports.reader();
 
 	for (PortIndex::const_iterator i = p->begin (); i != p->end (); ++i) {
 		BackendPortPtr port = *i;
@@ -337,13 +416,16 @@ PortEngineSharedImpl::add_port (const std::string& name, ARDOUR::DataType type, 
 	}
 
 	{
-		RCUWriter<PortIndex> index_writer (_ports);
-		RCUWriter<PortMap> map_writer (_portmap);
+		RCUWriter<PortIndex>    index_writer (_ports);
+		RCUWriter<PortMap>      map_writer (_portmap);
+		RCUWriter<PortRegistry> registry_writer (_portregistry);
 
-		boost::shared_ptr<PortIndex> ps = index_writer.get_copy ();
-		boost::shared_ptr<PortMap> pm = map_writer.get_copy ();
+		std::shared_ptr<PortIndex> ps    = index_writer.get_copy ();
+		std::shared_ptr<PortMap> pm      = map_writer.get_copy ();
+		std::shared_ptr<PortRegistry> pr = registry_writer.get_copy ();
 
 		ps->insert (port);
+		pr->insert (port);
 		pm->insert (make_pair (name, port));
 	}
 
@@ -353,16 +435,18 @@ PortEngineSharedImpl::add_port (const std::string& name, ARDOUR::DataType type, 
 void
 PortEngineSharedImpl::unregister_port (PortEngine::PortHandle port_handle)
 {
-	BackendPortPtr port = boost::dynamic_pointer_cast<BackendPort>(port_handle);
+	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort>(port_handle);
 
 	{
-		RCUWriter<PortIndex> index_writer (_ports);
-		RCUWriter<PortMap> map_writer (_portmap);
+		RCUWriter<PortIndex>    index_writer (_ports);
+		RCUWriter<PortMap>      map_writer (_portmap);
+		RCUWriter<PortRegistry> registry_writer (_portregistry);
 
-		boost::shared_ptr<PortIndex> ps = index_writer.get_copy ();
-		boost::shared_ptr<PortMap> pm = map_writer.get_copy ();
+		std::shared_ptr<PortIndex> ps    = index_writer.get_copy ();
+		std::shared_ptr<PortMap> pm      = map_writer.get_copy ();
+		std::shared_ptr<PortRegistry> pr = registry_writer.get_copy ();
 
-		PortIndex::iterator i = std::find (ps->begin(), ps->end(), boost::dynamic_pointer_cast<BackendPort> (port_handle));
+		PortIndex::iterator i = std::find (ps->begin(), ps->end(), std::dynamic_pointer_cast<BackendPort> (port_handle));
 
 		if (i == ps->end ()) {
 			PBD::error << string_compose (_("%1::unregister_port: Failed to find port"), _instance_name) << endmsg;
@@ -373,10 +457,12 @@ PortEngineSharedImpl::unregister_port (PortEngine::PortHandle port_handle)
 
 		pm->erase (port->name());
 		ps->erase (i);
+		pr->erase (port);
 	}
 
 	_ports.flush ();
 	_portmap.flush ();
+	_portregistry.flush ();
 }
 
 
@@ -389,12 +475,13 @@ PortEngineSharedImpl::unregister_ports (bool system_only)
 	_system_midi_out.clear();
 
 	{
-		RCUWriter<PortIndex> index_writer (_ports);
-		RCUWriter<PortMap> map_writer (_portmap);
+		RCUWriter<PortIndex>    index_writer (_ports);
+		RCUWriter<PortMap>      map_writer (_portmap);
+		RCUWriter<PortRegistry> registry_writer (_portregistry);
 
-		boost::shared_ptr<PortIndex> ps = index_writer.get_copy ();
-		boost::shared_ptr<PortMap> pm = map_writer.get_copy ();
-
+		std::shared_ptr<PortIndex> ps    = index_writer.get_copy ();
+		std::shared_ptr<PortMap> pm      = map_writer.get_copy ();
+		std::shared_ptr<PortRegistry> pr = registry_writer.get_copy ();
 
 		for (PortIndex::iterator i = ps->begin (); i != ps->end ();) {
 			PortIndex::iterator cur = i++;
@@ -403,25 +490,29 @@ PortEngineSharedImpl::unregister_ports (bool system_only)
 				port->disconnect_all (port);
 				pm->erase (port->name());
 				ps->erase (cur);
+				pr->erase (port);
 			}
 		}
 	}
 
 	_ports.flush ();
 	_portmap.flush ();
+	_portregistry.flush ();
 }
 
 void
 PortEngineSharedImpl::clear_ports ()
 {
 	{
-		RCUWriter<PortIndex> index_writer (_ports);
-		RCUWriter<PortMap> map_writer (_portmap);
+		RCUWriter<PortIndex>    index_writer (_ports);
+		RCUWriter<PortMap>      map_writer (_portmap);
+		RCUWriter<PortRegistry> registry_writer (_portregistry);
 
-		boost::shared_ptr<PortIndex> ps = index_writer.get_copy();
-		boost::shared_ptr<PortMap> pm = map_writer.get_copy ();
+		std::shared_ptr<PortIndex> ps    = index_writer.get_copy ();
+		std::shared_ptr<PortMap> pm      = map_writer.get_copy ();
+		std::shared_ptr<PortRegistry> pr = registry_writer.get_copy ();
 
-		if (ps->size () || pm->size ()) {
+		if (ps->size () || pm->size () || pr->size ()) {
 			PBD::warning << _("PortEngineSharedImpl: recovering from unclean shutdown, port registry is not empty.") << endmsg;
 			_system_inputs.clear();
 			_system_outputs.clear();
@@ -429,13 +520,15 @@ PortEngineSharedImpl::clear_ports ()
 			_system_midi_out.clear();
 			ps->clear();
 			pm->clear();
+			pr->clear();
 		}
 	}
 
 	_ports.flush ();
 	_portmap.flush ();
+	_portregistry.flush ();
 
-	g_atomic_int_set (&_port_change_flag, 0);
+	_port_change_flag.store (0);
 	pthread_mutex_lock (&_port_callback_mutex);
 	_port_connection_queue.clear();
 	pthread_mutex_unlock (&_port_callback_mutex);
@@ -451,7 +544,7 @@ int
 PortEngineSharedImpl::set_port_name (PortEngine::PortHandle port_handle, const std::string& name)
 {
 	std::string newname (_instance_name + ":" + name);
-	BackendPortPtr port = boost::dynamic_pointer_cast<BackendPort>(port_handle);
+	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort>(port_handle);
 
 	if (!valid_port (port)) {
 		PBD::error << string_compose (_("%1::set_port_name: Invalid Port"), _instance_name) << endmsg;
@@ -464,13 +557,22 @@ PortEngineSharedImpl::set_port_name (PortEngine::PortHandle port_handle, const s
 	}
 
 	const std::string old_name = port->name();
-	int ret =  port->set_name (newname);
+
+	/* PortIndex std::set is sorted by name, using the name as key.
+	 * So name-changes need to update the set.
+	 * PortRegistry does not change
+	 */
+	RCUWriter<PortIndex> index_writer (_ports);
+	RCUWriter<PortMap>   map_writer (_portmap);
+
+	std::shared_ptr<PortIndex> ps = index_writer.get_copy ();
+	std::shared_ptr<PortMap>   pm = map_writer.get_copy ();
+
+	ps->erase (port);
+	int ret = port->set_name (newname);
+	ps->insert (port);
 
 	if (ret == 0) {
-
-		RCUWriter<PortMap> map_writer (_portmap);
-		boost::shared_ptr<PortMap> pm = map_writer.get_copy ();
-
 		pm->erase (old_name);
 		pm->insert (make_pair (newname, port));
 	}
@@ -481,7 +583,7 @@ PortEngineSharedImpl::set_port_name (PortEngine::PortHandle port_handle, const s
 std::string
 PortEngineSharedImpl::get_port_name (PortEngine::PortHandle port_handle) const
 {
-	BackendPortPtr port = boost::dynamic_pointer_cast<BackendPort>(port_handle);
+	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort>(port_handle);
 
 	if (!valid_port (port)) {
 		PBD::warning << string_compose (_("%1::get_port_name: invalid port"), _instance_name) << endmsg;
@@ -494,27 +596,27 @@ PortEngineSharedImpl::get_port_name (PortEngine::PortHandle port_handle) const
 PortFlags
 PortEngineSharedImpl::get_port_flags (PortEngine::PortHandle port) const
 {
-	if (!valid_port (boost::dynamic_pointer_cast<BackendPort>(port))) {
+	if (!valid_port (std::dynamic_pointer_cast<BackendPort>(port))) {
 		PBD::warning << string_compose (_("%1::get_port_flags: invalid port"), _instance_name) << endmsg;
 		return PortFlags (0);
 	}
-	return boost::static_pointer_cast<BackendPort>(port)->flags ();
+	return std::static_pointer_cast<BackendPort>(port)->flags ();
 }
 
 int
 PortEngineSharedImpl::get_port_property (PortEngine::PortHandle port, const std::string& key, std::string& value, std::string& type) const
 {
-	if (!valid_port (boost::dynamic_pointer_cast<BackendPort>(port))) {
+	if (!valid_port (std::dynamic_pointer_cast<BackendPort>(port))) {
 		PBD::warning << string_compose (_("%1::get_port_property: invalid port"), _instance_name) << endmsg;
 		return -1;
 	}
 	if (key == "http://jackaudio.org/metadata/pretty-name") {
 		type = "";
-		value = boost::static_pointer_cast<BackendPort>(port)->pretty_name ();
+		value = std::static_pointer_cast<BackendPort>(port)->pretty_name ();
 		if (!value.empty()) {
 			return 0;
 		}
-		value = boost::static_pointer_cast<BackendPort>(port)->hw_port_name ();
+		value = std::static_pointer_cast<BackendPort>(port)->hw_port_name ();
 		if (!value.empty()) {
 			return 0;
 		}
@@ -525,12 +627,12 @@ PortEngineSharedImpl::get_port_property (PortEngine::PortHandle port, const std:
 int
 PortEngineSharedImpl::set_port_property (PortEngine::PortHandle port, const std::string& key, const std::string& value, const std::string& type)
 {
-	if (!valid_port (boost::dynamic_pointer_cast<BackendPort>(port))) {
+	if (!valid_port (std::dynamic_pointer_cast<BackendPort>(port))) {
 		PBD::warning << string_compose (_("%1::set_port_property: invalid port"), _instance_name) << endmsg;
 		return -1;
 	}
 	if (key == "http://jackaudio.org/metadata/pretty-name" && type.empty ()) {
-		boost::static_pointer_cast<BackendPort>(port)->set_pretty_name (value);
+		std::static_pointer_cast<BackendPort>(port)->set_pretty_name (value);
 		return 0;
 	}
 	return -1;
@@ -545,7 +647,7 @@ PortEngineSharedImpl::get_port_by_name (const std::string& name) const
 DataType
 PortEngineSharedImpl::port_data_type (PortEngine::PortHandle port) const
 {
-	BackendPortPtr p = boost::dynamic_pointer_cast<BackendPort> (port);
+	BackendPortPtr p = std::dynamic_pointer_cast<BackendPort> (port);
 
 	if (!valid_port (p)) {
 		return DataType::NIL;
@@ -601,7 +703,7 @@ PortEngineSharedImpl::disconnect (const std::string& src, const std::string& dst
 int
 PortEngineSharedImpl::connect (PortEngine::PortHandle src, const std::string& dst)
 {
-	BackendPortPtr src_port = boost::dynamic_pointer_cast<BackendPort> (src);
+	BackendPortPtr src_port = std::dynamic_pointer_cast<BackendPort> (src);
 
 	if (!valid_port (src_port)) {
 		PBD::error << string_compose (_("%1::connect: Invalid Source Port Handle"), _instance_name) << endmsg;
@@ -623,7 +725,7 @@ PortEngineSharedImpl::connect (PortEngine::PortHandle src, const std::string& ds
 int
 PortEngineSharedImpl::disconnect (PortEngine::PortHandle src, const std::string& dst)
 {
-	BackendPortPtr src_port = boost::dynamic_pointer_cast<BackendPort>(src);
+	BackendPortPtr src_port = std::dynamic_pointer_cast<BackendPort>(src);
 	BackendPortPtr dst_port = find_port (dst);
 
 	if (!valid_port (src_port) || !dst_port) {
@@ -636,7 +738,7 @@ PortEngineSharedImpl::disconnect (PortEngine::PortHandle src, const std::string&
 int
 PortEngineSharedImpl::disconnect_all (PortEngine::PortHandle port_handle)
 {
-	BackendPortPtr port = boost::dynamic_pointer_cast<BackendPort> (port_handle);
+	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort> (port_handle);
 
 	if (!valid_port (port)) {
 		PBD::warning << string_compose (_("%1::disconnect_all: invalid port"), _instance_name) << endmsg;
@@ -651,7 +753,7 @@ PortEngineSharedImpl::disconnect_all (PortEngine::PortHandle port_handle)
 bool
 PortEngineSharedImpl::connected (PortEngine::PortHandle port_handle, bool /* process_callback_safe*/)
 {
-	BackendPortPtr port = boost::dynamic_pointer_cast<BackendPort> (port_handle);
+	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort> (port_handle);
 
 	if (!valid_port (port)) {
 		PBD::error << string_compose (_("%1::disconnect_all: Invalid Port"), _instance_name) << endmsg;
@@ -661,23 +763,23 @@ PortEngineSharedImpl::connected (PortEngine::PortHandle port_handle, bool /* pro
 }
 
 bool
-PortEngineSharedImpl::connected_to (PortEngine::PortHandle src, const std::string& dst, bool /*process_callback_safe*/)
+PortEngineSharedImpl::connected_to (PortEngine::PortHandle src, const std::string& dst, bool process_callback_safe)
 {
-	BackendPortPtr src_port = boost::dynamic_pointer_cast<BackendPort> (src);
+	BackendPortPtr src_port = std::dynamic_pointer_cast<BackendPort> (src);
 	BackendPortPtr dst_port = find_port (dst);
 #ifndef NDEBUG
-	if (!valid_port (src_port) || !dst_port) {
+	if (!process_callback_safe && (!valid_port (src_port) || !dst_port)) {
 		PBD::error << string_compose (_("%1::connected_to: Invalid Port"), _instance_name) << endmsg;
 		return false;
 	}
 #endif
-	return boost::static_pointer_cast<BackendPort>(src)->is_connected (dst_port);
+	return std::static_pointer_cast<BackendPort>(src)->is_connected (dst_port);
 }
 
 bool
 PortEngineSharedImpl::physically_connected (PortEngine::PortHandle port_handle, bool /*process_callback_safe*/)
 {
-	BackendPortPtr port = boost::dynamic_pointer_cast<BackendPort> (port_handle);
+	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort> (port_handle);
 
 	if (!valid_port (port)) {
 		PBD::error << string_compose (_("%1::physically_connected: Invalid Port"), _instance_name) << endmsg;
@@ -689,7 +791,7 @@ PortEngineSharedImpl::physically_connected (PortEngine::PortHandle port_handle, 
 int
 PortEngineSharedImpl::get_connections (PortEngine::PortHandle port_handle, std::vector<std::string>& names, bool /*process_callback_safe*/)
 {
-	BackendPortPtr port = boost::dynamic_pointer_cast<BackendPort> (port_handle);
+	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort> (port_handle);
 
 	if (!valid_port (port)) {
 		PBD::error << string_compose (_("%1::get_connections: Invalid Port"), _instance_name) << endmsg;
@@ -729,7 +831,7 @@ PortEngineSharedImpl::update_system_port_latencies ()
 void
 PortEngineSharedImpl::list_ports () const
 {
-	boost::shared_ptr<PortIndex> p = _ports.reader ();
+	std::shared_ptr<PortIndex> p = _ports.reader ();
 	for (PortIndex::const_iterator i = p->begin (); i != p->end (); ++i) {
 		std::cout << (*i)->name () << "\n";
 	}

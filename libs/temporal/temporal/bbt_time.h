@@ -54,6 +54,9 @@ struct LIBTEMPORAL_API BBT_Time
 	int32_t beats;
 	int32_t ticks;
 
+	int64_t as_integer() const;
+	static BBT_Time from_integer (int64_t);
+
 	bool is_bar() const { return beats == 1 && ticks == 0; }
 	bool is_beat() const { return ticks == 0; }
 
@@ -119,17 +122,24 @@ struct LIBTEMPORAL_API BBT_Time
 	 * next bar time.
 	 */
 
-	BBT_Time round_up_to_bar () const { return beats > 1 ? BBT_Time (bars+1, 1, 0) : BBT_Time (bars, 1, 0); }
+	BBT_Time round_up_to_bar () const;
 	BBT_Time round_down_to_bar () const { return BBT_Time (bars, 1, 0); }
 	BBT_Time next_bar () const { return (bars == -1) ? BBT_Time (1, 1, 0) : BBT_Time (bars+1, 1, 0); }
 	BBT_Time prev_bar () const { return (bars == 1)  ? BBT_Time (-1, 1, 0) : BBT_Time (bars-1, 1, 0); }
 
-	void print_padded (std::ostream& o) {
+	void print_padded (std::ostream& o) const {
 		o << std::setfill ('0') << std::right
 		  << std::setw (3) << bars << "|"
 		  << std::setw (2) << beats << "|"
 		  << std::setw (4) << ticks;
 	}
+
+	std::string str () const {
+		std::ostringstream os;
+		os << bars << '|' << beats << '|' << ticks;
+		return os.str ();
+	}
+
 };
 
 struct LIBTEMPORAL_API BBT_Offset
@@ -188,9 +198,9 @@ struct LIBTEMPORAL_API BBT_Offset
 	}
 
 	BBT_Offset & operator*=(double factor) {
-		bars = lrint (bars * factor);
-		beats = lrint (beats * factor);
-		ticks = lrint (ticks * factor);
+		bars = (int32_t) lrint (bars * factor);
+		beats = (int32_t) lrint (beats * factor);
+		ticks = (int32_t) lrint (ticks * factor);
 		return *this;
 	}
 
@@ -202,9 +212,9 @@ struct LIBTEMPORAL_API BBT_Offset
 	}
 
 	BBT_Offset & operator/=(double factor) {
-		bars = lrint (bars / factor);
-		beats = lrint (beats / factor);
-		ticks = lrint (ticks / factor);
+		bars = (int32_t) lrint (bars / factor);
+		beats = (int32_t) lrint (beats / factor);
+		ticks = (int32_t) lrint (ticks / factor);
 		return *this;
 	}
 
@@ -240,6 +250,15 @@ struct LIBTEMPORAL_API BBT_Offset
 		return bars != other.bars || beats != other.beats || ticks != other.ticks;
 	}
 
+	operator bool() const {
+		return bars == 0 && beats == 0 && ticks == 0;
+	}
+
+	std::string str () const {
+		std::ostringstream os;
+		os << bars << '|' << beats << '|' << ticks;
+		return os.str ();
+	}
 };
 
 inline BBT_Offset LIBTEMPORAL_API bbt_delta (Temporal::BBT_Time const & a, Temporal::BBT_Time const & b) {
@@ -298,10 +317,10 @@ BBT_Time::operator!= (const BBT_Offset& other) const
 
 namespace std {
 
-std::ostream& operator<< (std::ostream& o, Temporal::BBT_Time const & bbt);
-std::ostream& operator<< (std::ostream& o, Temporal::BBT_Offset const & bbt);
-std::istream& operator>> (std::istream& i, Temporal::BBT_Time& bbt);
-std::istream& operator>> (std::istream& i, Temporal::BBT_Offset& bbt);
+LIBTEMPORAL_API std::ostream& operator<< (std::ostream& o, Temporal::BBT_Time const & bbt);
+LIBTEMPORAL_API std::ostream& operator<< (std::ostream& o, Temporal::BBT_Offset const & bbt);
+LIBTEMPORAL_API std::istream& operator>> (std::istream& i, Temporal::BBT_Time& bbt);
+LIBTEMPORAL_API std::istream& operator>> (std::istream& i, Temporal::BBT_Offset& bbt);
 
 template<>
 struct numeric_limits<Temporal::BBT_Time> {
@@ -351,11 +370,60 @@ inline bool to_string (Temporal::BBT_Time val, std::string & str)
 }
 
 template<>
+inline std::string to_string (Temporal::BBT_Time val)
+{
+	std::ostringstream ostr;
+	ostr << val;
+	return ostr.str();
+}
+
+template<>
 inline bool string_to (std::string const & str, Temporal::BBT_Time & val)
 {
 	std::istringstream istr (str);
 	istr >> val;
 	return (bool) istr;
+}
+
+template<>
+inline Temporal::BBT_Time string_to (std::string const & str)
+{
+	Temporal::BBT_Time tmp;
+	string_to (str, tmp);
+	return tmp;
+}
+
+template<>
+inline bool to_string (Temporal::BBT_Offset val, std::string & str)
+{
+	std::ostringstream ostr;
+	ostr << val;
+	str = ostr.str();
+	return true;
+}
+
+template<>
+inline std::string to_string (Temporal::BBT_Offset val)
+{
+	std::ostringstream ostr;
+	ostr << val;
+	return ostr.str();
+}
+
+template<>
+inline bool string_to (std::string const & str, Temporal::BBT_Offset & val)
+{
+	std::istringstream istr (str);
+	istr >> val;
+	return (bool) istr;
+}
+
+template<>
+inline Temporal::BBT_Offset string_to (std::string const & str)
+{
+	Temporal::BBT_Offset tmp;
+	string_to (str, tmp);
+	return tmp;
 }
 
 } /* end namespace PBD */

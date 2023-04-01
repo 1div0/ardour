@@ -19,6 +19,8 @@
 #include <cppunit/TestFixture.h>
 #include <cppunit/extensions/HelperMacros.h>
 
+#include "temporal/superclock.h"
+
 class AutomationListPropertyTest : public CppUnit::TestFixture
 {
 	CPPUNIT_TEST_SUITE (AutomationListPropertyTest);
@@ -27,6 +29,11 @@ class AutomationListPropertyTest : public CppUnit::TestFixture
 	CPPUNIT_TEST_SUITE_END ();
 
 public:
+	void setUp ();
+	void tearDown ();
 	void basicTest ();
 	void undoTest ();
+
+private:
+	Temporal::superclock_t _saved_superclock_ticks_per_second;
 };

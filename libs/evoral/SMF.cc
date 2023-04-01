@@ -27,6 +27,9 @@
 #include <stdint.h>
 
 #include <glib/gstdio.h>
+#include <glibmm/convert.h>
+
+#include "pbd/whitespace.h"
 
 #include "libsmf/smf.h"
 
@@ -46,7 +49,9 @@ SMF::SMF()
 	: _smf (0)
 	, _smf_track (0)
 	, _empty (true)
-	, _type0 (false)
+	, _n_note_on_events (0)
+	, _has_pgm_change (false)
+	, _num_channels (0)
 	{};
 
 SMF::~SMF()
@@ -54,11 +59,17 @@ SMF::~SMF()
 	close ();
 }
 
+int
+SMF::smf_format () const
+{
+	return _smf ? _smf->format : 0;
+}
+
 uint16_t
 SMF::num_tracks() const
 {
 	Glib::Threads::Mutex::Lock lm (_smf_lock);
-	return _smf ? _smf->number_of_tracks : 0;
+	return (uint16_t) (_smf ? _smf->number_of_tracks : 0);
 }
 
 uint16_t
@@ -116,12 +127,14 @@ SMF::test(const std::string& path)
  *         -2 if the file exists but specified track does not exist
  */
 int
-SMF::open(const std::string& path, int track)
+SMF::open(const std::string& path, int track, bool scan)
 {
 	Glib::Threads::Mutex::Lock lm (_smf_lock);
 
-	_type0 = false;
-	_type0channels.clear ();
+	_num_channels     = 0;
+	_n_note_on_events = 0;
+	_has_pgm_change   = false;
+	_used_channels.reset ();
 
 	assert(track >= 1);
 	if (_smf) {
@@ -151,32 +164,55 @@ SMF::open(const std::string& path, int track)
 	fclose(f);
 
 	lm.release ();
-	if (_smf->format == 0 && _smf->number_of_tracks == 1 && !_empty) {
-		// type-0 file: scan file for # of used channels.
-		int ret;
-		uint32_t delta_t = 0;
-		uint32_t size    = 0;
-		uint8_t* buf     = NULL;
-		event_id_t event_id = 0;
-		seek_to_start();
-		while ((ret = read_event (&delta_t, &size, &buf, &event_id)) >= 0) {
-			if (ret == 0) {
-				continue;
+	if (!_empty && scan) {
+		/* scan the file, set meta-data w/o loading the model */
+		bool type0 = _smf->format==0;
+		for (int i = 1; i <= _smf->number_of_tracks; ++i) {
+			/* scan file for used channels. */
+			int ret;
+			uint32_t delta_t = 0;
+			uint32_t size    = 0;
+			uint8_t* buf     = NULL;
+			event_id_t event_id = 0;
+
+			if (type0) {
+				seek_to_start ();  //type0 files have no 'track' concept, just seek_to_start
+			} else {
+				seek_to_track (i);
 			}
-			if (size == 0) {
-				break;
+
+			while ((ret = read_event (&delta_t, &size, &buf, &event_id)) >= 0) {
+				if (ret == 0) {
+					continue;
+				}
+				if (size == 0) {
+					break;
+				}
+				uint8_t type = buf[0] & 0xf0;
+				uint8_t chan = buf[0] & 0x0f;
+
+				if (type >= 0x80 && type <= 0xE0) {
+					_used_channels.set(chan);
+					switch (type) {
+						case MIDI_CMD_NOTE_ON:
+							++_n_note_on_events;
+							break;
+						case MIDI_CMD_PGM_CHANGE:
+							_has_pgm_change = true;
+							break;
+						default:
+							break;
+					}
+				}
 			}
-			uint8_t type = buf[0] & 0xf0;
-			uint8_t chan = buf[0] & 0x0f;
-			if (type < 0x80 || type > 0xE0) {
-				continue;
-			}
-			_type0channels.insert(chan);
+			_num_channels += _used_channels.count ();
+			free (buf);
 		}
-		free (buf);
-		_type0 = true;
+	}
+	if (!_empty) {
 		seek_to_start();
 	}
+
 	return 0;
 }
 
@@ -224,7 +260,7 @@ SMF::create(const std::string& path, int track, uint16_t ppqn)
 	{
 		/* put a stub file on disk */
 
-		FILE* f = g_fopen (path.c_str(), "w+");
+		FILE* f = g_fopen (path.c_str(), "w+b");
 		if (f == 0) {
 			return -1;
 		}
@@ -237,8 +273,7 @@ SMF::create(const std::string& path, int track, uint16_t ppqn)
 	}
 
 	_empty = true;
-	_type0 = false;
-	_type0channels.clear ();
+	_num_channels = 0;
 
 	return 0;
 }
@@ -252,8 +287,7 @@ SMF::close()
 		smf_delete(_smf);
 		_smf = 0;
 		_smf_track = 0;
-		_type0 = false;
-		_type0channels.clear ();
+		_num_channels = 0;
 	}
 }
 
@@ -326,7 +360,7 @@ SMF::read_event(uint32_t* delta_t, uint32_t* size, uint8_t** buf, event_id_t* no
 			return 0; /* this is a meta-event */
 		}
 
-		int event_size = event->midi_buffer_length;
+		uint32_t event_size = (uint32_t) event->midi_buffer_length;
 		assert(event_size > 0);
 
 		// Make sure we have enough scratch buffer
@@ -479,7 +513,7 @@ SMF::end_write(string const & path)
 		return;
 	}
 
-	FILE* f = g_fopen (path.c_str(), "w+");
+	FILE* f = g_fopen (path.c_str(), "w+b");
 	if (f == 0) {
 		throw FileError (path);
 	}
@@ -517,9 +551,11 @@ SMF::track_names(vector<string>& names) const
 			names.push_back (string());
 		} else {
 			if (trk->name) {
-				names.push_back (trk->name);
+				names.push_back (Glib::convert_with_fallback (trk->name, "UTF-8", "ISO-8859-1", "_"));
 			} else {
-				names.push_back (string());
+				char buf[32];
+				sprintf(buf, "t%d", n+1);
+				names.push_back (buf);
 			}
 		}
 	}
@@ -544,7 +580,9 @@ SMF::instrument_names(vector<string>& names) const
 			if (trk->instrument) {
 				names.push_back (trk->instrument);
 			} else {
-				names.push_back (string());
+				char buf[32];
+				sprintf(buf, "i%d", n+1);
+				names.push_back (buf);
 			}
 		}
 	}
@@ -596,33 +634,58 @@ SMF::load_markers ()
 	smf_event_t* event;
 
 	while ((event = smf_track_get_next_event(_smf_track)) != NULL) {
-
+		/* compare to smf_event_decode_metadata, smf_event_decode_textual */
+		bool allow_empty = false;
 		if (smf_event_is_metadata(event)) {
-			if (event->midi_buffer[1] == 0x06) {
-				char const * txt = smf_event_decode (event);
-				string marker;
-				if (txt != 0) {
-					marker = txt;
-				}
-				if (marker.find ("Marker: ") == 0) {
-					marker = marker.substr (8);
-				}
-				_markers.push_back (MarkerAt (marker, event->time_pulses));
+			string name;
+			switch (event->midi_buffer[1]) {
+				case 0x05:
+					name = "Lyric:";
+					break;
+				case 0x06:
+					name = "Marker:";
+					break;
+				case 0x07:
+					name = "Cue Point:";
+					allow_empty = true;
+					break;
+				case 0x01: // "Text:"
+					/* fallthtough */
+				case 0x02: // "Copyright:"
+					/* fallthtough */
+				case 0x03: // "Sequence/Track Name:"
+					/* fallthtough */
+				case 0x04: // "Instrument:"
+					/* fallthtough */
+				case 0x08: // "Program Name:"
+					/* fallthtough */
+				case 0x09: // "Device (Port) Name:"
+					/* fallthtough */
+				default:
+					continue;
 			}
-			if (event->midi_buffer[1] == 0x07) {
-				char const * txt = smf_event_decode (event);
-				string marker;
-				if (txt != 0) {
-					marker = txt;
-				}
-				if (marker.find ("Cue Point: ") == 0) {
-					marker = marker.substr (8);
-				}
-				_markers.push_back (MarkerAt (marker, event->time_pulses));
+
+			char const * txt = smf_event_decode (event);
+
+			if (!txt) {
+				continue;
 			}
+
+			string marker (txt);
+
+			if (marker.find (name) == 0) {
+				marker = marker.substr (name.length ());
+			}
+
+			PBD::strip_whitespace_edges (marker);
+
+			if (marker.empty () && !allow_empty) {
+				continue;
+			}
+
+			_markers.push_back (MarkerAt (marker, event->time_pulses));
 		}
 	}
 }
-
 
 } // namespace Evoral

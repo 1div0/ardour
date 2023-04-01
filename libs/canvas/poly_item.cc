@@ -63,7 +63,7 @@ PolyItem::compute_bounding_box () const
 		_bounding_box = Rect ();
 	}
 
-	bb_clean ();
+	set_bbox_clean ();
 }
 
 void
@@ -135,7 +135,7 @@ PolyItem::set (Points const& points)
 
 		_points = points;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }

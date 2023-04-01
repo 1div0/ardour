@@ -16,105 +16,136 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_gtk_triggerbox_ui_h__
-#define __ardour_gtk_triggerbox_ui_h__
+#ifndef _gtk_ardour_triggerbox_ui_h_
+#define _gtk_ardour_triggerbox_ui_h_
 
-#include <map>
-
-#include <gtkmm/window.h>
+#include <gtkmm/colorselection.h>
 
 #include "pbd/properties.h"
 
 #include "ardour/triggerbox.h"
 
-#include "canvas/box.h"
 #include "canvas/canvas.h"
 #include "canvas/rectangle.h"
 
-namespace Gtk {
-class FileChooserDialog;
-class Menu;
-}
+#include "fitted_canvas_widget.h"
 
-namespace Temporal {
+#include "trigger_ui.h"
+
+namespace Temporal
+{
 	struct BBT_Offset;
 }
 
-namespace ArdourCanvas {
+namespace ArdourCanvas
+{
 	class Text;
 	class Polygon;
-};
+}
 
-class TriggerEntry : public ArdourCanvas::Rectangle
+class TriggerEntry : public ArdourCanvas::Rectangle, public TriggerUI
 {
-  public:
-	TriggerEntry (ArdourCanvas::Canvas* canvas, ARDOUR::Trigger&);
+public:
+	TriggerEntry (ArdourCanvas::Item* item, ARDOUR::TriggerReference rf);
 	~TriggerEntry ();
 
-	ARDOUR::Trigger& trigger() const { return _trigger; }
-
 	ArdourCanvas::Rectangle* play_button;
-	ArdourCanvas::Polygon* play_shape;
-	ArdourCanvas::Text*    name_text;
+	ArdourCanvas::Rectangle* name_button;
+	ArdourCanvas::Rectangle* follow_button;
+	ArdourCanvas::Text*      name_text;
 
-  private:
-	ARDOUR::Trigger& _trigger;
-	double poly_size;
-	double poly_margin;
+	void draw_launch_icon (Cairo::RefPtr<Cairo::Context> context, float size, float scale) const;
+	void draw_follow_icon (Cairo::RefPtr<Cairo::Context> context, ARDOUR::FollowAction const & icon, float size, float scale) const;
 
-	PBD::ScopedConnection trigger_prop_connection;
-	void prop_change (PBD::PropertyChange const & change);
-	void draw_play_button ();
+	void render (ArdourCanvas::Rect const& area, Cairo::RefPtr<Cairo::Context> context) const;
+
+	void _size_allocate (ArdourCanvas::Rect const&);
+
+	void on_trigger_changed (PBD::PropertyChange const& change);
+
+	void selection_change ();
+
+	enum EnteredState {
+		PlayEntered,
+		NameEntered,
+		FollowEntered,
+		NoneEntered
+	};
+
+	void set_widget_colors (TriggerEntry::EnteredState es = NoneEntered);
+
+	bool name_button_event (GdkEvent*);
+
+private:
+	bool   _grabbed;
+	double _poly_size;
+	double _poly_margin;
+
+	int  _drag_start_x;
+	int  _drag_start_y;
+	bool _drag_active;
+
+	bool event (GdkEvent*);
+	void drag_begin (Glib::RefPtr<Gdk::DragContext> const&);
+	void drag_end (Glib::RefPtr<Gdk::DragContext> const&);
+	void drag_data_get (Glib::RefPtr<Gdk::DragContext> const&, Gtk::SelectionData&, guint, guint);
+
+	void ui_parameter_changed (std::string const& p);
+
+	bool play_button_event (GdkEvent*);
+	bool follow_button_event (GdkEvent*);
+
+	void owner_prop_change (PBD::PropertyChange const&);
+	void owner_color_changed ();
+
+	PBD::ScopedConnection _owner_prop_connection;
 };
 
-class TriggerBoxUI : public ArdourCanvas::Box
+class TriggerBoxUI : public ArdourCanvas::Rectangle
 {
-   public:
+public:
 	TriggerBoxUI (ArdourCanvas::Item* parent, ARDOUR::TriggerBox&);
 	~TriggerBoxUI ();
 
-   private:
-	ARDOUR::TriggerBox& _triggerbox;
+	void _size_allocate (ArdourCanvas::Rect const&);
+
+	static Glib::RefPtr<Gtk::TargetList> dnd_src ()
+	{
+		return _dnd_src;
+	}
+
+private:
 	typedef std::vector<TriggerEntry*> Slots;
-	Slots _slots;
-	Gtk::FileChooserDialog* file_chooser;
-	sigc::connection file_chooser_connection;
-	Gtk::Menu* _context_menu;
 
-	bool bang (GdkEvent*, size_t);
-	bool text_event (GdkEvent*, size_t);
-	bool event (GdkEvent*, size_t);
+	ARDOUR::TriggerBox& _triggerbox;
+	Slots               _slots;
 
-	void choose_sample (size_t n);
-	void sample_chosen (int r, size_t n);
-	void context_menu (size_t n);
-	void set_follow_action (size_t slot, ARDOUR::Trigger::FollowAction);
-	void set_launch_style (size_t slot, ARDOUR::Trigger::LaunchStyle);
-	void set_quantization (size_t slot, Temporal::BBT_Offset const &);
+	static Glib::RefPtr<Gtk::TargetList> _dnd_src;
 
 	void build ();
+
+	void selection_changed ();
+
+	bool drag_motion (Glib::RefPtr<Gdk::DragContext> const&, int, int, guint);
+	void drag_leave (Glib::RefPtr<Gdk::DragContext> const&, guint);
+	void drag_data_received (Glib::RefPtr<Gdk::DragContext> const&, int, int, Gtk::SelectionData const&, guint, guint);
+
+	bool triggerbox_event (GdkEvent*);
+
+	uint64_t slot_at_y (int) const;
+
+	sigc::connection _selection_connection;
 };
 
-
-class TriggerBoxWidget : public ArdourCanvas::GtkCanvas
+class TriggerBoxWidget : public FittedCanvasWidget
 {
-  public:
-	TriggerBoxWidget (ARDOUR::TriggerBox& tb);
-	void size_request (double& w, double& h) const;
+public:
+	TriggerBoxWidget (float w, float h);
 
-  private:
+	void set_triggerbox (ARDOUR::TriggerBox* tb);
+
+private:
 	TriggerBoxUI* ui;
 };
 
-/* XXX probably for testing only */
-
-class TriggerBoxWindow : public Gtk::Window
-{
-    public:
-	TriggerBoxWindow (ARDOUR::TriggerBox&);
-
-	bool on_key_press_event (GdkEventKey*);
-	bool on_key_release_event (GdkEventKey*);
-};
-
-#endif /* __ardour_gtk_triggerbox_ui_h__ */
+#endif

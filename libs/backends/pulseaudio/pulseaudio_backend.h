@@ -19,17 +19,16 @@
 #ifndef __libbackend_pulse_audiobackend_h__
 #define __libbackend_pulse_audiobackend_h__
 
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include <pthread.h>
-#include <stdint.h>
 
 #include <pulse/pulseaudio.h>
-
-#include <boost/shared_ptr.hpp>
 
 #include "pbd/natsort.h"
 
@@ -43,7 +42,7 @@ namespace ARDOUR {
 
 class PulseAudioBackend;
 
-class PulseMidiEvent
+class PulseMidiEvent : public BackendMIDIEvent
 {
 public:
 	PulseMidiEvent (const pframes_t timestamp, const uint8_t* data, size_t size);
@@ -53,7 +52,6 @@ public:
 	pframes_t timestamp () const { return _timestamp; };
 	const uint8_t* data () const { return _data; };
 	const uint8_t* const_data () const { return _data; };
-	bool operator< (const PulseMidiEvent& other) const { return timestamp () < other.timestamp (); };
 
 private:
 	size_t    _size;
@@ -61,7 +59,7 @@ private:
 	uint8_t   _data[MaxPulseMidiEventSize];
 };
 
-typedef std::vector<boost::shared_ptr<PulseMidiEvent> > PulseMidiBuffer;
+typedef std::vector<std::shared_ptr<PulseMidiEvent> > PulseMidiBuffer;
 
 
 class PulseAudioPort : public BackendPort

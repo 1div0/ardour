@@ -25,8 +25,6 @@
 
 #include "pbd/compose.h"
 #include "pbd/error.h"
-#include "pbd/i18n.h"
-#include "pbd/abstract_ui.cc" // instantiate template
 
 #include "ardour/async_midi_port.h"
 #include "ardour/audioengine.h"
@@ -43,6 +41,8 @@
 #include "m2_map_mikro.h"
 
 #include "canvas.h"
+
+#include "pbd/abstract_ui.cc" // instantiate template, includes i18n
 
 using namespace ARDOUR;
 using namespace PBD;
@@ -163,7 +163,7 @@ Maschine2::set_active (bool yn)
 }
 
 XMLNode&
-Maschine2::get_state()
+Maschine2::get_state() const
 {
 	XMLNode& node (ControlProtocol::get_state());
 	return node;
@@ -217,19 +217,19 @@ Maschine2::start ()
 		return -1;
 	}
 
-	boost::dynamic_pointer_cast<AsyncMIDIPort>(_midi_out)->set_flush_at_cycle_start (true);
-	_output_port = boost::dynamic_pointer_cast<AsyncMIDIPort>(_midi_out).get();
+	std::dynamic_pointer_cast<AsyncMIDIPort>(_midi_out)->set_flush_at_cycle_start (true);
+	_output_port = std::dynamic_pointer_cast<AsyncMIDIPort>(_midi_out).get();
 
 	switch (_maschine_type) {
 		case Mikro:
 			_hw = new Maschine2Mikro ();
 			_ctrl = new M2MapMikro ();
-			info << _("Maschine2 Mikro control surface intialized");
+			info << _("Maschine2 Mikro control surface initialized");
 			break;
 		case Maschine:
 			_hw = new Maschine2Mk2 ();
 			_ctrl = new M2MapMk2 ();
-			info << _("Maschine2 control surface intialized");
+			info << _("Maschine2 control surface initialized");
 			break;
 		case Studio:
 			error << _("Maschine2 Studio is not yet supported");

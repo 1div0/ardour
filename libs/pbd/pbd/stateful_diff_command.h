@@ -20,8 +20,7 @@
 #ifndef __pbd_stateful_diff_command_h__
 #define __pbd_stateful_diff_command_h__
 
-#include <boost/shared_ptr.hpp>
-#include <boost/weak_ptr.hpp>
+#include <memory>
 
 #include "pbd/command.h"
 #include "pbd/libpbd_visibility.h"
@@ -37,19 +36,19 @@ class PropertyList;
 class LIBPBD_API StatefulDiffCommand : public Command
 {
 public:
-	StatefulDiffCommand (boost::shared_ptr<StatefulDestructible>);
-	StatefulDiffCommand (boost::shared_ptr<StatefulDestructible>, XMLNode const&);
+	StatefulDiffCommand (std::shared_ptr<StatefulDestructible>);
+	StatefulDiffCommand (std::shared_ptr<StatefulDestructible>, XMLNode const&);
 	~StatefulDiffCommand ();
 
 	void operator() ();
 	void undo ();
 
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 
 	bool empty () const;
 
 private:
-	boost::weak_ptr<Stateful> _object;  ///< the object in question
+	std::weak_ptr<Stateful> _object;  ///< the object in question
 	PBD::PropertyList*        _changes; ///< property changes to execute this command
 };
 

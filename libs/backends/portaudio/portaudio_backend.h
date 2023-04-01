@@ -21,14 +21,13 @@
 #ifndef __libbackend_portaudio_backend_h__
 #define __libbackend_portaudio_backend_h__
 
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include <set>
 
-#include <stdint.h>
 #include <pthread.h>
-
-#include <boost/shared_ptr.hpp>
 
 #include "ardour/audio_backend.h"
 #include "ardour/dsp_load_calculator.h"
@@ -43,14 +42,13 @@ namespace ARDOUR {
 
 class PortAudioBackend;
 
-class PortMidiEvent {
+class PortMidiEvent : public BackendMIDIEvent {
 	public:
 		PortMidiEvent (const pframes_t timestamp, const uint8_t* data, size_t size);
 		PortMidiEvent (const PortMidiEvent& other);
 		size_t size () const { return _size; };
 		pframes_t timestamp () const { return _timestamp; };
 		const uint8_t* data () const { return _data; };
-		bool operator< (const PortMidiEvent &other) const { return timestamp () < other.timestamp (); };
 	private:
 		size_t _size;
 		pframes_t _timestamp;

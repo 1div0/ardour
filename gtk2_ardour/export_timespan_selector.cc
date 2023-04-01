@@ -34,6 +34,8 @@
 #include "ardour/export_handler.h"
 #include "ardour/export_timespan.h"
 
+#include "temporal/tempo.h"
+
 #include "export_timespan_selector.h"
 
 #include "pbd/i18n.h"
@@ -46,7 +48,7 @@ using std::string;
 ExportTimespanSelector::ExportTimespanSelector (ARDOUR::Session * session, ProfileManagerPtr manager, bool multi)
 	: manager (manager)
 	, _realtime_available (false)
-	, time_format_label (_("Show Times as:"), Gtk::ALIGN_LEFT)
+	, time_format_label (_("Show Times as:"), Gtk::ALIGN_START)
 	, realtime_checkbutton (_("Realtime Export"))
 {
 	set_session (session);
@@ -302,7 +304,7 @@ ExportTimespanSelector::bbt_str (samplepos_t samples) const
 
 	std::ostringstream oss;
 	Temporal::BBT_Time time;
-	_session->bbt_time (timepos_t (samples), time);
+	time = Temporal::TempoMap::use()->bbt_at (timepos_t (samples));
 
 	time.print_padded (oss);
 
@@ -386,6 +388,9 @@ ExportTimespanSelector::set_selection_state_of_all_timespans (bool s)
 	for (Gtk::ListStore::Children::iterator it = range_list->children().begin(); it != range_list->children().end(); ++it) {
 		it->set_value (range_cols.selected, s);
 	}
+
+	update_timespans ();
+	CriticalSelectionChanged ();
 }
 
 /*** ExportTimespanSelectorSingle ***/

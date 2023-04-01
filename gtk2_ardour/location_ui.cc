@@ -295,6 +295,10 @@ LocationEditRow::set_location (Location *loc)
 			remove_button.set_sensitive (false);
 		}
 
+		if (location->is_cue_marker()) {
+			cd_check_button.set_sensitive (false);
+		}
+
 		cd_check_button.set_active (location->is_cd_marker());
 		cd_check_button.show();
 
@@ -442,10 +446,10 @@ LocationEditRow::locate_button_pressed (LocationPart part)
 {
 	switch (part) {
 		case LocStart:
-			_session->request_locate (start_clock.current_time().samples());
+			_session->request_locate (start_clock.last_when().samples());
 			break;
 		case LocEnd:
-			_session->request_locate (end_clock.current_time().samples());
+			_session->request_locate (end_clock.last_when().samples());
 			break;
 		default:
 			break;
@@ -456,7 +460,7 @@ bool
 LocationEditRow::locate_to_clock (GdkEventButton* ev, AudioClock* clock)
 {
 	if (Keyboard::is_button2_event (ev)) {
-		_session->request_locate (clock->current_time().samples());
+		_session->request_locate (clock->last_when().samples());
 		return true;
 	}
 	return false;
@@ -471,10 +475,10 @@ LocationEditRow::clock_changed (LocationPart part)
 
 	switch (part) {
 		case LocStart:
-			location->set_start (start_clock.current_time(), false);
+			location->set_start (start_clock.last_when(), false);
 			break;
 		case LocEnd:
-			location->set_end (end_clock.current_time(), false);
+			location->set_end (end_clock.last_when(), false);
 			if (location->is_session_range()) {
 				_session->set_session_range_is_free (false);
 			}
@@ -1077,7 +1081,7 @@ LocationUI::refresh_location_list ()
 	using namespace Box_Helpers;
 
 	// this is just too expensive to do when window is not shown
-	if (!is_mapped()) {
+	if (!get_mapped ()) {
 		return;
 	}
 

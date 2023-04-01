@@ -90,34 +90,34 @@ Curve::solve () const
 
 		for (i = 0, xx = _list.events().begin(); xx != _list.events().end(); ++xx, ++i) {
 
-			double xdelta;   /* gcc is wrong about possible uninitialized use */
-			double xdelta2;  /* ditto */
-			double ydelta;   /* ditto */
-			double fppL, fppR;
-			double fpi;
 			double xi = x[i].val();
-			double xim1;
-
-			if (i > 0) {
-				xim1 = x[i-1].val();
-				xdelta = xi - xim1;
-				xdelta2 = xdelta * xdelta;
-				ydelta = y[i] - y[i-1];
-			}
-
-			/* compute (constrained) first derivatives */
 
 			if (i == 0) {
 
 				/* first segment */
 
-				fplast = ((3 * (y[1] - y[0]) / (2 * (xi - xim1))) - (fpone * 0.5));
+				fplast = ((3 * (y[1] - y[0]) / (2 * (x[1].val() - x[0].val()))) - (fpone * 0.5));
 
 				/* we don't store coefficients for i = 0 */
 
 				continue;
+			}
 
-			} else if (i == npoints - 1) {
+			double xdelta;   /* gcc is wrong about possible uninitialized use */
+			double xdelta2;  /* ditto */
+			double ydelta;   /* ditto */
+			double fppL, fppR;
+			double fpi;
+			double xim1;
+
+			xim1 = x[i-1].val();
+			xdelta = xi - xim1;
+			xdelta2 = xdelta * xdelta;
+			ydelta = y[i] - y[i-1];
+
+			/* compute (constrained) first derivatives */
+
+			if (i == npoints - 1) {
 
 				/* last segment */
 
@@ -127,9 +127,7 @@ Curve::solve () const
 
 				/* all other segments */
 
-				double xip1 = x[i+1].val();
-
-				double slope_before = (xip1 - xi) / (y[i+1] - y[i]);
+				double slope_before = (x[i+1].val() - xi) / (y[i+1] - y[i]);
 				double slope_after = (xdelta / ydelta);
 
 				if (slope_after * slope_before < 0.0) {
@@ -142,11 +140,11 @@ Curve::solve () const
 
 			/* compute second derivative for either side of control point `i' */
 
-			fppL = (((-2 * (fpi + (2 * fplast))) / (xdelta))) +
-				((6 * ydelta) / xdelta2);
+			fppL = -2 * (fpi + 2 * fplast) / xdelta +
+				6 * ydelta / xdelta2;
 
-			fppR = (2 * ((2 * fpi) + fplast) / xdelta) -
-				((6 * ydelta) / xdelta2);
+			fppR = 2 * (2 * fpi + fplast) / xdelta -
+				6 * ydelta / xdelta2;
 
 			/* compute polynomial coefficients */
 
@@ -159,9 +157,9 @@ Curve::solve () const
 			double xi2, xi3;
 
 			xim12 = xim1 * xim1;  /* "x[i-1] squared" */
-			xim13 = xim12 * xim1;   /* "x[i-1] cubed" */
+			xim13 = xim12 * xim1; /* "x[i-1] cubed" */
 			xi2 = xi * xi;        /* "x[i] squared" */
-			xi3 = xi2 * xi;         /* "x[i] cubed" */
+			xi3 = xi2 * xi;       /* "x[i] cubed" */
 
 			b = (ydelta - (c * (xi2 - xim12)) - (d * (xi3 - xim13))) / xdelta;
 
@@ -202,8 +200,11 @@ Curve::get_vector (Temporal::timepos_t const & x0, Temporal::timepos_t const & x
 }
 
 void
-Curve::_get_vector (Temporal::timepos_t const & x0, Temporal::timepos_t const & x1, float *vec, int32_t veclen) const
+Curve::_get_vector (Temporal::timepos_t x0, Temporal::timepos_t x1, float *vec, int32_t veclen) const
 {
+	x0.set_time_domain (_list.time_domain());
+	x1.set_time_domain (_list.time_domain());
+
 	double rx, lx, hx;
 	const double start = x0.val();
 	const double end = x1.val();
@@ -464,11 +465,14 @@ Curve::multipoint_eval (Temporal::timepos_t const & x) const
 					 * This means that x is a relatively
 					 * small value (an offset into the
 					 * fade) amd we do not need to worry
-					 * about the square overflowing.
+					 * about the square or cube overflowing
+					 * a double type. They can overflow an
+					 * int64_t by around 6 seconds.
 					 */
 
-					double x2 = x.val() * x.val();
-					return ev->coeff[0] + (ev->coeff[1] * x.val()) + (ev->coeff[2] * x2) + (ev->coeff[3] * x2 * x.val());
+					const double xv = x.val();
+					double xv2 = xv * xv;
+					return ev->coeff[0] + (ev->coeff[1] * xv) + (ev->coeff[2] * xv2) + (ev->coeff[3] * xv2 * xv);
 				}
 				/* fallthrough */
 			case ControlList::Linear:

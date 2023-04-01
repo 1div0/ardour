@@ -50,6 +50,7 @@ using namespace ARDOUR_PLUGIN_UTILS;
 PluginManagerUI::PluginManagerUI ()
 	: ArdourWindow (_("Plugin Manager"))
 	, _btn_reindex (_("Update Index Only"))
+	, _btn_discover (_("Discover New/Updated"))
 	, _btn_rescan_all (_("Re-scan All"))
 	, _btn_rescan_err (_("Re-scan Faulty"))
 	, _btn_rescan_sel (_("Re-scan Selected"))
@@ -107,12 +108,12 @@ PluginManagerUI::PluginManagerUI ()
 		const char*   tooltip;
 	} ci[] = {
 		/* clang-format off */
-		{ALIGN_LEFT,   false,  _("Status"),       _("Plugin Scan Result") },
+		{ALIGN_START,   false,  _("Status"),       _("Plugin Scan Result") },
 		{ALIGN_CENTER, false, S_("Ignore|Ign"),   _("Ignore this plugin (and others that are loaded in the same file)") },
 		{ALIGN_CENTER, false, S_("Favorite|Fav"), _("Add this plugin to the favorite list") },
 		{ALIGN_CENTER, false,  _("Hide"),         _("Hide this plugin in the plugin-selector") },
 		{ALIGN_CENTER, false,  _("Type"),         _("Plugin standard") },
-		{ALIGN_LEFT,   true,   _("File/ID"),      _("The plugin file (VST) or unique ID (AU, LV2)") },
+		{ALIGN_START,   true,   _("File/ID"),      _("The plugin file (VST) or unique ID (AU, LV2)") },
 		{ALIGN_CENTER, true,   _("Name"),         _("Name of the plugin") },
 		{ALIGN_CENTER, true,   _("Creator"),      _("The plugin's vendor") },
 		{ALIGN_CENTER, true,   _("Tags"),         _("Meta data: category and tags") },
@@ -166,10 +167,10 @@ PluginManagerUI::PluginManagerUI ()
 	_pane.set_divider (0, .85);
 
 	Label* lbl       = manage (new Label ("")); // spacer
-	Frame* f_info    = manage (new Frame (_("Plugin Count")));
-	Frame* f_paths   = manage (new Frame (_("Preferences")));
-	Frame* f_search  = manage (new Frame (_("Search")));
-	Frame* f_actions = manage (new Frame (_("Scan Actions")));
+	Gtk::Frame* f_info    = manage (new Gtk::Frame (_("Plugin Count")));
+	Gtk::Frame* f_paths   = manage (new Gtk::Frame (_("Preferences")));
+	Gtk::Frame* f_search  = manage (new Gtk::Frame (_("Search")));
+	Gtk::Frame* f_actions = manage (new Gtk::Frame (_("Scan Actions")));
 	VBox*  b_paths   = manage (new VBox ());
 	VBox*  b_actions = manage (new VBox ());
 
@@ -183,11 +184,12 @@ PluginManagerUI::PluginManagerUI ()
 	_tbl_nfo.set_col_spacings (3);
 	_tbl_nfo.set_row_spacing (0, 3);
 
-	b_actions->pack_start (_btn_clear);
+	b_actions->pack_start (_btn_discover);
+	b_actions->pack_start (_btn_reindex);
 	b_actions->pack_start (_btn_rescan_sel);
 	b_actions->pack_start (_btn_rescan_err);
 	b_actions->pack_start (_btn_rescan_all);
-	b_actions->pack_start (_btn_reindex);
+	b_actions->pack_start (_btn_clear);
 	b_actions->set_spacing (4);
 	b_actions->set_border_width (4);
 
@@ -256,6 +258,7 @@ PluginManagerUI::PluginManagerUI ()
 	/* tooltips */
 	/* clang-format off */
 	ArdourWidgets::set_tooltip (_btn_reindex,    _("Only update plugin index, do not discover new plugins."));
+	ArdourWidgets::set_tooltip (_btn_discover,   _("Update Index and scan newly installed or updated plugins."));
 	ArdourWidgets::set_tooltip (_btn_rescan_all, _("Scans all plugins, regardless if they have already been successfully scanned.\nDepending on the number of plugins installed this can take a long time."));
 	ArdourWidgets::set_tooltip (_btn_rescan_err, _("Scans plugins that have not yet been successfully scanned."));
 	ArdourWidgets::set_tooltip (_btn_rescan_sel, _("Scans the selected plugin."));
@@ -293,6 +296,7 @@ PluginManagerUI::PluginManagerUI ()
 	PluginManager::instance ().PluginStatusChanged.connect (_manager_connections, invalidator (*this), boost::bind (&PluginManagerUI::plugin_status_changed, this, _1, _2, _3), gui_context ());
 
 	_btn_reindex.signal_clicked.connect (sigc::mem_fun (*this, &PluginManagerUI::reindex));
+	_btn_discover.signal_clicked.connect (sigc::mem_fun (*this, &PluginManagerUI::discover));
 	_btn_rescan_all.signal_clicked.connect (sigc::mem_fun (*this, &PluginManagerUI::rescan_all));
 	_btn_rescan_err.signal_clicked.connect (sigc::mem_fun (*this, &PluginManagerUI::rescan_faulty));
 	_btn_rescan_sel.signal_clicked.connect (sigc::mem_fun (*this, &PluginManagerUI::rescan_selected));
@@ -401,8 +405,10 @@ plugin_type (const PluginType t)
 }
 
 bool
-PluginManagerUI::show_this_plugin (boost::shared_ptr<PluginScanLogEntry> psle, PluginInfoPtr pip, const std::string& searchstr)
+PluginManagerUI::show_this_plugin (std::shared_ptr<PluginScanLogEntry> psle, PluginInfoPtr pip, const std::string& searchstr)
 {
+	using PBD::match_search_strings;
+
 	if (searchstr.empty ()) {
 		return true;
 	}
@@ -470,7 +476,7 @@ PluginManagerUI::refill ()
 {
 	/* save selection and sort-column, clear model to speed-up refill */
 	TreeIter                              iter = plugin_display.get_selection ()->get_selected ();
-	boost::shared_ptr<PluginScanLogEntry> sel;
+	std::shared_ptr<PluginScanLogEntry> sel;
 	if (iter) {
 		sel = (*iter)[plugin_columns.psle];
 	}
@@ -488,14 +494,14 @@ PluginManagerUI::refill ()
 
 	std::map<PluginType, PluginCount> plugin_count;
 
-	std::vector<boost::shared_ptr<PluginScanLogEntry> > psl;
+	std::vector<std::shared_ptr<PluginScanLogEntry> > psl;
 	PluginManager& manager (PluginManager::instance ());
 	manager.scan_log (psl);
 
 	std::string searchstr = _entry_search.get_text ();
 	setup_search_string (searchstr);
 
-	for (std::vector<boost::shared_ptr<PluginScanLogEntry> >::const_iterator i = psl.begin (); i != psl.end (); ++i) {
+	for (std::vector<std::shared_ptr<PluginScanLogEntry> >::const_iterator i = psl.begin (); i != psl.end (); ++i) {
 		PluginInfoList const& plugs = (*i)->nfo ();
 
 		if (!(*i)->recent ()) {
@@ -571,7 +577,7 @@ PluginManagerUI::refill ()
 	if (sel) {
 		TreeModel::Children rows = plugin_model->children ();
 		for (TreeModel::Children::iterator i = rows.begin (); i != rows.end (); ++i) {
-			boost::shared_ptr<PluginScanLogEntry> const& srow ((*i)[plugin_columns.psle]);
+			std::shared_ptr<PluginScanLogEntry> const& srow ((*i)[plugin_columns.psle]);
 			if (*sel == *srow) {
 				plugin_display.get_selection ()->select (*i);
 				TreeIter iter = plugin_display.get_selection ()->get_selected ();
@@ -601,38 +607,38 @@ PluginManagerUI::refill ()
 		pc_max.ndscn = std::max (pc_max.ndscn, i->second.ndscn);
 	}
 
-	Label* head_type  = new Label (_("Type"), ALIGN_LEFT, ALIGN_CENTER);
-	Label* head_count = new Label (_("Total"), ALIGN_RIGHT, ALIGN_CENTER);
+	Label* head_type  = new Label (_("Type"), ALIGN_START, ALIGN_CENTER);
+	Label* head_count = new Label (_("Total"), ALIGN_END, ALIGN_CENTER);
 	_tbl_nfo.attach (*head_type,  0, 1, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 	_tbl_nfo.attach (*head_count, 1, 2, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 	if (pc_max.error > 0) {
-		Label* hd = new Label (_("Err"), ALIGN_RIGHT, ALIGN_CENTER);
+		Label* hd = new Label (_("Err"), ALIGN_END, ALIGN_CENTER);
 		_tbl_nfo.attach (*hd, 2, 3, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 	}
 	if (pc_max.stale > 0) {
-		Label* hd = new Label (_("Mis"), ALIGN_RIGHT, ALIGN_CENTER);
+		Label* hd = new Label (_("Mis"), ALIGN_END, ALIGN_CENTER);
 		_tbl_nfo.attach (*hd, 3, 4, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 	}
 	if (pc_max.ndscn > 0) {
-		Label* hd = new Label (_("New"), ALIGN_RIGHT, ALIGN_CENTER);
+		Label* hd = new Label (_("New"), ALIGN_END, ALIGN_CENTER);
 		_tbl_nfo.attach (*hd, 4, 5, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 	}
 	++row;
 	for (std::map<PluginType, PluginCount>::const_iterator i = plugin_count.begin (); i != plugin_count.end (); ++i, ++row) {
-		Label* lbl_type  = new Label (plugin_type (i->first), ALIGN_LEFT, ALIGN_CENTER);
-		Label* lbl_count = new Label (string_compose ("%1", i->second.total), ALIGN_RIGHT, ALIGN_CENTER);
+		Label* lbl_type  = new Label (plugin_type (i->first), ALIGN_START, ALIGN_CENTER);
+		Label* lbl_count = new Label (string_compose ("%1", i->second.total), ALIGN_END, ALIGN_CENTER);
 		_tbl_nfo.attach (*lbl_type,  0, 1, row, row + 1, EXPAND | FILL, SHRINK, 2, 2);
 		_tbl_nfo.attach (*lbl_count, 1, 2, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 		if (pc_max.error > 0) {
-			Label* lbl = new Label (string_compose ("%1", i->second.error), ALIGN_RIGHT, ALIGN_CENTER);
+			Label* lbl = new Label (string_compose ("%1", i->second.error), ALIGN_END, ALIGN_CENTER);
 			_tbl_nfo.attach (*lbl, 2, 3, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 		}
 		if (pc_max.stale > 0) {
-			Label* lbl = new Label (string_compose ("%1", i->second.stale), ALIGN_RIGHT, ALIGN_CENTER);
+			Label* lbl = new Label (string_compose ("%1", i->second.stale), ALIGN_END, ALIGN_CENTER);
 			_tbl_nfo.attach (*lbl, 3, 4, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 		}
 		if (pc_max.ndscn > 0) {
-			Label* lbl = new Label (string_compose ("%1", i->second.ndscn), ALIGN_RIGHT, ALIGN_CENTER);
+			Label* lbl = new Label (string_compose ("%1", i->second.ndscn), ALIGN_END, ALIGN_CENTER);
 			_tbl_nfo.attach (*lbl, 4, 5, row, row + 1, SHRINK | FILL, SHRINK, 2, 2);
 		}
 	}
@@ -653,7 +659,7 @@ PluginManagerUI::selection_changed ()
 	}
 
 	TreeIter                                     iter = plugin_display.get_selection ()->get_selected ();
-	boost::shared_ptr<PluginScanLogEntry> const& psle ((*iter)[plugin_columns.psle]);
+	std::shared_ptr<PluginScanLogEntry> const& psle ((*iter)[plugin_columns.psle]);
 
 	_log.get_buffer ()->set_text (psle->log ());
 
@@ -673,7 +679,7 @@ PluginManagerUI::row_activated (TreeModel::Path const& p, TreeViewColumn*)
 	if (!iter) {
 		return;
 	}
-	boost::shared_ptr<PluginScanLogEntry> const& psle ((*iter)[plugin_columns.psle]);
+	std::shared_ptr<PluginScanLogEntry> const& psle ((*iter)[plugin_columns.psle]);
 
 	switch (psle->type ()) {
 		case Windows_VST:
@@ -699,7 +705,7 @@ PluginManagerUI::blacklist_changed (std::string const& path)
 {
 	TreeIter iter;
 	if ((iter = plugin_model->get_iter (path))) {
-		boost::shared_ptr<PluginScanLogEntry> const& psle ((*iter)[plugin_columns.psle]);
+		std::shared_ptr<PluginScanLogEntry> const& psle ((*iter)[plugin_columns.psle]);
 		if ((*iter)[plugin_columns.blacklisted]) {
 			PluginScanDialog psd (false, true, this);
 			PluginManager::instance ().rescan_plugin (psle->type (), psle->path ());
@@ -816,6 +822,13 @@ PluginManagerUI::reindex()
 }
 
 void
+PluginManagerUI::discover()
+{
+	PluginScanDialog psd (false, true, this);
+	psd.start ();
+}
+
+void
 PluginManagerUI::rescan_selected ()
 {
 	if (plugin_display.get_selection ()->count_selected_rows () != 1) {
@@ -823,7 +836,7 @@ PluginManagerUI::rescan_selected ()
 	}
 
 	TreeIter                                     iter = plugin_display.get_selection ()->get_selected ();
-	boost::shared_ptr<PluginScanLogEntry> const& psle ((*iter)[plugin_columns.psle]);
+	std::shared_ptr<PluginScanLogEntry> const& psle ((*iter)[plugin_columns.psle]);
 
 	PluginScanDialog psd (false, true, this);
 	PluginManager::instance ().rescan_plugin (psle->type (), psle->path ());

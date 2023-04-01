@@ -24,6 +24,8 @@
 #include "temporal/debug.h"
 #include "temporal/tempo.h"
 
+#include "pbd/i18n.h"
+
 using namespace PBD;
 using namespace Temporal;
 
@@ -44,9 +46,15 @@ Beats::round_to_subdivision (int subdivision, RoundMode dir) const {
 		BBT_Time bbt (metric.bbt_at (*this));
 
 		if (dir < 0) {
-			bbt = metric.meter().round_down_to_bar (bbt);
+			if (dir == RoundDownAlways && bbt.ticks == 0) {
+				bbt = metric.bbt_subtract (bbt, Temporal::BBT_Offset (0, 0, 1));
+			}
+			bbt = bbt.round_down_to_bar ();
 		} if (dir > 0) {
-			bbt = metric.meter().round_up_to_bar (bbt);
+			if (dir == RoundUpAlways && bbt.ticks == 0) {
+				bbt.ticks += 1;
+			}
+			bbt = bbt.round_up_to_bar ();
 		} else {
 			bbt = metric.meter().round_to_bar (bbt);
 		}
@@ -120,10 +128,15 @@ Beats::round_to_subdivision (int subdivision, RoundMode dir) const {
 std::istream&
 Temporal::operator>>(std::istream& istr, Beats& b)
 {
+	double dbeats;
 	int32_t beats, ticks;
 	char d; /* delimiter, whatever it is */
 
-	istr >> beats;
+	/* use double first to handle pre-nutempo values that would be
+	 * serialized as double.
+	 */
+
+	istr >> dbeats;
 
 	if (!istr) {
 		throw std::invalid_argument (_("illegal or missing value for beat count"));
@@ -132,8 +145,22 @@ Temporal::operator>>(std::istream& istr, Beats& b)
 	istr >> d; /* we don't care what the delimiter is */
 
 	if (!istr) {
+
+		if (istr.eof()) {
+			/* just a number. Convert dbeats and get out */
+			b = Beats::from_double (dbeats);
+			return istr;
+		}
+
 		throw std::invalid_argument (_("illegal or missing delimiter for beat value"));
 	}
+
+	/* we just assuming, since the input format included a delimiter
+	 * character, that the numerical value was integral and convert without
+	 * checking.
+	 */
+
+	beats = (int32_t) dbeats;
 
 	istr >> ticks;
 

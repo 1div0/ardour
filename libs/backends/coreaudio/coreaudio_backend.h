@@ -20,15 +20,14 @@
 #ifndef __libbackend_coreaudio_backend_h__
 #define __libbackend_coreaudio_backend_h__
 
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <set>
 #include <string>
 #include <vector>
-#include <map>
-#include <set>
 
-#include <stdint.h>
 #include <pthread.h>
-
-#include <boost/shared_ptr.hpp>
 
 #include "pbd/natsort.h"
 #include "ardour/audio_backend.h"
@@ -45,14 +44,13 @@ namespace ARDOUR {
 
 class CoreAudioBackend;
 
-class CoreMidiEvent {
+class CoreMidiEvent : public BackendMIDIEvent {
   public:
 	CoreMidiEvent (const pframes_t timestamp, const uint8_t* data, size_t size);
 	CoreMidiEvent (const CoreMidiEvent& other);
 	size_t size () const { return _size; };
 	pframes_t timestamp () const { return _timestamp; };
 	const uint8_t* data () const { return _data; };
-	bool operator< (const CoreMidiEvent &other) const { return timestamp () < other.timestamp (); };
   private:
 	size_t _size;
 	pframes_t _timestamp;
@@ -389,9 +387,16 @@ class CoreAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		CoreAudioBackend* engine;
 		boost::function<void ()> f;
 		size_t stacksize;
+		double period_ns;
 
-		ThreadData (CoreAudioBackend* e, boost::function<void ()> fp, size_t stacksz)
-			: engine (e) , f (fp) , stacksize (stacksz) {}
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= 110000
+		bool                      _joined_workgroup;
+		os_workgroup_t            _workgroup;
+		os_workgroup_join_token_s _join_token;
+#endif
+
+		ThreadData (CoreAudioBackend* e, boost::function<void ()> fp, size_t stacksz, double period)
+			: engine (e) , f (fp) , stacksize (stacksz), period_ns (period) {}
 	};
 
 	/* port engine */

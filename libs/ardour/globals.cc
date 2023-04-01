@@ -102,6 +102,7 @@
 #include "ardour/audioplaylist.h"
 #include "ardour/audioregion.h"
 #include "ardour/buffer_manager.h"
+#include "ardour/clip_library.h"
 #include "ardour/control_protocol_manager.h"
 #include "ardour/directory_names.h"
 #include "ardour/event_type_map.h"
@@ -162,9 +163,12 @@ PBD::Signal3<bool, std::string, std::string, int>  ARDOUR::CopyConfigurationFile
 
 std::map<std::string, bool> ARDOUR::reserved_io_names;
 
+float ARDOUR::ui_scale_factor = 1.0;
+
 static bool have_old_configuration_files = false;
 static bool running_from_gui             = false;
 static int  cpu_dma_latency_fd           = -1;
+
 
 namespace ARDOUR {
 extern void setup_enum_writer ();
@@ -187,7 +191,24 @@ setup_hardware_optimization (bool try_optimization)
 		FPU* fpu = FPU::instance ();
 
 #if defined(ARCH_X86) && defined(BUILD_SSE_OPTIMIZATIONS)
-		/* We have AVX-optimized code for Windows and Linux */
+		/* Utilize different optimization routines for various x86 extensions */
+
+#ifdef FPU_AVX512F_SUPPORT
+		if (fpu->has_avx512f ()) {
+			info << "Using AVX512F optimized routines" << endmsg;
+
+			// AVX512F SET
+			compute_peak          = x86_avx512f_compute_peak;
+			find_peaks            = x86_avx512f_find_peaks;
+			apply_gain_to_buffer  = x86_avx512f_apply_gain_to_buffer;
+			mix_buffers_with_gain = x86_avx512f_mix_buffers_with_gain;
+			mix_buffers_no_gain   = x86_avx512f_mix_buffers_no_gain;
+			copy_vector           = x86_avx512f_copy_vector;
+
+			generic_mix_functions = false;
+
+		} else
+#endif
 
 #ifdef FPU_AVX_FMA_SUPPORT
 		if (fpu->has_fma ()) {
@@ -366,7 +387,7 @@ lotsa_files_please ()
 		error << string_compose (_("Could not get system open files limit (%1)"), strerror (errno)) << endmsg;
 	}
 #else
-	/* this only affects stdio. 2048 is the maxium possible (512 the default).
+	/* this only affects stdio. 2048 is the maximum possible (512 the default).
 	 *
 	 * If we want more, we'll have to replaces the POSIX I/O interfaces with
 	 * Win32 API calls (CreateFile, WriteFile, etc) which allows for 16K.
@@ -525,8 +546,6 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 		return true;
 	}
 
-	Temporal::set_sample_rate_callback (AudioEngine::static_sample_rate);
-
 	running_from_gui = with_gui;
 
 #ifndef NDEBUG
@@ -551,6 +570,7 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 
 	SessionEvent::init_event_pool ();
 	TransportFSM::Event::init_pool ();
+	TriggerBox::init ();
 
 	Operations::make_operations_quarks ();
 	SessionObject::make_property_quarks ();
@@ -570,7 +590,6 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 	*/
 
 	bounds_change.add (ARDOUR::Properties::start);
-	bounds_change.add (ARDOUR::Properties::position);
 	bounds_change.add (ARDOUR::Properties::length);
 
 	/* provide a state version for the few cases that need it and are not
@@ -611,11 +630,16 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 	}
 #endif
 
+	Port::setup_resampler (Config->get_port_resampler_quality ());
+
 	setup_hardware_optimization (try_optimization);
 
 	if (Config->get_cpu_dma_latency () >= 0) {
 		request_dma_latency ();
 	}
+
+	/* expand `@default@' clip-library-dir config */
+	clip_library_dir (false);
 
 	SourceFactory::init ();
 	Analyser::init ();
@@ -641,10 +665,14 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 	*/
 	EventLoop::register_request_buffer_factory (X_("midiUI"), MidiControlUI::request_factory);
 
-	/* the + 4 is a bit of a handwave. i don't actually know
-	   how many more per-thread buffer sets we need above
-	   the h/w concurrency, but its definitely > 1 more.
-	*/
+	/* Every Process Graph thread (up to hardware_concurrency) keeps a buffer.
+	 * The main engine callback uses one (but returns it after use
+	 * each cycle). Session Export uses one, and the GUI requires
+	 * buffers (for plugin-analysis, auditioner updates) but not
+	 * concurrently.
+	 *
+	 * In theory (hw + 3) should be sufficient, let's add one for luck.
+	 */
 	BufferManager::init (hardware_concurrency () + 4);
 
 	PannerManager::instance ().discover_panners ();
@@ -728,6 +756,11 @@ ARDOUR::cleanup ()
 		return;
 	}
 
+	delete TriggerBox::worker;
+
+	Analyser::terminate ();
+	SourceFactory::terminate ();
+
 	release_dma_latency ();
 	config_connection.disconnect ();
 	engine_startup_connection.disconnect ();
@@ -758,6 +791,10 @@ bool
 ARDOUR::no_auto_connect ()
 {
 	return getenv ("ARDOUR_NO_AUTOCONNECT") != 0;
+}
+
+void ARDOUR::set_global_ui_scale_factor (float s) {
+	ui_scale_factor = s;
 }
 
 void
@@ -908,7 +945,7 @@ ARDOUR::get_available_sync_options ()
 {
 	vector<SyncSource> ret;
 
-	boost::shared_ptr<AudioBackend> backend = AudioEngine::instance ()->current_backend ();
+	std::shared_ptr<AudioBackend> backend = AudioEngine::instance ()->current_backend ();
 	if (backend && backend->name () == "JACK") {
 		ret.push_back (Engine);
 	}

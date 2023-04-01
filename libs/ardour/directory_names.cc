@@ -49,5 +49,7 @@ const char* const analysis_dir_name = X_("analysis");
 const char* const plugins_dir_name = X_("plugins");
 const char* const externals_dir_name = X_("externals");
 const char* const lua_dir_name = X_("scripts");
+const char* const media_dir_name = X_("media");
+const char* const midi_map_dir_name = X_("midi_maps");
 
 }

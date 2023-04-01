@@ -42,10 +42,8 @@
 #include "widgets/ardour_dropdown.h"
 
 class LuaWindow :
-	public Gtk::Window,
-	public PBD::ScopedConnectionList,
-	public ARDOUR::SessionHandlePtr,
-	public Gtkmm2ext::VisibilityTracker
+	public ArdourWindow,
+	public PBD::ScopedConnectionList
 {
 public:
 	static LuaWindow* instance();
@@ -109,7 +107,7 @@ private:
 
 	ArdourWidgets::ArdourDropdown script_select;
 
-	typedef boost::shared_ptr<ScriptBuffer> ScriptBufferPtr;
+	typedef std::shared_ptr<ScriptBuffer> ScriptBufferPtr;
 	typedef std::vector<ScriptBufferPtr> ScriptBufferList;
 
 	ScriptBufferList script_buffers;

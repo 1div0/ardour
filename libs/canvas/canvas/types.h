@@ -168,6 +168,15 @@ struct LIBCANVAS_API Rect
 			     x1 - amount, y1 - amount);
 	}
 
+	Rect shrink (Distance top, Distance right, Distance bottom, Distance left) const throw () {
+		/* This isn't the equivalent of expand (-distance) because
+		   of the peculiarities of canvas_safe_add() with negative values.
+		   Maybe.
+		*/
+		return Rect (canvas_safe_add (x0, left), canvas_safe_add (y0, top),
+			     x1 - right, y1 - bottom);
+	}
+
 	bool contains (Duple const & point) const throw () {
 		return point.x >= x0 && point.x < x1 && point.y >= y0 && point.y < y1;
 	}
@@ -203,6 +212,49 @@ enum PackOptions {
 	PackShrink = 0x4, /* allow Item to be smaller than its natural size */
 	PackFromStart = 0x8,
 	PackFromEnd = 0x10
+};
+
+struct FourDimensions {
+	Distance up;
+	Distance right;
+	Distance down;
+	Distance left;
+
+	FourDimensions (Distance u, Distance r = -1., Distance d = -1., Distance l = -1.) {
+
+		/* CSS style defaults: see https://developer.mozilla.org/en-US/docs/Web/CSS/Shorthand_properties
+		 */
+
+		Distance args[4];
+		uint32_t nargs = 1;
+
+		args[0] = u;
+
+		if (r >= 0) { args[1] = r; ++nargs; }
+		if (d >= 0) { args[2] = d; ++nargs; }
+		if (l >= 0) { args[3] = l; ++nargs; }
+
+		switch (nargs) {
+		case 1:
+			up = right = down = left = args[0];
+			break;
+		case 2:
+			up = down = args[0];
+			left = right = args[1];
+			break;
+		case 3:
+			up = args[0];
+			left = right = args[1];
+			down = args[2];
+			break;
+		case 4:
+			up = args[0];
+			right = args[1];
+			down = args[2];
+			left = args[3];
+			break;
+		}
+	}
 };
 
 extern LIBCANVAS_API std::ostream & operator<< (std::ostream &, Rect const &);

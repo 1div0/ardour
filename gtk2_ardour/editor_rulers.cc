@@ -44,6 +44,9 @@
 #include "ardour/session.h"
 #include "ardour/tempo.h"
 #include "ardour/profile.h"
+#include "ardour/triggerbox.h"
+
+#include "temporal/tempo.h"
 
 #include "gtkmm2ext/gtk_ui.h"
 #include "gtkmm2ext/keyboard.h"
@@ -139,24 +142,24 @@ Editor::initialize_rulers ()
 	_minsec_metric = new MinsecMetric (this);
 	_samples_metric = new SamplesMetric (this);
 
-	timecode_ruler = new ArdourCanvas::Ruler (_time_markers_group, *_timecode_metric,
+	timecode_ruler = new ArdourCanvas::Ruler (_time_markers_group, _timecode_metric,
 						  ArdourCanvas::Rect (0, 0, ArdourCanvas::COORD_MAX, timebar_height));
 	timecode_ruler->set_font_description (font);
 	CANVAS_DEBUG_NAME (timecode_ruler, "timecode ruler");
 	timecode_nmarks = 0;
 
-	samples_ruler = new ArdourCanvas::Ruler (_time_markers_group, *_samples_metric,
+	samples_ruler = new ArdourCanvas::Ruler (_time_markers_group, _samples_metric,
 						 ArdourCanvas::Rect (0, 0, ArdourCanvas::COORD_MAX, timebar_height));
 	samples_ruler->set_font_description (font);
 	CANVAS_DEBUG_NAME (samples_ruler, "samples ruler");
 
-	minsec_ruler = new ArdourCanvas::Ruler (_time_markers_group, *_minsec_metric,
+	minsec_ruler = new ArdourCanvas::Ruler (_time_markers_group, _minsec_metric,
 						ArdourCanvas::Rect (0, 0, ArdourCanvas::COORD_MAX, timebar_height));
 	minsec_ruler->set_font_description (font);
 	CANVAS_DEBUG_NAME (minsec_ruler, "minsec ruler");
 	minsec_nmarks = 0;
 
-	bbt_ruler = new ArdourCanvas::Ruler (_time_markers_group, *_bbt_metric,
+	bbt_ruler = new ArdourCanvas::Ruler (_time_markers_group, _bbt_metric,
 	                                     ArdourCanvas::Rect (0, 0, ArdourCanvas::COORD_MAX, timebar_height));
 	bbt_ruler->set_font_description (font);
 	bbt_ruler->set_second_font_description (larger_font);
@@ -170,12 +173,14 @@ Editor::initialize_rulers ()
 	lab_children.push_back (Element(timecode_label, PACK_SHRINK, PACK_START));
 	lab_children.push_back (Element(samples_label, PACK_SHRINK, PACK_START));
 	lab_children.push_back (Element(bbt_label, PACK_SHRINK, PACK_START));
-	lab_children.push_back (Element(meter_label, PACK_SHRINK, PACK_START));
+	lab_children.push_back (Element(mapping_label, PACK_SHRINK, PACK_START));
 	lab_children.push_back (Element(tempo_label, PACK_SHRINK, PACK_START));
+	lab_children.push_back (Element(meter_label, PACK_SHRINK, PACK_START));
 	lab_children.push_back (Element(range_mark_label, PACK_SHRINK, PACK_START));
 	lab_children.push_back (Element(transport_mark_label, PACK_SHRINK, PACK_START));
 	lab_children.push_back (Element(cd_mark_label, PACK_SHRINK, PACK_START));
 	lab_children.push_back (Element(mark_label, PACK_SHRINK, PACK_START));
+	lab_children.push_back (Element(cue_mark_label, PACK_SHRINK, PACK_START));
 	lab_children.push_back (Element(videotl_label, PACK_SHRINK, PACK_START));
 
 	/* 1 event handler to bind them all ... */
@@ -213,39 +218,57 @@ Editor::popup_ruler_menu (timepos_t const & where, ItemType t)
 
 	// always build from scratch
 	MenuList& ruler_items = editor_ruler_menu->items();
+
 	editor_ruler_menu->set_name ("ArdourContextMenu");
 	ruler_items.clear();
 
 	switch (t) {
 	case MarkerBarItem:
-		ruler_items.push_back (MenuElem (_("New location marker"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_marker), where, false)));
-		ruler_items.push_back (MenuElem (_("Clear all locations"), sigc::mem_fun(*this, &Editor::clear_markers)));
-		ruler_items.push_back (MenuElem (_("Clear all xruns"), sigc::mem_fun(*this, &Editor::clear_xrun_markers)));
-		ruler_items.push_back (MenuElem (_("Unhide locations"), sigc::mem_fun(*this, &Editor::unhide_markers)));
+		ruler_items.push_back (MenuElem (_("New Location Marker"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_marker), where, Location::Flags (0), 0)));
+		ruler_items.push_back (MenuElem (_("Clear All Locations"), sigc::mem_fun(*this, &Editor::clear_markers)));
+		ruler_items.push_back (MenuElem (_("Clear All Xruns"), sigc::mem_fun(*this, &Editor::clear_xrun_markers)));
+		ruler_items.push_back (MenuElem (_("Unhide Locations"), sigc::mem_fun(*this, &Editor::unhide_markers)));
 		break;
 
 	case RangeMarkerBarItem:
-		ruler_items.push_back (MenuElem (_("New range"), sigc::bind (sigc::mem_fun (*this, &Editor::mouse_add_new_range), where)));
-		ruler_items.push_back (MenuElem (_("Clear all ranges"), sigc::mem_fun(*this, &Editor::clear_ranges)));
-		ruler_items.push_back (MenuElem (_("Unhide ranges"), sigc::mem_fun(*this, &Editor::unhide_ranges)));
+		ruler_items.push_back (MenuElem (_("New Range"), sigc::bind (sigc::mem_fun (*this, &Editor::mouse_add_new_range), where)));
+		ruler_items.push_back (MenuElem (_("Clear All Ranges"), sigc::mem_fun(*this, &Editor::clear_ranges)));
+		ruler_items.push_back (MenuElem (_("Unhide Ranges"), sigc::mem_fun(*this, &Editor::unhide_ranges)));
 		break;
 
 	case TransportMarkerBarItem:
-		ruler_items.push_back (MenuElem (_("New Loop range"), sigc::bind (sigc::mem_fun (*this, &Editor::mouse_add_new_loop), where)));
-		ruler_items.push_back (MenuElem (_("New Punch range"), sigc::bind (sigc::mem_fun (*this, &Editor::mouse_add_new_punch), where)));
+		ruler_items.push_back (MenuElem (_("New Loop Range"), sigc::bind (sigc::mem_fun (*this, &Editor::mouse_add_new_loop), where)));
+		ruler_items.push_back (MenuElem (_("New Punch Range"), sigc::bind (sigc::mem_fun (*this, &Editor::mouse_add_new_punch), where)));
 		break;
 
 	case CdMarkerBarItem:
 		// TODO
-		ruler_items.push_back (MenuElem (_("New CD track marker"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_marker), where, true)));
+		ruler_items.push_back (MenuElem (_("New CD Track Marker"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_marker), where, Location::IsCDMarker, 0)));
+		break;
+
+	case CueMarkerBarItem:
+		ruler_items.push_back (MenuElem (_("Stop All Cues"), sigc::bind (sigc::mem_fun (*this, &Editor::mouse_add_new_marker), where, Location::IsCueMarker, CueRecord::stop_all)));
+		ruler_items.push_back (MenuElem (_("Clear All Cues"), sigc::mem_fun (*this, &Editor::clear_cues)));
+		for (int32_t n = 0; n < TriggerBox::default_triggers_per_box; ++n) {
+			ruler_items.push_back (MenuElem (string_compose (_("Cue %1"), cue_marker_name (n)), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_marker), where, Location::IsCueMarker, n)));
+		}
+		break;
+
+	case MappingBarItem:
+	case MappingCursorItem:
+#warning paul fix mapping bar context menu
+		ruler_items.push_back (MenuElem (_("New BBT Marker"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_tempo_event), where)));
+		ruler_items.push_back (MenuElem (_("New Tempo Marker"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_tempo_event), where)));
+		ruler_items.push_back (MenuElem (_("Clear")));
 		break;
 
 	case TempoBarItem:
+	case TempoCurveItem:
 		ruler_items.push_back (MenuElem (_("New Tempo"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_tempo_event), where)));
 		break;
 
 	case MeterBarItem:
-		ruler_items.push_back (MenuElem (_("New Meter"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_meter_event), where)));
+		ruler_items.push_back (MenuElem (_("New Time Signature"), sigc::bind (sigc::mem_fun(*this, &Editor::mouse_add_new_meter_event), where)));
 		break;
 
 	case VideoBarItem:
@@ -288,6 +311,10 @@ Editor::popup_ruler_menu (timepos_t const & where, ItemType t)
 		}
 		break;
 
+	case BBTRulerItem:
+		ruler_items.push_back (MenuElem (_("Add BBT Marker"), sigc::bind (sigc::mem_fun (*this, &Editor::mouse_add_bbt_marker_event), where)));
+		break;
+
 	default:
 		break;
 	}
@@ -304,16 +331,18 @@ Editor::store_ruler_visibility ()
 {
 	XMLNode* node = new XMLNode(X_("RulerVisibility"));
 
-	node->set_property (X_("timecode"), ruler_timecode_action->get_active());
-	node->set_property (X_("bbt"), ruler_bbt_action->get_active());
-	node->set_property (X_("samples"), ruler_samples_action->get_active());
 	node->set_property (X_("minsec"), ruler_minsec_action->get_active());
-	node->set_property (X_("tempo"), ruler_tempo_action->get_active());
+	node->set_property (X_("timecode"), ruler_timecode_action->get_active());
+	node->set_property (X_("samples"), ruler_samples_action->get_active());
+	node->set_property (X_("bbt"), ruler_bbt_action->get_active());
 	node->set_property (X_("meter"), ruler_meter_action->get_active());
-	node->set_property (X_("marker"), ruler_marker_action->get_active());
+	node->set_property (X_("tempo"), ruler_tempo_action->get_active());
+	node->set_property (X_("mapping"), ruler_mapping_action->get_active());
 	node->set_property (X_("rangemarker"), ruler_range_action->get_active());
 	node->set_property (X_("transportmarker"), ruler_loop_punch_action->get_active());
 	node->set_property (X_("cdmarker"), ruler_cd_marker_action->get_active());
+	node->set_property (X_("marker"), ruler_marker_action->get_active());
+	node->set_property (X_("cuemarker"), ruler_cue_marker_action->get_active());
 	node->set_property (X_("videotl"), ruler_video_action->get_active());
 
 	_session->add_extra_xml (*node);
@@ -343,6 +372,9 @@ Editor::restore_ruler_visibility ()
 		if (node->get_property ("tempo", yn)) {
 			ruler_tempo_action->set_active (yn);
 		}
+		if (node->get_property ("mapping", yn)) {
+			ruler_mapping_action->set_active (yn);
+		}
 		if (node->get_property ("meter", yn)) {
 			ruler_meter_action->set_active (yn);
 		}
@@ -357,7 +389,7 @@ Editor::restore_ruler_visibility ()
 		}
 
 		if (node->get_property ("cdmarker", yn)) {
-				ruler_cd_marker_action->set_active (yn);
+			ruler_cd_marker_action->set_active (yn);
 		} else {
 			// this _session doesn't yet know about the cdmarker ruler
 			// as a benefit to the user who doesn't know the feature exists, show the ruler if
@@ -367,6 +399,22 @@ Editor::restore_ruler_visibility ()
 			for (Locations::LocationList::const_iterator i = locs.begin(); i != locs.end(); ++i) {
 				if ((*i)->is_cd_marker()) {
 					ruler_cd_marker_action->set_active (true);
+					break;
+				}
+			}
+		}
+
+		if (node->get_property ("cuemarker", yn)) {
+			ruler_cue_marker_action->set_active (yn);
+		} else {
+			// this _session doesn't yet know about the cue marker ruler
+			// as a benefit to the user who doesn't know the feature exists, show the ruler if
+			// any cue marks exist
+			ruler_cue_marker_action->set_active (false);
+			const Locations::LocationList & locs = _session->locations()->list();
+			for (Locations::LocationList::const_iterator i = locs.begin(); i != locs.end(); ++i) {
+				if ((*i)->is_cue_marker()) {
+					ruler_cue_marker_action->set_active (true);
 					break;
 				}
 			}
@@ -406,9 +454,11 @@ Editor::update_ruler_visibility ()
 	/* gtk update probs require this (damn) */
 	meter_label.hide();
 	tempo_label.hide();
+	mapping_label.hide();
 	range_mark_label.hide();
 	transport_mark_label.hide();
 	cd_mark_label.hide();
+	cue_mark_label.hide();
 	mark_label.hide();
 	videotl_label.hide();
 #endif
@@ -473,19 +523,19 @@ Editor::update_ruler_visibility ()
 		bbt_label.hide();
 	}
 
-	if (ruler_meter_action->get_active()) {
-		old_unit_pos = meter_group->position().y;
+	if (ruler_mapping_action->get_active()) {
+		old_unit_pos = mapping_group->position().y;
 		if (tbpos != old_unit_pos) {
-			meter_group->move (ArdourCanvas::Duple (0.0, tbpos - old_unit_pos));
+			mapping_group->move (ArdourCanvas::Duple (0.0, tbpos - old_unit_pos));
 		}
-		meter_group->show();
-		meter_label.show();
+		mapping_group->show();
+		mapping_label.show();
 		tbpos += timebar_height;
 		tbgpos += timebar_height;
 		visible_timebars++;
 	} else {
-		meter_group->hide();
-		meter_label.hide();
+		mapping_group->hide();
+		mapping_label.hide();
 	}
 
 	if (ruler_tempo_action->get_active()) {
@@ -503,6 +553,21 @@ Editor::update_ruler_visibility ()
 		tempo_label.hide();
 	}
 
+	if (ruler_meter_action->get_active()) {
+		old_unit_pos = meter_group->position().y;
+		if (tbpos != old_unit_pos) {
+			meter_group->move (ArdourCanvas::Duple (0.0, tbpos - old_unit_pos));
+		}
+		meter_group->show();
+		meter_label.show();
+		tbpos += timebar_height;
+		tbgpos += timebar_height;
+		visible_timebars++;
+	} else {
+		meter_group->hide();
+		meter_label.hide();
+	}
+
 	if (ruler_range_action->get_active()) {
 		old_unit_pos = range_marker_group->position().y;
 		if (tbpos != old_unit_pos) {
@@ -510,6 +575,8 @@ Editor::update_ruler_visibility ()
 		}
 		range_marker_group->show();
 		range_mark_label.show();
+
+		range_marker_bar->set_outline(false);
 
 		tbpos += timebar_height;
 		tbgpos += timebar_height;
@@ -526,6 +593,9 @@ Editor::update_ruler_visibility ()
 		}
 		transport_marker_group->show();
 		transport_mark_label.show();
+
+		transport_marker_bar->set_outline(false);
+
 		tbpos += timebar_height;
 		tbgpos += timebar_height;
 		visible_timebars++;
@@ -541,6 +611,9 @@ Editor::update_ruler_visibility ()
 		}
 		cd_marker_group->show();
 		cd_mark_label.show();
+
+		cd_marker_bar->set_outline(false);
+
 		tbpos += timebar_height;
 		tbgpos += timebar_height;
 		visible_timebars++;
@@ -560,12 +633,37 @@ Editor::update_ruler_visibility ()
 		}
 		marker_group->show();
 		mark_label.show();
+
+		marker_bar->set_outline(false);
+
 		tbpos += timebar_height;
 		tbgpos += timebar_height;
 		visible_timebars++;
 	} else {
 		marker_group->hide();
 		mark_label.hide();
+	}
+
+	if (ruler_cue_marker_action->get_active()) {
+		old_unit_pos = cue_marker_group->position().y;
+		if (tbpos != old_unit_pos) {
+			cue_marker_group->move (ArdourCanvas::Duple (0.0, tbpos - old_unit_pos));
+		}
+		cue_marker_group->show();
+		cue_mark_label.show();
+
+		cue_marker_bar->set_outline(false);
+
+		tbpos += timebar_height;
+		tbgpos += timebar_height;
+		visible_timebars++;
+		// make sure all cd markers show up in their respective places
+		update_cue_marker_display();
+	} else {
+		cue_marker_group->hide();
+		cue_mark_label.hide();
+		// make sure all cd markers show up in their respective places
+		update_cue_marker_display();
 	}
 
 	if (ruler_video_action->get_active()) {
@@ -585,12 +683,13 @@ Editor::update_ruler_visibility ()
 		update_video_timeline(true);
 	}
 
-	time_bars_vbox.set_size_request (-1, (int)(timebar_height * visible_timebars));
+	ruler_separator->set_y_position ((int)(timebar_height * visible_timebars));
 
-	/* move hv_scroll_group (trackviews) to the end of the timebars
-	 */
+	time_bars_vbox.set_size_request (-1, (int)(timebar_height * visible_timebars) + 1);
 
-	hv_scroll_group->set_y_position (timebar_height * visible_timebars);
+	/* move hv_scroll_group (trackviews) to the end of the timebars */
+
+	hv_scroll_group->set_y_position ((int)(timebar_height * visible_timebars));
 
 	compute_fixed_ruler_scale ();
 	update_fixed_rulers();
@@ -789,7 +888,7 @@ Editor::set_timecode_ruler_scale (samplepos_t lower, samplepos_t upper)
 		   to set the ruler scale, because the caller has already determined
 		   the width and set lower + upper arguments to this function to match that.
 
-		   But in this case, where the range defined by lower and uppper can vary
+		   But in this case, where the range defined by lower and upper can vary
 		   substantially (basically anything from 24hrs+ to several billion years)
 		   trying to decide which tick marks to show does require us to know
 		   about the available width.
@@ -986,16 +1085,15 @@ Editor::compute_bbt_ruler_scale (samplepos_t lower, samplepos_t upper)
 		floor_lower_beat = Temporal::Beats();
 	}
 
-	const samplepos_t beat_before_lower_pos = tmap->sample_at (floor_lower_beat, _session->sample_rate());
-	const samplepos_t beat_after_upper_pos = tmap->sample_at ((std::max (Beats(), tmap->quarters_at_sample  (upper)).round_down_to_beat()) + Beats (1, 0), _session->sample_rate());
+	const samplepos_t beat_before_lower_pos = tmap->sample_at (floor_lower_beat);
+	const samplepos_t beat_after_upper_pos = tmap->sample_at ((std::max (Beats(), tmap->quarters_at_sample  (upper)).round_down_to_beat()) + Beats (1, 0));
 
-	_session->bbt_time (timepos_t (beat_before_lower_pos), lower_beat);
-	_session->bbt_time (timepos_t (beat_after_upper_pos), upper_beat);
+	lower_beat = Temporal::TempoMap::use()->bbt_at (timepos_t (beat_before_lower_pos));
+	upper_beat = Temporal::TempoMap::use()->bbt_at (timepos_t (beat_after_upper_pos));
 	uint32_t beats = 0;
 
 	bbt_bar_helper_on = false;
 	bbt_bars = 0;
-	bbt_nmarks = 1;
 
 	bbt_ruler_scale =  bbt_show_many;
 
@@ -1045,7 +1143,7 @@ Editor::compute_bbt_ruler_scale (samplepos_t lower, samplepos_t upper)
 	/* Now that we know how fine a grid (Ruler) is allowable on this screen, limit it to the coarseness selected by the user */
 	/* note: GridType and RulerScale are not the same enums, so it's not a simple mathematical operation */
 	int suggested_scale = (int) bbt_ruler_scale;
-	int divs = get_grid_music_divisions(_grid_type);
+	int divs = get_grid_music_divisions(_grid_type, 0);
 	if (_grid_type == GridTypeBar) {
 		suggested_scale = std::min(suggested_scale, (int) bbt_show_1);
 	} else if (_grid_type == GridTypeBeat) {
@@ -1084,15 +1182,8 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 	Temporal::TempoMapPoints::const_iterator i;
 
 	char buf[64];
-	gint  n = 0;
-	samplepos_t pos;
 	Temporal::BBT_Time next_beat;
-	uint32_t beats = 0;
-	uint32_t tick = 0;
-	uint32_t skip;
-	uint32_t t;
 	double bbt_position_of_helper;
-	bool i_am_accented = false;
 	bool helper_active = false;
 	ArdourCanvas::Ruler::Mark mark;
 	const samplecnt_t sr (_session->sample_rate());
@@ -1100,6 +1191,12 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 	Temporal::TempoMapPoints grid;
 
 	compute_current_bbt_points (grid, lower, upper);
+
+#if 0 // DEBUG GRID
+	for (auto const& g : grid) {
+		std::cout << "Grid " << g.time() <<  " Beats: " << g.beats() << " BBT: " << g.bbt() << " sample: " << g.sample(_session->nominal_sample_rate ()) << "\n"; 
+	}
+#endif
 
 	if (distance (grid.begin(), grid.end()) == 0) {
 		return;
@@ -1109,57 +1206,44 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 	/* for example, even in a 4/4 meter we can draw a grid with triplet-feel */
 	/* and in this case you will want the accents on '3s' not '2s' */
 	uint32_t bbt_divisor = 2;
-	uint32_t bbt_accent_modulo = 2;
+
 	switch (_grid_type) {
 	case GridTypeBeatDiv3:
 		bbt_divisor = 3;
-		bbt_accent_modulo = 3;
 		break;
 	case GridTypeBeatDiv5:
 		bbt_divisor = 5;
-		bbt_accent_modulo = 5;
 		break;
 	case GridTypeBeatDiv6:
 		bbt_divisor = 3;
-		bbt_accent_modulo = 3;
 		break;
 	case GridTypeBeatDiv7:
 		bbt_divisor = 7;
-		bbt_accent_modulo = 7;
 		break;
 	case GridTypeBeatDiv10:
 		bbt_divisor = 5;
-		bbt_accent_modulo = 5;
 		break;
 	case GridTypeBeatDiv12:
 		bbt_divisor = 3;
-		bbt_accent_modulo = 3;
 		break;
 	case GridTypeBeatDiv14:
 		bbt_divisor = 7;
-		bbt_accent_modulo = 7;
 		break;
 	case GridTypeBeatDiv16:
-		bbt_accent_modulo = 4;
 		break;
 	case GridTypeBeatDiv20:
 		bbt_divisor = 5;
-		bbt_accent_modulo = 5;
 		break;
 	case GridTypeBeatDiv24:
 		bbt_divisor = 6;
-		bbt_accent_modulo = 6;
 		break;
 	case GridTypeBeatDiv28:
 		bbt_divisor = 7;
-		bbt_accent_modulo = 7;
 		break;
 	case GridTypeBeatDiv32:
-		bbt_accent_modulo = 8;
 		break;
 	default:
 		bbt_divisor = 2;
-		bbt_accent_modulo = 2;
 		break;
 	}
 
@@ -1193,7 +1277,6 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 	switch (bbt_ruler_scale) {
 
 	case bbt_show_many:
-		bbt_nmarks = 1;
 		snprintf (buf, sizeof(buf), "cannot handle %" PRIu32 " bars", bbt_bars);
 		mark.style = ArdourCanvas::Ruler::Mark::Major;
 		mark.label = buf;
@@ -1202,8 +1285,7 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 		break;
 
 	case bbt_show_64:
-			bbt_nmarks = (gint) (bbt_bars / 64) + 1;
-			for (n = 0, i = grid.begin(); i != grid.end() && n < bbt_nmarks; i++) {
+			for (i = grid.begin(); i != grid.end(); i++) {
 				BBT_Time bbt ((*i).bbt());
 				if (bbt.is_bar()) {
 					if (bbt.bars % 64 == 1) {
@@ -1221,15 +1303,13 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 						mark.label = buf;
 						mark.position = (*i).sample (sr);
 						marks.push_back (mark);
-						++n;
 					}
 				}
 			}
 			break;
 
 	case bbt_show_16:
-		bbt_nmarks = (bbt_bars / 16) + 1;
-		for (n = 0,  i = grid.begin(); i != grid.end() && n < bbt_nmarks; i++) {
+		for (i = grid.begin(); i != grid.end(); i++) {
 			BBT_Time bbt ((*i).bbt());
 			if (bbt.is_bar()) {
 			  if (bbt.bars % 16 == 1) {
@@ -1247,41 +1327,33 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 				mark.label = buf;
 				mark.position = (*i).sample(sr);
 				marks.push_back (mark);
-				++n;
 			  }
 			}
 		}
 	  break;
 
 	case bbt_show_4:
-		bbt_nmarks = (bbt_bars / 4) + 1;
-		for (n = 0, i = grid.begin(); i != grid.end() && n < bbt_nmarks; ++i) {
+		for (i = grid.begin(); i != grid.end(); ++i) {
 			BBT_Time bbt ((*i).bbt());
 			if (bbt.is_bar()) {
 				if (bbt.bars % 4 == 1) {
 					if (bbt.bars % 16 == 1) {
 						snprintf (buf, sizeof(buf), "%" PRIu32, bbt.bars);
 						mark.style = ArdourCanvas::Ruler::Mark::Major;
-					} else {
+				} else {
 						buf[0] = '\0';
-						if (bbt.bars % 16 == 9)  {
-							mark.style = ArdourCanvas::Ruler::Mark::Minor;
-						} else {
-							mark.style = ArdourCanvas::Ruler::Mark::Micro;
-						}
+						mark.style = ArdourCanvas::Ruler::Mark::Minor;
 					}
 					mark.label = buf;
 					mark.position = (*i).sample (sr);
 					marks.push_back (mark);
-					++n;
 				}
 			}
 		}
 	  break;
 
 	case bbt_show_1:
-		bbt_nmarks = bbt_bars + 2;
-		for (n = 0,  i = grid.begin(); i != grid.end() && n < bbt_nmarks; ++i) {
+		for (i = grid.begin(); i != grid.end(); ++i) {
 			BBT_Time bbt ((*i).bbt());
 			if (bbt.is_bar()) {
 				snprintf (buf, sizeof(buf), "%" PRIu32, bbt.bars);
@@ -1289,22 +1361,18 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 				mark.label = buf;
 				mark.position = (*i).sample (sr);
 				marks.push_back (mark);
-				++n;
 			}
 		}
 	break;
 
 	case bbt_show_quarters:
 
-		beats = distance (grid.begin(), grid.end());
-		bbt_nmarks = beats + 2;
-
 		mark.label = "";
 		mark.position = lower;
 		mark.style = ArdourCanvas::Ruler::Mark::Micro;
 		marks.push_back (mark);
 
-		for (n = 1, i = grid.begin(); n < bbt_nmarks && i != grid.end(); ++i) {
+		for (i = grid.begin(); i != grid.end(); ++i) {
 
 			BBT_Time bbt ((*i).bbt());
 
@@ -1326,7 +1394,6 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 				mark.label = buf;
 				mark.position = (*i).sample (sr);
 				marks.push_back (mark);
-				n++;
 			}
 		}
 		break;
@@ -1337,9 +1404,6 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 	case bbt_show_sixtyfourths:
 	case bbt_show_onetwentyeighths:
 
-		beats = distance (grid.begin(), grid.end());
-		bbt_nmarks = (beats + 2) * bbt_beat_subdivision;
-
 		bbt_position_of_helper = lower + (3 * Editor::get_current_zoom ());
 
 		mark.label = "";
@@ -1347,7 +1411,7 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 		mark.style = ArdourCanvas::Ruler::Mark::Micro;
 		marks.push_back (mark);
 
-		for (n = 1, i = grid.begin(); n < bbt_nmarks && i != grid.end(); ++i) {
+		for (i = grid.begin(); i != grid.end(); ++i) {
 
 			BBT_Time bbt ((*i).bbt());
 
@@ -1360,60 +1424,24 @@ Editor::metric_get_bbt (std::vector<ArdourCanvas::Ruler::Mark>& marks, int64_t l
 				if (bbt.is_bar()) {
 					mark.style = ArdourCanvas::Ruler::Mark::Major;
 					snprintf (buf, sizeof(buf), "%" PRIu32, bbt.bars);
-				} else {
+				} else if (bbt.ticks == 0) {
 					mark.style = ArdourCanvas::Ruler::Mark::Minor;
 					snprintf (buf, sizeof(buf), "%" PRIu32, bbt.beats);
+				} else {
+					mark.style = ArdourCanvas::Ruler::Mark::Micro;
+					buf[0] = '\0';
 				}
+
 				if (((*i).sample(sr) < bbt_position_of_helper) && helper_active) {
 					buf[0] = '\0';
 				}
 				mark.label =  buf;
 				mark.position = (*i).sample (sr);
 				marks.push_back (mark);
-				n++;
-			}
-
-			/* Add the tick marks */
-			skip = Temporal::ticks_per_beat / bbt_beat_subdivision;
-			tick = skip; // the first non-beat tick
-
-			t = 0;
-			while (tick < Temporal::ticks_per_beat && (n < bbt_nmarks)) {
-
-				BBT_Time bbt ((*i).bbt());
-
-				next_beat.beats = bbt.beats;
-				next_beat.bars = bbt.bars;
-				next_beat.ticks = tick;
-				pos = TempoMap::use()->sample_at (next_beat, sr);
-
-				if (t % bbt_accent_modulo == (bbt_accent_modulo - 1)) {
-					i_am_accented = true;
-				}
-				if (i_am_accented && (pos > bbt_position_of_helper)){
-					snprintf (buf, sizeof(buf), "%" PRIu32, tick);
-				} else {
-					buf[0] = '\0';
-				}
-
-				mark.label = buf;
-				mark.position = pos;
-
-				if ((bbt_beat_subdivision > 4) && i_am_accented) {
-					mark.style = ArdourCanvas::Ruler::Mark::Minor;
-				} else {
-					mark.style = ArdourCanvas::Ruler::Mark::Micro;
-				}
-				i_am_accented = false;
-				marks.push_back (mark);
-
-				tick += skip;
-				++t;
-				++n;
 			}
 		}
 
-	  break;
+		break;
 	}
 }
 
@@ -1587,7 +1615,7 @@ Editor::set_minsec_ruler_scale (samplepos_t lower, samplepos_t upper)
 		   to set the ruler scale, because the caller has already determined
 		   the width and set lower + upper arguments to this function to match that.
 
-		   But in this case, where the range defined by lower and uppper can vary
+		   But in this case, where the range defined by lower and upper can vary
 		   substantially (anything from 24hrs+ to several billion years)
 		   trying to decide which tick marks to show does require us to know
 		   about the available width.

@@ -33,7 +33,6 @@
 #include "pbd/libpbd_visibility.h"
 #include "pbd/crossthread.h"
 #include "pbd/event_loop.h"
-#include "pbd/glib_event_source.h"
 #include "pbd/pthread_utils.h"
 
 /** A BaseUI is an abstraction designed to be used with any "user
@@ -54,8 +53,7 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 	BaseUI* base_instance() { return base_ui_instance; }
 
 	Glib::RefPtr<Glib::MainLoop> main_loop() const { return _main_loop; }
-        Glib::Threads::Thread* event_loop_thread() const { return run_loop_thread; }
-        bool caller_is_self () const { return Glib::Threads::Thread::self() == run_loop_thread; }
+	bool caller_is_self () const { return _run_loop_thread ? _run_loop_thread->caller_is_self () : true; }
 
 	bool ok() const { return _ok; }
 
@@ -76,18 +74,12 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 	 */
 	void quit ();
 
-	/* derived classes can override this in order to call code once per
-	   main loop iteration (i.e. before any event dispatching is done
-	   within the main loop)
-	*/
-	virtual void event_loop_precall ();
-
   protected:
 	bool _ok;
 
 	Glib::RefPtr<Glib::MainLoop> _main_loop;
 	Glib::RefPtr<Glib::MainContext> m_context;
-	Glib::Threads::Thread*       run_loop_thread;
+	PBD::Thread*                _run_loop_thread;
 	Glib::Threads::Mutex        _run_lock;
 	Glib::Threads::Cond         _running;
 
@@ -113,6 +105,8 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 	void signal_new_request ();
 	void attach_request_source ();
 
+	virtual void maybe_install_precall_handler (Glib::RefPtr<Glib::MainContext>) {}
+
 	/** Derived UI objects must implement this method,
 	 * which will be called whenever there are requests
 	 * to be dealt with.
@@ -129,8 +123,6 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 
 	int setup_request_pipe ();
 	void main_thread ();
-
-	GlibEventLoopCallback glib_event_callback;
 };
 
 #endif /* __pbd_base_ui_h__ */

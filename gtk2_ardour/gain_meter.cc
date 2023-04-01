@@ -121,10 +121,10 @@ GainMeterBase::GainMeterBase (Session* s, bool horizontal, int fader_length, int
 	fader_girth = rint (fader_girth * UIConfiguration::instance().get_ui_scale());
 
 	if (horizontal) {
-		gain_slider = manage (new HSliderController (&gain_adjustment, boost::shared_ptr<PBD::Controllable>(), fader_length, fader_girth));
+		gain_slider = manage (new HSliderController (&gain_adjustment, std::shared_ptr<PBD::Controllable>(), fader_length, fader_girth));
 		gain_slider->set_tweaks (ArdourFader::Tweaks(ArdourFader::NoButtonForward | ArdourFader::NoVerticalScroll));
 	} else {
-		gain_slider = manage (new VSliderController (&gain_adjustment, boost::shared_ptr<PBD::Controllable>(), fader_length, fader_girth));
+		gain_slider = manage (new VSliderController (&gain_adjustment, std::shared_ptr<PBD::Controllable>(), fader_length, fader_girth));
 		gain_slider->set_tweaks (ArdourFader::NoButtonForward);
 	}
 
@@ -157,7 +157,7 @@ GainMeterBase::GainMeterBase (Session* s, bool horizontal, int fader_length, int
 	peak_display.set_events (peak_display.get_events() & ~(Gdk::EventMask (Gdk::LEAVE_NOTIFY_MASK|Gdk::ENTER_NOTIFY_MASK|Gdk::POINTER_MOTION_MASK)));
 	peak_display.signal_map().connect (sigc::bind (sigc::ptr_fun (reset_cursor_to_default), &peak_display));
 	peak_display.signal_state_changed().connect (sigc::bind (sigc::ptr_fun (reset_cursor_to_default_state), &peak_display));
-	peak_display.unset_flags (Gtk::CAN_FOCUS);
+	peak_display.set_can_focus (false);
 	peak_display.set_editable (false);
 
 	gain_automation_state_button.set_name ("mixer strip button");
@@ -165,7 +165,7 @@ GainMeterBase::GainMeterBase (Session* s, bool horizontal, int fader_length, int
 	set_tooltip (gain_automation_state_button, _("Fader automation mode"));
 	set_tooltip (peak_display, _("dBFS - Digital Peak Hold. Click to reset."));
 
-	gain_automation_state_button.unset_flags (Gtk::CAN_FOCUS);
+	gain_automation_state_button.set_can_focus (false);
 
 	gain_automation_state_button.set_size_request(15, 15);
 
@@ -176,7 +176,7 @@ GainMeterBase::GainMeterBase (Session* s, bool horizontal, int fader_length, int
 
 	set_tooltip (&meter_point_button, _("Metering point"));
 
-	meter_point_button.unset_flags (Gtk::CAN_FOCUS);
+	meter_point_button.set_can_focus (false);
 
 	meter_point_button.set_size_request(15, 15);
 
@@ -224,10 +224,10 @@ GainMeterBase::~GainMeterBase ()
 }
 
 void
-GainMeterBase::set_controls (boost::shared_ptr<Route> r,
-			     boost::shared_ptr<PeakMeter> pm,
-                             boost::shared_ptr<Amp> amp,
-                             boost::shared_ptr<GainControl> control)
+GainMeterBase::set_controls (std::shared_ptr<Route> r,
+			     std::shared_ptr<PeakMeter> pm,
+                             std::shared_ptr<Amp> amp,
+                             std::shared_ptr<GainControl> control)
 {
 	connections.clear ();
 	model_connections.drop_connections ();
@@ -236,7 +236,7 @@ GainMeterBase::set_controls (boost::shared_ptr<Route> r,
 
 	if (!pm && !control) {
 		level_meter->set_meter (0);
-		gain_slider->set_controllable (boost::shared_ptr<PBD::Controllable>());
+		gain_slider->set_controllable (std::shared_ptr<PBD::Controllable>());
 		_meter.reset ();
 		_amp.reset ();
 		_route.reset ();
@@ -583,11 +583,12 @@ GainMeterBase::fader_moved ()
 			value = gain_adjustment.get_value();
 		}
 
-		// XXX hack allow to override group
-		// (this breaks group'ed  shift+click reset)
-		if (Keyboard::the_keyboard().key_is_down (GDK_Shift_R)
-				|| Keyboard::the_keyboard().key_is_down (GDK_Shift_L)) {
-			_control->set_value (value, Controllable::InverseGroup);
+		if (Keyboard::the_keyboard().modifier_state() == Keyboard::group_override_modifier ()) {
+			if (Config->get_group_override_inverts ()) {
+				_control->set_value (value, Controllable::InverseGroup);
+			} else {
+				_control->set_value (value, Controllable::NoGroup);
+			}
 		} else {
 			_control->set_value (value, Controllable::UseGroup);
 		}
@@ -642,6 +643,30 @@ void
 GainMeterBase::set_fader_name (const char * name)
 {
 	gain_slider->set_name (name);
+}
+
+void
+GainMeterBase::set_fader_fg (uint32_t c)
+{
+	gain_slider->set_fg (c);
+}
+
+void
+GainMeterBase::set_fader_bg (uint32_t c)
+{
+	gain_slider->set_bg (c);
+}
+
+void
+GainMeterBase::unset_fader_fg ()
+{
+	gain_slider->unset_fg ();
+}
+
+void
+GainMeterBase::unset_fader_bg ()
+{
+	gain_slider->unset_bg ();
 }
 
 void
@@ -924,7 +949,7 @@ GainMeter::GainMeter (Session* s, int fader_length)
 
 	set_tooltip (gain_automation_state_button, _("Fader automation mode"));
 
-	gain_automation_state_button.unset_flags (Gtk::CAN_FOCUS);
+	gain_automation_state_button.set_can_focus (false);
 
 	gain_automation_state_button.set_size_request (PX_SCALE(12, 15), PX_SCALE(12, 15));
 
@@ -967,10 +992,10 @@ GainMeter::GainMeter (Session* s, int fader_length)
 GainMeter::~GainMeter () { }
 
 void
-GainMeter::set_controls (boost::shared_ptr<Route> r,
-			 boost::shared_ptr<PeakMeter> meter,
-                         boost::shared_ptr<Amp> amp,
-			 boost::shared_ptr<GainControl> control)
+GainMeter::set_controls (std::shared_ptr<Route> r,
+			 std::shared_ptr<PeakMeter> meter,
+                         std::shared_ptr<Amp> amp,
+			 std::shared_ptr<GainControl> control)
 {
 	if (meter_hbox.get_parent()) {
 		hbox.remove (meter_hbox);
@@ -996,9 +1021,10 @@ GainMeter::set_controls (boost::shared_ptr<Route> r,
 
 	if (_route) {
 		_route->active_changed.connect (model_connections, invalidator (*this), boost::bind (&GainMeter::route_active_changed, this), gui_context ());
-		hbox.pack_start (meter_hbox, true, true);
-		meter_hbox.show ();
 	}
+
+	hbox.pack_start (meter_hbox, true, true);
+	meter_hbox.show ();
 
 //	if (r && !r->is_auditioner()) {
 //		fader_vbox->pack_start (gain_automation_state_button, false, false, 0);
@@ -1019,12 +1045,12 @@ GainMeter::get_gm_width ()
 	Gtk::Requisition sz;
 	int min_w = 0;
 	sz.width = 0;
-	meter_metric_area.size_request (sz);
+	sz = meter_metric_area.size_request ();
 	min_w += sz.width;
-	level_meter->size_request (sz);
+	sz = level_meter->size_request ();
 	min_w += sz.width;
 
-	fader_alignment.size_request (sz);
+	sz = fader_alignment.size_request ();
 	if (_width == Wide)
 		return max(sz.width * 2, min_w * 2) + 6;
 	else
@@ -1069,13 +1095,13 @@ GainMeter::on_style_changed (const Glib::RefPtr<Gtk::Style>&)
 	peak_display.queue_draw();
 }
 
-boost::shared_ptr<PBD::Controllable>
+std::shared_ptr<PBD::Controllable>
 GainMeterBase::get_controllable()
 {
 	if (_amp) {
 		return _control;
 	} else {
-		return boost::shared_ptr<PBD::Controllable>();
+		return std::shared_ptr<PBD::Controllable>();
 	}
 }
 
@@ -1098,37 +1124,29 @@ GainMeter::meter_configuration_changed (ChanCount c)
 		}
 	}
 
-	if (_route
-			&& boost::dynamic_pointer_cast<AudioTrack>(_route) == 0
-			&& boost::dynamic_pointer_cast<MidiTrack>(_route) == 0
-			) {
-		if (_route->active()) {
-			set_meter_strip_name ("AudioBusMetrics");
-		} else {
-			set_meter_strip_name ("AudioBusMetricsInactive");
-		}
-	}
-	else if (
-			   (type == (1 << DataType::MIDI))
-			|| (_route && boost::dynamic_pointer_cast<MidiTrack>(_route))
-			) {
+	bool is_audio_track = _route && std::dynamic_pointer_cast<AudioTrack>(_route) != 0;
+	bool is_midi_track = _route && std::dynamic_pointer_cast<MidiTrack>(_route) != 0;
+
+	if (!is_audio_track && (is_midi_track || /* MIDI Bus */ (type == (1 << DataType::MIDI)))) {
 		if (!_route || _route->active()) {
 			set_meter_strip_name ("MidiTrackMetrics");
 		} else {
 			set_meter_strip_name ("MidiTrackMetricsInactive");
 		}
 	}
-	else if (type == (1 << DataType::AUDIO)) {
+	else if (_route && (!is_audio_track && !is_midi_track)) {
+			/* Bus */
+		if (_route->active()) {
+			set_meter_strip_name ("AudioBusMetrics");
+		} else {
+			set_meter_strip_name ("AudioBusMetricsInactive");
+		}
+	}
+	else {
 		if (!_route || _route->active()) {
 			set_meter_strip_name ("AudioTrackMetrics");
 		} else {
 			set_meter_strip_name ("AudioTrackMetricsInactive");
-		}
-	} else {
-		if (!_route || _route->active()) {
-			set_meter_strip_name ("AudioMidiTrackMetrics");
-		} else {
-			set_meter_strip_name ("AudioMidiTrackMetricsInactive");
 		}
 	}
 

@@ -25,8 +25,9 @@
 #ifndef __ardour_gtk_selection_h__
 #define __ardour_gtk_selection_h__
 
+#include <memory>
 #include <vector>
-#include <boost/shared_ptr.hpp>
+
 #include <boost/noncopyable.hpp>
 
 #include <sigc++/signal.h>
@@ -42,6 +43,7 @@
 #include "point_selection.h"
 #include "marker_selection.h"
 #include "midi_selection.h"
+#include "trigger_selection.h"
 
 class TimeAxisView;
 class RegionView;
@@ -90,6 +92,7 @@ public:
 	PlaylistSelection    playlists;
 	PointSelection       points;
 	MarkerSelection      markers;
+	TriggerSelection     triggers;
 
 	/** only used when this class is used as a cut buffer */
 	MidiNoteSelection    midi_notes;
@@ -111,6 +114,7 @@ public:
 	sigc::signal<void> PointsChanged;
 	sigc::signal<void> MarkersChanged;
 	sigc::signal<void> MidiNotesChanged;
+	sigc::signal<void> TriggersChanged;
 
 	void clear ();
 
@@ -126,6 +130,13 @@ public:
 	bool selected (RegionView*) const;
 	bool selected (ArdourMarker*) const;
 	bool selected (ControlPoint*) const;
+	bool selected (TriggerEntry*) const;
+
+	/* ToDo: some region operations (midi quantize, audio reverse) expect
+	 * a RegionSelection (a list of regionviews).  We're likely going to
+	 * need a region_view + time_axis_view proxy, and this will get it.
+	 */
+	RegionSelection trigger_regionview_proxy () const;
 
 	void set (std::list<Selectable*> const &);
 	void add (std::list<Selectable*> const &);
@@ -138,12 +149,13 @@ public:
 	void set (std::vector<RegionView*>&);
 	long set (Temporal::timepos_t const &, Temporal::timepos_t const &);
 	void set_preserving_all_ranges (Temporal::timepos_t const &, Temporal::timepos_t const &);
-	void set (boost::shared_ptr<Evoral::ControlList>);
-	void set (boost::shared_ptr<ARDOUR::Playlist>);
-	void set (const std::list<boost::shared_ptr<ARDOUR::Playlist> >&);
+	void set (std::shared_ptr<Evoral::ControlList>);
+	void set (std::shared_ptr<ARDOUR::Playlist>);
+	void set (const std::list<std::shared_ptr<ARDOUR::Playlist> >&);
 	void set (ControlPoint *);
 	void set (ArdourMarker*);
 	void set (const RegionSelection&);
+	void set (TriggerEntry*);
 
 	void toggle (TimeAxisView*);
 	void toggle (const TrackViewList&);
@@ -153,11 +165,12 @@ public:
 	void toggle (std::vector<RegionView*>&);
 	long toggle (Temporal::timepos_t const &, Temporal::timepos_t const &);
 	void toggle (ARDOUR::AutomationList*);
-	void toggle (boost::shared_ptr<ARDOUR::Playlist>);
-	void toggle (const std::list<boost::shared_ptr<ARDOUR::Playlist> >&);
+	void toggle (std::shared_ptr<ARDOUR::Playlist>);
+	void toggle (const std::list<std::shared_ptr<ARDOUR::Playlist> >&);
 	void toggle (ControlPoint *);
 	void toggle (std::vector<ControlPoint*> const &);
 	void toggle (ArdourMarker*);
+	void toggle (TriggerEntry*);
 
 	void add (TimeAxisView*);
 	void add (const TrackViewList&);
@@ -166,15 +179,17 @@ public:
 	void add (MidiCutBuffer*);
 	void add (std::vector<RegionView*>&);
 	long add (Temporal::timepos_t const &, Temporal::timepos_t const &);
-	void add (boost::shared_ptr<Evoral::ControlList>);
-	void add (boost::shared_ptr<ARDOUR::Playlist>);
-	void add (const std::list<boost::shared_ptr<ARDOUR::Playlist> >&);
+	void add (std::shared_ptr<Evoral::ControlList>);
+	void add (std::shared_ptr<ARDOUR::Playlist>);
+	void add (const std::list<std::shared_ptr<ARDOUR::Playlist> >&);
 	void add (ControlPoint *);
 	void add (std::vector<ControlPoint*> const &);
 	void add (ArdourMarker*);
 	void add (const std::list<ArdourMarker*>&);
 	void add (const RegionSelection&);
 	void add (const PointSelection&);
+	void add (TriggerEntry*);
+
 	void remove (TimeAxisView*);
 	void remove (const TrackViewList&);
 	void remove (const MidiNoteSelection&);
@@ -183,12 +198,13 @@ public:
 	void remove (MidiCutBuffer*);
 	void remove (uint32_t selection_id);
 	void remove (samplepos_t, samplepos_t);
-	void remove (boost::shared_ptr<ARDOUR::AutomationList>);
-	void remove (boost::shared_ptr<ARDOUR::Playlist>);
-	void remove (const std::list<boost::shared_ptr<ARDOUR::Playlist> >&);
+	void remove (std::shared_ptr<ARDOUR::AutomationList>);
+	void remove (std::shared_ptr<ARDOUR::Playlist>);
+	void remove (const std::list<std::shared_ptr<ARDOUR::Playlist> >&);
 	void remove (const std::list<Selectable*>&);
 	void remove (ArdourMarker*);
 	void remove (ControlPoint *);
+	void remove (TriggerEntry*);
 
 	void remove_regions (TimeAxisView *);
 
@@ -219,6 +235,7 @@ public:
 	void clear_points (bool with_signal = true);
 	void clear_markers (bool with_signal = true);
 	void clear_midi_notes (bool with_signal = true);
+	void clear_triggers (bool with_signal = true);
 
 	void foreach_region (void (ARDOUR::Region::*method)(void));
 	void foreach_regionview (void (RegionView::*method)(void));

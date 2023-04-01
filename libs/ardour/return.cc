@@ -51,8 +51,8 @@ Return::Return (Session& s, bool internal)
 {
 	/* never muted */
 
-	boost::shared_ptr<AutomationList> gl (new AutomationList (Evoral::Parameter (GainAutomation), time_domain()));
-	_gain_control = boost::shared_ptr<GainControl> (new GainControl (_session, Evoral::Parameter (GainAutomation), gl));
+	std::shared_ptr<AutomationList> gl (new AutomationList (Evoral::Parameter (GainAutomation), time_domain()));
+	_gain_control = std::shared_ptr<GainControl> (new GainControl (_session, Evoral::Parameter (GainAutomation), gl));
 	add_control (_gain_control);
 
 	_amp.reset (new Amp (_session, X_("Fader"), _gain_control, true));
@@ -65,7 +65,7 @@ Return::~Return ()
 }
 
 XMLNode&
-Return::state()
+Return::state() const
 {
 	XMLNode& node = IOProcessor::state ();
 	node.set_property ("type", "return");
@@ -110,7 +110,7 @@ Return::set_state (const XMLNode& node, int version)
 void
 Return::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, double speed, pframes_t nframes, bool)
 {
-	if ((!_active && !_pending_active) || _input->n_ports() == ChanCount::ZERO) {
+	if (!check_active() || (_input->n_ports() == ChanCount::ZERO)) {
 		return;
 	}
 
@@ -129,8 +129,6 @@ Return::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, 
 			_meter->run (bufs, start_sample, end_sample, speed, nframes, true);
 		}
 	}
-
-	_active = _pending_active;
 }
 
 bool

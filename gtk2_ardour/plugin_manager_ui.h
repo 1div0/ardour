@@ -53,6 +53,7 @@ private:
 	void row_activated (Gtk::TreeModel::Path const&, Gtk::TreeViewColumn*);
 
 	void reindex ();
+	void discover ();
 	void rescan_all ();
 	void rescan_faulty ();
 	void rescan_selected ();
@@ -63,7 +64,7 @@ private:
 
 	void search_entry_changed ();
 	void search_clear_button_clicked ();
-	bool show_this_plugin (boost::shared_ptr<ARDOUR::PluginScanLogEntry>, ARDOUR::PluginInfoPtr, const std::string&);
+	bool show_this_plugin (std::shared_ptr<ARDOUR::PluginScanLogEntry>, ARDOUR::PluginInfoPtr, const std::string&);
 
 	void plugin_status_changed (ARDOUR::PluginType, std::string, ARDOUR::PluginManager::PluginStatusType);
 
@@ -109,7 +110,7 @@ private:
 		Gtk::TreeModelColumn<std::string>                                    creator;
 		Gtk::TreeModelColumn<std::string>                                    tags;
 		Gtk::TreeModelColumn<std::string>                                    path;
-		Gtk::TreeModelColumn<boost::shared_ptr<ARDOUR::PluginScanLogEntry> > psle;
+		Gtk::TreeModelColumn<std::shared_ptr<ARDOUR::PluginScanLogEntry> > psle;
 		Gtk::TreeModelColumn<ARDOUR::PluginInfoPtr>                          plugin;
 		Gtk::TreeModelColumn<bool>                                           can_blacklist;
 		Gtk::TreeModelColumn<bool>                                           can_fav_hide;
@@ -123,6 +124,7 @@ private:
 	Gtk::ScrolledWindow          _log_scroller;
 	ArdourWidgets::VPane         _pane;
 	ArdourWidgets::ArdourButton  _btn_reindex;
+	ArdourWidgets::ArdourButton  _btn_discover;
 	ArdourWidgets::ArdourButton  _btn_rescan_all;
 	ArdourWidgets::ArdourButton  _btn_rescan_err;
 	ArdourWidgets::ArdourButton  _btn_rescan_sel;

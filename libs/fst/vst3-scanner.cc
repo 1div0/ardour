@@ -46,10 +46,11 @@
 #define NO_OLDNAMES // no backwards compat _pid_t, conflict with w64 pthread/sched
 #endif
 
-#include "../ardour/filesystem_paths.cc"
 #include "../ardour/vst3_scan.cc"
 #include "../ardour/vst3_host.cc"
 #include "../ardour/vst3_module.cc"
+
+#include "../ardour/filesystem_paths.cc"
 
 using namespace PBD;
 
@@ -158,8 +159,8 @@ usage ()
 This tool ...\n\
 \n");
 
-	printf ("Report bugs to <http://tracker.ardour.org/>\n"
-	        "Website: <http://ardour.org/>\n");
+	printf ("Report bugs to <https://tracker.ardour.org/>\n"
+	        "Website: <https://ardour.org/>\n");
 
 	console_madness_end ();
 	::exit (EXIT_SUCCESS);

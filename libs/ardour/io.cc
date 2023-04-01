@@ -63,21 +63,25 @@ using namespace ARDOUR;
 using namespace PBD;
 
 const string                 IO::state_node_name = "IO";
-bool                         IO::connecting_legal = false;
-PBD::Signal0<int>            IO::ConnectingLegal;
 PBD::Signal1<void,ChanCount> IO::PortCountChanged;
+
+static std::string
+legalize_io_name (std::string n)
+{
+	replace_all (n, ":", "-");
+	return n;
+}
 
 /** @param default_type The type of port that will be created by ensure_io
  * and friends if no type is explicitly requested (to avoid breakage).
  */
 IO::IO (Session& s, const string& name, Direction dir, DataType default_type, bool sendish)
-	: SessionObject (s, name)
+	: SessionObject (s, legalize_io_name (name))
 	, _direction (dir)
 	, _default_type (default_type)
 	, _sendish (sendish)
 {
 	_active = true;
-	pending_state_node = 0;
 	setup_bundle ();
 }
 
@@ -88,7 +92,6 @@ IO::IO (Session& s, const XMLNode& node, DataType dt, bool sendish)
 	, _sendish (sendish)
 {
 	_active = true;
-	pending_state_node = 0;
 
 	set_state (node, Stateful::loading_state_version);
 	setup_bundle ();
@@ -96,20 +99,18 @@ IO::IO (Session& s, const XMLNode& node, DataType dt, bool sendish)
 
 IO::~IO ()
 {
-	Glib::Threads::Mutex::Lock lm (io_lock);
-
 	DEBUG_TRACE (DEBUG::Ports, string_compose ("IO %1 unregisters %2 ports\n", name(), _ports.num_ports()));
 
 	BLOCK_PROCESS_CALLBACK ();
+	Glib::Threads::RWLock::WriterLock wl (_io_lock);
 
 	for (PortSet::iterator i = _ports.begin(); i != _ports.end(); ++i) {
 		_session.engine().unregister_port (*i);
 	}
-	delete pending_state_node; pending_state_node = 0;
 }
 
 void
-IO::connection_change (boost::shared_ptr<Port> a, boost::shared_ptr<Port> b)
+IO::connection_change (std::shared_ptr<Port> a, std::shared_ptr<Port> b)
 {
 	if (_session.deletion_in_progress ()) {
 		return;
@@ -120,12 +121,13 @@ IO::connection_change (boost::shared_ptr<Port> a, boost::shared_ptr<Port> b)
 	   we assume that its safely locked by our own ::disconnect().
 	*/
 
-	Glib::Threads::Mutex::Lock tm (io_lock, Glib::Threads::TRY_LOCK);
+	Glib::Threads::RWLock::WriterLock wl (_io_lock, Glib::Threads::TRY_LOCK);
 
-	if (tm.locked()) {
+	if (wl.locked()) {
 		/* we took the lock, so we cannot be here from inside
 		 * ::disconnect()
 		 */
+		wl.release (); // release lock before emitting signal
 		if (_ports.contains (a) || _ports.contains (b)) {
 			changed (IOChange (IOChange::ConnectionsChanged), this); /* EMIT SIGNAL */
 		}
@@ -149,14 +151,14 @@ IO::silence (samplecnt_t nframes)
 }
 
 int
-IO::disconnect (boost::shared_ptr<Port> our_port, string other_port, void* src)
+IO::disconnect (std::shared_ptr<Port> our_port, string other_port, void* src)
 {
 	if (other_port.length() == 0 || our_port == 0) {
 		return 0;
 	}
 
 	{
-		Glib::Threads::Mutex::Lock lm (io_lock);
+		Glib::Threads::RWLock::ReaderLock rl (_io_lock);
 
 		/* check that our_port is really one of ours */
 
@@ -183,14 +185,14 @@ IO::disconnect (boost::shared_ptr<Port> our_port, string other_port, void* src)
 }
 
 int
-IO::connect (boost::shared_ptr<Port> our_port, string other_port, void* src)
+IO::connect (std::shared_ptr<Port> our_port, string other_port, void* src)
 {
 	if (other_port.length() == 0 || our_port == 0) {
 		return 0;
 	}
 
 	{
-		Glib::Threads::Mutex::Lock lm (io_lock);
+		Glib::Threads::RWLock::ReaderLock rl (_io_lock);
 
 		/* check that our_port is really one of ours */
 
@@ -228,7 +230,7 @@ IO::can_add_port (DataType type) const
 }
 
 int
-IO::remove_port (boost::shared_ptr<Port> port, void* src)
+IO::remove_port (std::shared_ptr<Port> port, void* src)
 {
 	ChanCount before = _ports.count ();
 	ChanCount after = before;
@@ -245,7 +247,7 @@ IO::remove_port (boost::shared_ptr<Port> port, void* src)
 		BLOCK_PROCESS_CALLBACK ();
 
 		{
-			Glib::Threads::Mutex::Lock lm (io_lock);
+			Glib::Threads::RWLock::WriterLock wl (_io_lock);
 
 			if (_ports.remove(port)) {
 				change.type = IOChange::Type (change.type | IOChange::ConfigurationChanged);
@@ -290,7 +292,7 @@ IO::remove_port (boost::shared_ptr<Port> port, void* src)
 int
 IO::add_port (string destination, void* src, DataType type)
 {
-	boost::shared_ptr<Port> our_port;
+	std::shared_ptr<Port> our_port;
 
 	if (type == DataType::NIL) {
 		type = _default_type;
@@ -316,7 +318,7 @@ IO::add_port (string destination, void* src, DataType type)
 
 
 		{
-			Glib::Threads::Mutex::Lock lm (io_lock);
+			Glib::Threads::RWLock::WriterLock wl (_io_lock);
 
 			/* Create a new port */
 
@@ -362,7 +364,7 @@ int
 IO::disconnect (void* src)
 {
 	{
-		Glib::Threads::Mutex::Lock lm (io_lock);
+		Glib::Threads::RWLock::ReaderLock rl (_io_lock);
 
 		for (PortSet::iterator i = _ports.begin(); i != _ports.end(); ++i) {
 			i->disconnect_all ();
@@ -382,8 +384,8 @@ IO::ensure_ports_locked (ChanCount count, bool clear, bool& changed)
 	assert (!AudioEngine::instance()->process_lock().trylock());
 #endif
 
-	boost::shared_ptr<Port> port;
-	vector<boost::shared_ptr<Port> > deleted_ports;
+	std::shared_ptr<Port> port;
+	vector<std::shared_ptr<Port> > deleted_ports;
 
 	changed    = false;
 
@@ -485,7 +487,7 @@ IO::ensure_ports (ChanCount count, bool clear, void* src)
 	change.before = _ports.count ();
 
 	{
-		Glib::Threads::Mutex::Lock im (io_lock);
+		Glib::Threads::RWLock::WriterLock wl (_io_lock);
 		if (ensure_ports_locked (count, clear, changed)) {
 			return -1;
 		}
@@ -524,17 +526,17 @@ IO::ensure_io (ChanCount count, bool clear, void* src)
 }
 
 XMLNode&
-IO::get_state ()
+IO::get_state () const
 {
 	return state ();
 }
 
 XMLNode&
-IO::state ()
+IO::state () const
 {
 	XMLNode* node = new XMLNode (state_node_name);
 	int n;
-	Glib::Threads::Mutex::Lock lm (io_lock);
+	Glib::Threads::RWLock::WriterLock wl (_io_lock);
 
 	node->set_property ("name", name());
 	node->set_property ("id", id ());
@@ -545,7 +547,7 @@ IO::state ()
 		node->set_property("pretty-name", _pretty_name_prefix);
 	}
 
-	for (PortSet::iterator i = _ports.begin(); i != _ports.end(); ++i) {
+	for (PortSet::const_iterator i = _ports.begin(); i != _ports.end(); ++i) {
 
 		vector<string> connections;
 
@@ -614,6 +616,7 @@ IO::set_state (const XMLNode& node, int version)
 	if (create_ports (node, version)) {
 		return -1;
 	}
+
 	if (_sendish && _direction == Output) {
 		/* ignore <Port name="...">  from XML for sends, but use the names
 		 * ::ensure_ports_locked() creates port using ::build_legal_port_name()
@@ -631,23 +634,37 @@ IO::set_state (const XMLNode& node, int version)
 	}
 
 	// after create_ports, updates names
+
 	if (node.get_property ("pretty-name", name)) {
 		set_pretty_name (name);
 	}
 
-	if (connecting_legal) {
+	/* now set port state (this will *not* connect them, but will store
+	   the names of connected ports).
+	 */
 
-		if (make_connections (node, version, false)) {
-			return -1;
+	if (version < 3000) {
+		return set_port_state_2X (node, version, false);
+	}
+
+	XMLProperty const * prop;
+
+	for (XMLNodeConstIterator i = node.children().begin(); i != node.children().end(); ++i) {
+
+		if ((*i)->name() == "Port") {
+
+			prop = (*i)->property (X_("name"));
+
+			if (!prop) {
+				continue;
+			}
+
+			std::shared_ptr<Port> p = port_by_name (prop->value());
+
+			if (p) {
+				p->set_state (**i, version);
+			}
 		}
-
-	} else {
-
-		delete pending_state_node;
-		pending_state_node = new XMLNode (node);
-		pending_state_node_version = version;
-		pending_state_node_in = false;
-		ConnectingLegal.connect_same_thread (connection_legal_c, boost::bind (&IO::connecting_became_legal, this));
 	}
 
 	return 0;
@@ -685,49 +702,21 @@ IO::set_state_2X (const XMLNode& node, int version, bool in)
 		return -1;
 	}
 
-	if (connecting_legal) {
-
-		if (make_connections_2X (node, version, in)) {
-			return -1;
-		}
-
-	} else {
-
-		delete pending_state_node;
-		pending_state_node = new XMLNode (node);
-		pending_state_node_version = version;
-		pending_state_node_in = in;
-		ConnectingLegal.connect_same_thread (connection_legal_c, boost::bind (&IO::connecting_became_legal, this));
+	if (set_port_state_2X (node, version, in)) {
+		return -1;
 	}
 
 	return 0;
 }
 
-int
-IO::connecting_became_legal ()
-{
-	int ret = 0;
-
-	assert (pending_state_node);
-
-	connection_legal_c.disconnect ();
-
-	ret = make_connections (*pending_state_node, pending_state_node_version, pending_state_node_in);
-
-	delete pending_state_node;
-	pending_state_node = 0;
-
-	return ret;
-}
-
-boost::shared_ptr<Bundle>
+std::shared_ptr<Bundle>
 IO::find_possible_bundle (const string &desired_name)
 {
 	static const string digits = "0123456789";
 	const string &default_name = (_direction == Input ? _("in") : _("out"));
 	const string &bundle_type_name = (_direction == Input ? _("input") : _("output"));
 
-	boost::shared_ptr<Bundle> c = _session.bundle_by_name (desired_name);
+	std::shared_ptr<Bundle> c = _session.bundle_by_name (desired_name);
 
 	if (!c) {
 		int bundle_number, mask;
@@ -811,7 +800,7 @@ IO::find_possible_bundle (const string &desired_name)
 }
 
 int
-IO::get_port_counts_2X (XMLNode const & node, int /*version*/, ChanCount& n, boost::shared_ptr<Bundle>& /*c*/)
+IO::get_port_counts_2X (XMLNode const & node, int /*version*/, ChanCount& n, std::shared_ptr<Bundle>& /*c*/)
 {
 	XMLProperty const * prop;
 	XMLNodeList children = node.children ();
@@ -839,7 +828,7 @@ IO::get_port_counts_2X (XMLNode const & node, int /*version*/, ChanCount& n, boo
 }
 
 int
-IO::get_port_counts (const XMLNode& node, int version, ChanCount& n, boost::shared_ptr<Bundle>& c)
+IO::get_port_counts (const XMLNode& node, int version, ChanCount& n, std::shared_ptr<Bundle>& c)
 {
 	if (version < 3000) {
 		return get_port_counts_2X (node, version, n, c);
@@ -896,7 +885,7 @@ int
 IO::create_ports (const XMLNode& node, int version)
 {
 	ChanCount n;
-	boost::shared_ptr<Bundle> c;
+	std::shared_ptr<Bundle> c;
 
 	get_port_counts (node, version, n, c);
 
@@ -915,103 +904,7 @@ IO::create_ports (const XMLNode& node, int version)
 }
 
 int
-IO::make_connections (const XMLNode& node, int version, bool in)
-{
-	if (version < 3000) {
-		return make_connections_2X (node, version, in);
-	}
-
-	XMLProperty const * prop;
-
-	for (XMLNodeConstIterator i = node.children().begin(); i != node.children().end(); ++i) {
-
-		if ((*i)->name() == "Bundle") {
-			XMLProperty const * prop = (*i)->property ("name");
-			if (prop) {
-				boost::shared_ptr<Bundle> b = find_possible_bundle (prop->value());
-				if (b) {
-					connect_ports_to_bundle (b, true, this);
-				}
-			}
-
-			return 0;
-		}
-
-		if ((*i)->name() == "Port") {
-
-			prop = (*i)->property (X_("name"));
-
-			if (!prop) {
-				continue;
-			}
-
-			boost::shared_ptr<Port> p = port_by_name (prop->value());
-
-			if (p) {
-				for (XMLNodeConstIterator c = (*i)->children().begin(); c != (*i)->children().end(); ++c) {
-
-					XMLNode* cnode = (*c);
-
-					if (cnode->name() != X_("Connection")) {
-						continue;
-					}
-
-					if ((prop = cnode->property (X_("other"))) == 0) {
-						continue;
-					}
-
-					if (prop) {
-						connect (p, prop->value(), this);
-					}
-				}
-			}
-		}
-	}
-
-	return 0;
-}
-
-void
-IO::prepare_for_reset (XMLNode& node, const std::string& name)
-{
-	/* reset name */
-	node.set_property ("name", name);
-
-	/* now find connections and reset the name of the port
-	   in one so that when we re-use it it will match
-	   the name of the thing we're applying it to.
-	*/
-
-	XMLProperty * prop;
-	XMLNodeList children = node.children();
-
-	for (XMLNodeIterator i = children.begin(); i != children.end(); ++i) {
-
-		if ((*i)->name() == "Port") {
-
-			prop = (*i)->property (X_("name"));
-
-			if (prop) {
-				string new_name;
-				string old = prop->value();
-				string::size_type slash = old.find ('/');
-
-				if (slash != string::npos) {
-					/* port name is of form: <IO-name>/<port-name> */
-
-					new_name = name;
-					new_name += old.substr (old.find ('/'));
-
-					prop->set_value (new_name);
-				}
-			}
-		}
-	}
-}
-
-
-int
-IO::make_connections_2X (const XMLNode& node, int /*version*/, bool in)
+IO::set_port_state_2X (const XMLNode& node, int /*version*/, bool in)
 {
 	XMLProperty const * prop;
 
@@ -1105,6 +998,46 @@ IO::make_connections_2X (const XMLNode& node, int /*version*/, bool in)
 
 	return 0;
 }
+
+void
+IO::prepare_for_reset (XMLNode& node, const std::string& name)
+{
+	/* reset name */
+	node.set_property ("name", name);
+
+	/* now find connections and reset the name of the port
+	   in one so that when we re-use it it will match
+	   the name of the thing we're applying it to.
+	*/
+
+	XMLProperty * prop;
+	XMLNodeList children = node.children();
+
+	for (XMLNodeIterator i = children.begin(); i != children.end(); ++i) {
+
+		if ((*i)->name() == "Port") {
+
+			prop = (*i)->property (X_("name"));
+
+			if (prop) {
+				string new_name;
+				string old = prop->value();
+				string::size_type slash = old.find ('/');
+
+				if (slash != string::npos) {
+					/* port name is of form: <IO-name>/<port-name> */
+
+					new_name = name;
+					new_name += old.substr (old.find ('/'));
+
+					prop->set_value (new_name);
+				}
+			}
+		}
+	}
+}
+
+
 
 int
 IO::set_ports (const string& str)
@@ -1211,10 +1144,11 @@ IO::set_name (const string& requested_name)
 
 	/* replace all colons in the name. i wish we didn't have to do this */
 
-	replace_all (name, ":", "-");
+	name = legalize_io_name (name);
 
 	for (PortSet::iterator i = _ports.begin(); i != _ports.end(); ++i) {
 		string current_name = i->name();
+		assert (current_name.find (_name) != std::string::npos);
 		current_name.replace (current_name.find (_name), _name.val().length(), name);
 		i->set_name (current_name);
 	}
@@ -1262,6 +1196,33 @@ IO::set_private_port_latencies (samplecnt_t value, bool playback)
 }
 
 void
+IO::set_public_port_latency_from_connections () const
+{
+	/* get min/max of connected up/downstream ports */
+	bool connected = false;
+	bool playback = _direction == Output;
+	LatencyRange lr;
+	lr.min = ~((pframes_t) 0);
+	lr.max = 0;
+
+	for (PortSet::const_iterator i = _ports.begin(); i != _ports.end(); ++i) {
+		if (i->connected()) {
+			connected = true;
+		}
+		i->collect_latency_from_backend (lr, playback);
+	}
+
+	if (!connected) {
+		/* if output is not connected to anything, use private latency */
+		lr.min = lr.max = latency ();
+	}
+
+	for (PortSet::const_iterator i = _ports.begin (); i != _ports.end(); ++i) {
+		 i->set_public_latency_range (lr, playback);
+	}
+}
+
+void
 IO::set_public_port_latencies (samplecnt_t value, bool playback) const
 {
 	LatencyRange lat;
@@ -1276,7 +1237,7 @@ IO::latency () const
 {
 	samplecnt_t max_latency = 0;
 
-	/* io lock not taken - must be protected by other means */
+	Glib::Threads::RWLock::ReaderLock rl (_io_lock);
 
 	for (PortSet::const_iterator i = _ports.begin(); i != _ports.end(); ++i) {
 		samplecnt_t latency;
@@ -1324,7 +1285,16 @@ IO::public_latency () const
 samplecnt_t
 IO::connected_latency (bool for_playback) const
 {
-	/* io lock not taken - must be protected by other means */
+	/* may be called concurrently with processing via
+	 *
+	 * Session::auto_connect_thread_run ()
+	 * -> Session::update_latency_compensation ()
+	 * -> Session::update_route_latency ()
+	 * -> Route::update_signal_latency ()
+	 * -> IO::connected_latency ()
+	 */
+	Glib::Threads::RWLock::ReaderLock rl (_io_lock);
+
 	samplecnt_t max_latency = 0;
 	bool connected = false;
 
@@ -1353,18 +1323,18 @@ IO::connected_latency (bool for_playback) const
 }
 
 int
-IO::connect_ports_to_bundle (boost::shared_ptr<Bundle> c, bool exclusive, void* src) {
+IO::connect_ports_to_bundle (std::shared_ptr<Bundle> c, bool exclusive, void* src) {
 	return connect_ports_to_bundle(c, exclusive, false, src);
 }
 
 int
-IO::connect_ports_to_bundle (boost::shared_ptr<Bundle> c, bool exclusive,
+IO::connect_ports_to_bundle (std::shared_ptr<Bundle> c, bool exclusive,
                              bool allow_partial, void* src)
 {
 	BLOCK_PROCESS_CALLBACK ();
 
 	{
-		Glib::Threads::Mutex::Lock lm2 (io_lock);
+		Glib::Threads::RWLock::ReaderLock rl (_io_lock);
 
 		if (exclusive) {
 			for (PortSet::iterator i = _ports.begin(); i != _ports.end(); ++i) {
@@ -1381,12 +1351,12 @@ IO::connect_ports_to_bundle (boost::shared_ptr<Bundle> c, bool exclusive,
 }
 
 int
-IO::disconnect_ports_from_bundle (boost::shared_ptr<Bundle> c, void* src)
+IO::disconnect_ports_from_bundle (std::shared_ptr<Bundle> c, void* src)
 {
 	BLOCK_PROCESS_CALLBACK ();
 
 	{
-		Glib::Threads::Mutex::Lock lm2 (io_lock);
+		Glib::Threads::RWLock::ReaderLock rl (_io_lock);
 
 		c->disconnect (_bundle, _session.engine());
 
@@ -1396,23 +1366,6 @@ IO::disconnect_ports_from_bundle (boost::shared_ptr<Bundle> c, void* src)
 
 	changed (IOChange (IOChange::ConnectionsChanged), src); /* EMIT SIGNAL */
 	return 0;
-}
-
-
-int
-IO::disable_connecting ()
-{
-	connecting_legal = false;
-	return 0;
-}
-
-int
-IO::enable_connecting ()
-{
-	Glib::Threads::Mutex::Lock lm (AudioEngine::instance()->process_lock());
-	connecting_legal = true;
-	boost::optional<int> r = ConnectingLegal ();
-	return r.value_or (0);
 }
 
 void
@@ -1465,8 +1418,7 @@ IO::build_legal_port_name (DataType type)
 
 	/* colons are illegal in port names, so fix that */
 
-	string nom = _name.val();
-	replace_all (nom, ":", ";");
+	string nom = legalize_io_name (_name.val());
 
 	snprintf (&buf1[0], name_size+1, ("%.*s/%s"), limit, nom.c_str(), suffix.c_str());
 
@@ -1510,14 +1462,14 @@ IO::find_port_hole (const char* base)
 }
 
 
-boost::shared_ptr<AudioPort>
+std::shared_ptr<AudioPort>
 IO::audio(uint32_t n) const
 {
 	return _ports.nth_audio_port (n);
 
 }
 
-boost::shared_ptr<MidiPort>
+std::shared_ptr<MidiPort>
 IO::midi(uint32_t n) const
 {
 	return _ports.nth_midi_port (n);
@@ -1529,8 +1481,6 @@ IO::midi(uint32_t n) const
 void
 IO::setup_bundle ()
 {
-	char buf[32];
-
 	if (!_bundle) {
 		_bundle.reset (new Bundle (_direction == Input));
 	}
@@ -1539,12 +1489,7 @@ IO::setup_bundle ()
 
 	_bundle->remove_channels ();
 
-	if (_direction == Input) {
-		snprintf(buf, sizeof (buf), _("%s in"), _name.val().c_str());
-	} else {
-		snprintf(buf, sizeof (buf), _("%s out"), _name.val().c_str());
-	}
-	_bundle->set_name (buf);
+	_bundle->set_name (string_compose ("%1 %2", _name, _direction == Input ? _("in") : _("out")));
 
 	int c = 0;
 	for (DataType::iterator i = DataType::begin(); i != DataType::end(); ++i) {
@@ -1570,7 +1515,7 @@ IO::bundles_connected ()
 	BundleList bundles;
 
 	/* Session bundles */
-	boost::shared_ptr<ARDOUR::BundleList> b = _session.bundles ();
+	std::shared_ptr<ARDOUR::BundleList> b = _session.bundles ();
 	for (ARDOUR::BundleList::iterator i = b->begin(); i != b->end(); ++i) {
 		if ((*i)->connected_to (_bundle, _session.engine())) {
 			bundles.push_back (*i);
@@ -1579,7 +1524,7 @@ IO::bundles_connected ()
 
 	/* Route bundles */
 
-	boost::shared_ptr<ARDOUR::RouteList> r = _session.get_routes ();
+	std::shared_ptr<ARDOUR::RouteList> r = _session.get_routes ();
 
 	if (_direction == Input) {
 		for (ARDOUR::RouteList::iterator i = r->begin(); i != r->end(); ++i) {
@@ -1599,7 +1544,7 @@ IO::bundles_connected ()
 }
 
 
-IO::UserBundleInfo::UserBundleInfo (IO* io, boost::shared_ptr<UserBundle> b)
+IO::UserBundleInfo::UserBundleInfo (IO* io, std::shared_ptr<UserBundle> b)
 {
 	bundle = b;
 	b->Changed.connect_same_thread (changed, boost::bind (&IO::bundle_changed, io, _1));
@@ -1673,7 +1618,7 @@ IO::connected () const
 }
 
 bool
-IO::connected_to (boost::shared_ptr<const IO> other) const
+IO::connected_to (std::shared_ptr<const IO> other) const
 {
 	if (!other) {
 		return connected ();
@@ -1687,10 +1632,10 @@ IO::connected_to (boost::shared_ptr<const IO> other) const
 
 	for (i = 0; i < no; ++i) {
 		for (j = 0; j < ni; ++j) {
-			if ((NULL != nth(i).get()) && (NULL != other->nth(j).get())) {
-				if (nth(i)->connected_to (other->nth(j)->name())) {
-					return true;
-				}
+			std::shared_ptr<Port> pa (nth(i));
+			std::shared_ptr<Port> pb (other->nth(j));
+			if (pa && pb && pa->connected_to (pb->name())) {
+				return true;
 			}
 		}
 	}
@@ -1764,9 +1709,15 @@ IO::copy_to_outputs (BufferSet& bufs, DataType type, pframes_t nframes, samplecn
 		port_buffer.read_from (*prev, nframes, offset);
 		++o;
 	}
+
+	/* when port is both externally and internally connected,
+	 * make data directly available to downstream internal ports */
+	for (auto const& p : _ports) {
+		p->flush_buffers (nframes);
+	}
 }
 
-boost::shared_ptr<Port>
+std::shared_ptr<Port>
 IO::port_by_name (const std::string& str) const
 {
 	/* to be called only from ::set_state() - no locking */
@@ -1774,11 +1725,11 @@ IO::port_by_name (const std::string& str) const
 	for (PortSet::const_iterator i = _ports.begin(); i != _ports.end(); ++i) {
 
 		if (i->name() == str) {
-			return boost::const_pointer_cast<Port> (*i);
+			return std::const_pointer_cast<Port> (*i);
 		}
 	}
 
-	return boost::shared_ptr<Port> ();
+	return std::shared_ptr<Port> ();
 }
 
 bool
@@ -1794,8 +1745,8 @@ IO::physically_connected () const
 }
 
 bool
-IO::has_port (boost::shared_ptr<Port> p) const
+IO::has_port (std::shared_ptr<Port> p) const
 {
-	Glib::Threads::Mutex::Lock lm (io_lock);
+	Glib::Threads::RWLock::ReaderLock rl (_io_lock);
 	return _ports.contains (p);
 }

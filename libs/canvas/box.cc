@@ -19,13 +19,19 @@
 
 #include <algorithm>
 
+#include "pbd/compose.h"
 #include "pbd/unwind.h"
 #include "pbd/stacktrace.h"
 
 #include "canvas/box.h"
+#include "canvas/debug.h"
 #include "canvas/rectangle.h"
 
 using namespace ArdourCanvas;
+using namespace PBD;
+
+using std::cerr;
+using std::endl;
 
 Box::Box (Canvas* canvas, Orientation o)
 	: Rectangle (canvas)
@@ -72,7 +78,7 @@ Box::compute_bounding_box () const
 	_bounding_box = Rect();
 
 	if (_items.empty()) {
-		bb_clean ();
+		set_bbox_clean ();
 		return;
 	}
 
@@ -81,17 +87,13 @@ Box::compute_bounding_box () const
 	if (_bounding_box) {
 		Rect r = _bounding_box;
 
-		/* left and top margin and padding is already built into the
-		 * position of children
-		 */
-
-		_bounding_box = r.expand (0.0,
+		_bounding_box = r.expand (top_padding + outline_width() + top_margin,
 		                          right_padding + outline_width() + right_margin,
 		                          bottom_padding + outline_width() + bottom_margin,
-		                          0.0);
+		                          left_padding + outline_width() + left_margin);
 	}
 
-	bb_clean ();
+	set_bbox_clean ();
 }
 
 void
@@ -172,6 +174,7 @@ Box::size_request (Distance& w, Distance& h) const
 	Distance largest_height = 0;
 	Rect uniform_size;
 
+	DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("size request for %1\n", this));
 	if (homogenous) {
 
 		for (std::list<Item*>::const_iterator i = _items.begin(); i != _items.end(); ++i) {
@@ -183,6 +186,7 @@ Box::size_request (Distance& w, Distance& h) const
 		}
 
 		uniform_size = Rect (0, 0, largest_width, largest_height);
+		DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("homogenous box, uniform size computed as %1\n", uniform_size));
 	}
 
 	Rect r;
@@ -197,27 +201,37 @@ Box::size_request (Distance& w, Distance& h) const
 			Rect isize;
 
 			(*i)->size_request (width, height);
+			DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, desires %2 x %3\n", (*i)->whoami(), width, height));
+
 
 			if (homogenous) {
 				if (((*i)->pack_options() & PackOptions (PackExpand|PackFill)) == PackOptions (PackExpand|PackFill)) {
 					if (orientation == Vertical) {
 						/* use the item's own height and our computed width */
 						isize = Rect (previous_edge.x, previous_edge.y, previous_edge.x + uniform_size.width(), previous_edge.y + height);
+						DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, use computed width to give %2\n", (*i)->whoami(), isize));
 					} else {
 						/* use the item's own width and our computed height */
 						isize = Rect (previous_edge.x, previous_edge.y, previous_edge.x + width, previous_edge.y + uniform_size.height());
+						DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, use computed height to give %2\n", (*i)->whoami(), isize));
 					}
 				} else {
 					isize = Rect (previous_edge.x, previous_edge.y, previous_edge.x + width, previous_edge.y + height);
+					DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, use item size to give %2\n", (*i)->whoami(), isize));
 				}
 			} else {
 				isize = Rect (previous_edge.x, previous_edge.y, previous_edge.x + width, previous_edge.y + height);
+				DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, use item size (non-homogenous) to give %2\n", (*i)->whoami(), isize));
 			}
 
 			width = isize.width();
 			height = isize.height();
 
+			DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, initial size %2 x %3\n", (*i)->whoami(), width, height));
+
 			r = r.extend (Rect (previous_edge.x, previous_edge.y, previous_edge.x + width, previous_edge.y + height));
+
+			DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\tcumulative rect is now %1\n", r));
 
 			if (orientation == Vertical) {
 
@@ -256,6 +270,8 @@ Box::size_request (Distance& w, Distance& h) const
 
 	r = r.expand (0, right_margin + right_padding, bottom_margin + bottom_padding, 0);
 
+	DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("add margin and padding, get %1\n", r));
+
 	w = r.width();
 	h = r.height();
 }
@@ -268,6 +284,12 @@ Box::reposition_children (Distance width, Distance height, bool shrink_width, bo
 	Distance largest_width = 0;
 	Distance largest_height = 0;
 	Rect uniform_size;
+
+	if (width == 0 && height == 0) {
+		return;
+	}
+
+	DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("allocating children within %1 x %2, shrink/w %3 shrink/h %4\n", width, height, shrink_width, shrink_height));
 
 	if (homogenous) {
 
@@ -282,24 +304,35 @@ Box::reposition_children (Distance width, Distance height, bool shrink_width, bo
 			}
 		}
 
+		/* these two represent the width and height available for
+		 * contents (i.e. after we've taken "borders" "owned" by this
+		 * box into account)
+		 */
+
 		const Distance contents_width = width - (left_margin + left_padding + right_margin + right_padding);
 		const Distance contents_height = height - (top_margin + top_padding + bottom_margin + bottom_padding);
-		const Distance item_width = (contents_width - ((_items.size() - 1) * spacing));
-		const Distance item_height = (contents_height - ((_items.size() - 1) * spacing));;
+
+		Distance item_width;
+		Distance item_height;
 
 		if (orientation == Vertical) {
-			if ((largest_width < item_width)) {
-				largest_width = item_width;
-			}
+			item_width = contents_width;
+			item_height = (contents_height - ((_items.size() - 1) * spacing));;
+		} else {
+			item_width = (contents_width - ((_items.size() - 1) * spacing));
+			item_height = contents_height;
+		}
+
+		if (orientation == Vertical) {
+			largest_width = std::max (largest_width, item_width);
 		}
 
 		if (orientation == Horizontal) {
-			if ((largest_height < item_height)) {
-				largest_height = item_height;
-			}
+			largest_height = std::max (largest_height, item_height);
 		}
 
 		uniform_size = Rect (0, 0, largest_width, largest_height);
+		DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("allocating for homogenous box, uniform size computed as %1\n", uniform_size));
 	}
 
 	{
@@ -318,17 +351,22 @@ Box::reposition_children (Distance width, Distance height, bool shrink_width, bo
 					if (orientation == Vertical) {
 						/* use the item's own height and our computed width */
 						isize = Rect (previous_edge.x, previous_edge.y, previous_edge.x + uniform_size.width(), previous_edge.y + height);
+						DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, use computed width to give %2\n", (*i)->whoami(), isize));
 					} else {
 						/* use the item's own width and our computed height */
 						isize = Rect (previous_edge.x, previous_edge.y, previous_edge.x + width, previous_edge.y + uniform_size.height());
+						DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, use computed height to give %2\n", (*i)->whoami(), isize));
 					}
 				} else {
 					isize = Rect (previous_edge.x, previous_edge.y, previous_edge.x + width, previous_edge.y + height);
+					DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, use item size to give %2\n", (*i)->whoami(), isize));
 				}
 			} else {
 				isize = Rect (previous_edge.x, previous_edge.y, previous_edge.x + width, previous_edge.y + height);
+				DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1, use item size %2 x %3 (non-homogenous) to give %4\n", (*i)->whoami(), width, height, isize));
 			}
 
+			DEBUG_TRACE (DEBUG::CanvasBox|DEBUG::CanvasSizeAllocate, string_compose ("\t%1 allocating %2\n", (*i)->whoami(), isize));
 			(*i)->size_allocate (isize);
 
 			width = isize.width();

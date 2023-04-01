@@ -23,6 +23,7 @@
 
 #include <cassert>
 
+#include "pbd/atomic.h"
 #include "pbd/debug.h"
 #include "pbd/enum_convert.h"
 #include "pbd/enumwriter.h"
@@ -47,7 +48,7 @@ string PresentationInfo::state_node_name = X_("PresentationInfo");
 
 PBD::Signal1<void,PropertyChange const &> PresentationInfo::Change;
 Glib::Threads::Mutex PresentationInfo::static_signal_lock;
-GATOMIC_QUAL gint PresentationInfo::_change_signal_suspended = 0;
+std::atomic<int> PresentationInfo::_change_signal_suspended (0);
 PBD::PropertyChange PresentationInfo::_pending_static_changes;
 int PresentationInfo::selection_counter= 0;
 
@@ -56,13 +57,14 @@ namespace ARDOUR {
 		PBD::PropertyDescriptor<bool>     selected;
 		PBD::PropertyDescriptor<uint32_t> order;
 		PBD::PropertyDescriptor<uint32_t> color;
+		PBD::PropertyDescriptor<bool>     trigger_track;
 	}
 }
 
 void
 PresentationInfo::suspend_change_signal ()
 {
-	g_atomic_int_add (&_change_signal_suspended, 1);
+	_change_signal_suspended.fetch_add (1);
 }
 
 void
@@ -70,7 +72,7 @@ PresentationInfo::unsuspend_change_signal ()
 {
 	Glib::Threads::Mutex::Lock lm (static_signal_lock);
 
-	if (g_atomic_int_get (&_change_signal_suspended) == 1) {
+	if (PBD::atomic_dec_and_test (_change_signal_suspended)) {
 
 		/* atomically grab currently pending flags */
 
@@ -91,8 +93,6 @@ PresentationInfo::unsuspend_change_signal ()
 			lm.acquire ();
 		}
 	}
-
-	g_atomic_int_add (&_change_signal_suspended, -1);
 }
 
 void
@@ -103,7 +103,7 @@ PresentationInfo::send_static_change (const PropertyChange& what_changed)
 	}
 
 
-	if (g_atomic_int_get (&_change_signal_suspended)) {
+	if (_change_signal_suspended.load ()) {
 		Glib::Threads::Mutex::Lock lm (static_signal_lock);
 		_pending_static_changes.add (what_changed);
 		return;
@@ -157,7 +157,7 @@ PresentationInfo::PresentationInfo (PresentationInfo const& other)
 }
 
 XMLNode&
-PresentationInfo::get_state ()
+PresentationInfo::get_state () const
 {
 	XMLNode* node = new XMLNode (state_node_name);
 	node->set_property ("order", _order);
@@ -189,6 +189,9 @@ PresentationInfo::set_state (XMLNode const& node, int /* version */)
 	if (node.get_property (X_("flags"), f)) {
 		if ((f&Hidden) != (_flags&Hidden)) {
 			pc.add (Properties::hidden);
+		}
+		if ((f&TriggerTrack) != (_flags&TriggerTrack)) {
+			pc.add (Properties::trigger_track);
 		}
 		_flags = f;
 	}
@@ -285,6 +288,22 @@ PresentationInfo::set_order (order_t order)
 	}
 }
 
+void
+PresentationInfo::set_trigger_track (bool yn)
+{
+	if (yn != trigger_track ()) {
+
+		if (yn) {
+			_flags = Flag (_flags | TriggerTrack);
+		} else {
+			_flags = Flag (_flags & ~TriggerTrack);
+		}
+
+		send_change (PropertyChange (Properties::trigger_track));
+		send_static_change (PropertyChange (Properties::trigger_track));
+	}
+}
+
 PresentationInfo&
 PresentationInfo::operator= (PresentationInfo const& other)
 {
@@ -298,7 +317,7 @@ PresentationInfo::operator= (PresentationInfo const& other)
 }
 
 std::ostream&
-operator<<(std::ostream& o, ARDOUR::PresentationInfo const& pi)
+std::operator<<(std::ostream& o, ARDOUR::PresentationInfo const& pi)
 {
 	return o << pi.order() << '/' << enum_2_string (pi.flags()) << '/' << pi.color();
 }

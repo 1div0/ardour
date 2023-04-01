@@ -182,7 +182,7 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 		sigc::mem_fun (*_session_config, &SessionConfiguration::set_native_file_data_format)
 		);
 	add_option (_("Media"), _sf);
-	/* refill available sample-formats, depening on file-format */
+	/* refill available sample-formats, depending on file-format */
 	parameter_changed ("native-file-header-format");
 
 	ComboOption<HeaderFormat>* hf = new ComboOption<HeaderFormat> (
@@ -269,6 +269,13 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 				sigc::mem_fun (*_session_config, &SessionConfiguration::set_auto_input)
 				));
 
+	add_option (_("Monitoring"), new BoolOption (
+				"triggerbox-overrides-disk-monitoring",
+				_("Cues containing clips disables implicit (auto) disk monitoring for the track"),
+				sigc::mem_fun (*_session_config, &SessionConfiguration::get_triggerbox_overrides_disk_monitoring),
+				sigc::mem_fun (*_session_config, &SessionConfiguration::set_triggerbox_overrides_disk_monitoring)
+				));
+
 	add_option (_("Monitoring"), new CheckOption (
 				"unused",
 				_("Use monitor section in this session"),
@@ -331,6 +338,13 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 			    sigc::mem_fun (*_session_config, &SessionConfiguration::set_show_monitor_on_meterbridge)
 			    ));
 
+	add_option (_("Meterbridge"), new BoolOption (
+			    "show-fader-on-meterbridge",
+			    _("Fader as Gain Knob"),
+			    sigc::mem_fun (*_session_config, &SessionConfiguration::get_show_fader_on_meterbridge),
+			    sigc::mem_fun (*_session_config, &SessionConfiguration::set_show_fader_on_meterbridge)
+			    ));
+
 	add_option (_("Meterbridge"), new OptionEditorHeading (_("Name Labels")));
 
 	add_option (_("Meterbridge"), new BoolOption (
@@ -345,6 +359,13 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 	/* Misc */
 
 	add_option (_("Misc"), new OptionEditorHeading (_("MIDI Options")));
+
+	add_option (_("Misc"), new BoolOption (
+				"draw-opaque-midi-regions",
+				_("Draw tool creates opaque MIDI regions"),
+				sigc::mem_fun (*_session_config, &SessionConfiguration::get_draw_opaque_midi_regions),
+				sigc::mem_fun (*_session_config, &SessionConfiguration::set_draw_opaque_midi_regions)
+				));
 
 	add_option (_("Misc"), new BoolOption (
 				"midi-copy-is-fork",
@@ -401,6 +422,10 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 	add_option (_("Misc"), new FooOption (btn));
 
 	set_current_page (_("Timecode"));
+
+	/* Place the search entry */
+
+	vpacker.pack_end (search_packer, false, false);
 }
 
 void

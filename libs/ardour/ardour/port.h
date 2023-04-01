@@ -107,6 +107,8 @@ public:
 
 	void get_connected_latency_range (LatencyRange& range, bool playback) const;
 
+	void collect_latency_from_backend (LatencyRange& range, bool playback) const;
+
 	void set_private_latency_range (LatencyRange& range, bool playback);
 	const LatencyRange&  private_latency_range (bool playback) const;
 
@@ -117,8 +119,9 @@ public:
 
 	virtual DataType type () const = 0;
 	virtual void cycle_start (pframes_t);
-	virtual void cycle_end (pframes_t) = 0;
+	virtual void cycle_end (pframes_t);
 	virtual void cycle_split () = 0;
+	virtual void reinit (bool) {}
 	virtual Buffer& get_buffer (pframes_t nframes) = 0;
 	virtual void flush_buffers (pframes_t /*nframes*/) {}
 	virtual void transport_stopped () {}
@@ -126,18 +129,27 @@ public:
 	virtual void set_buffer_size (pframes_t) {}
 
 	bool physically_connected () const;
+	bool in_cycle () const { return _in_cycle; }
+
 	uint32_t externally_connected () const { return _externally_connected; }
+	uint32_t internally_connected () const { return _internally_connected; }
 
 	void increment_external_connections() { _externally_connected++; }
 	void decrement_external_connections() { if (_externally_connected) _externally_connected--; }
 
+	void increment_internal_connections() { _internally_connected++; }
+	void decrement_internal_connections() { if (_internally_connected) _internally_connected--; }
+
+
 	PBD::Signal1<void,bool> MonitorInputChanged;
-	PBD::Signal3<void,boost::shared_ptr<Port>,boost::shared_ptr<Port>, bool > ConnectedOrDisconnected;
+	PBD::Signal3<void,std::shared_ptr<Port>,std::shared_ptr<Port>, bool > ConnectedOrDisconnected;
 
 	static PBD::Signal0<void> PortDrop;
 	static PBD::Signal0<void> PortSignalDrop;
+	static PBD::Signal0<void> ResamplerQualityChanged;
 
-	static void set_speed_ratio (double s);
+	static void set_varispeed_ratio (double s); //< varispeed playback
+	static bool set_engine_ratio (double session, double engine); //< SR mismatch
 	static void set_cycle_samplecnt (pframes_t n);
 
 	static samplecnt_t port_offset() { return _global_port_buffer_offset; }
@@ -148,14 +160,20 @@ public:
 		_global_port_buffer_offset += n;
 	}
 
-	virtual XMLNode& get_state (void) const;
+	virtual XMLNode& get_state () const;
 	virtual int set_state (const XMLNode&, int version);
 
 	static std::string state_node_name;
 
 	static pframes_t cycle_nframes () { return _cycle_nframes; }
 	static double speed_ratio () { return _speed_ratio; }
+	static double engine_ratio () { return _engine_ratio; }
+	static double resample_ratio () { return _resample_ratio; } // == _speed_ratio * _engine_ratio
+
 	static uint32_t resampler_quality () { return _resampler_quality; }
+	static uint32_t resampler_latency () { return _resampler_latency; }
+	static bool     can_varispeed ()     { return _resampler_latency > 0; }
+	static bool     setup_resampler (uint32_t q = 17);
 
 protected:
 
@@ -172,20 +190,26 @@ protected:
 	LatencyRange _private_capture_latency;
 
 	static double _speed_ratio;
-	static const uint32_t _resampler_quality; /* also latency of the resampler */
+	static double _engine_ratio;
+	static double _resample_ratio; // = _speed_ratio * _engine_ratio (cached)
 
 private:
 	std::string _name;  ///< port short name
 	PortFlags   _flags; ///< flags
 	bool        _last_monitor;
+	bool        _in_cycle;
 	uint32_t    _externally_connected;
+	uint32_t    _internally_connected;
 
 	/** ports that we are connected to, kept so that we can
 	    reconnect to the backend when required
 	*/
 	std::set<std::string> _connections;
 
-	void port_connected_or_disconnected (boost::weak_ptr<Port>, boost::weak_ptr<Port>, bool);
+	static uint32_t _resampler_quality; // 8 <= q <= 96
+	static uint32_t _resampler_latency; // = _resampler_quality - 1
+
+	void port_connected_or_disconnected (std::weak_ptr<Port>, std::weak_ptr<Port>, bool);
 	void signal_drop ();
 	void session_global_drop ();
 	void drop ();

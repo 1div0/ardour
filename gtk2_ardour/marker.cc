@@ -24,6 +24,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include <sstream>
+
 #include <sigc++/bind.h>
 #include "ardour/tempo.h"
 
@@ -51,6 +53,7 @@
 #include "public_editor.h"
 #include "utils.h"
 #include "rgb_macros.h"
+#include "tempo_curve.h"
 
 #include <gtkmm2ext/utils.h>
 
@@ -89,11 +92,16 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 	, _label_offset (0)
 	, _line_height (-1)
 	, _region_view (rv)
+	, _cue_index (-1)
 {
+	const double scale = UIConfiguration::instance ().get_ui_scale ();
 
 	const double MH = marker_height - .5;
-	const double M3 = std::max(1.f, rintf(3.f * UIConfiguration::instance().get_ui_scale()));
-	const double M6 = std::max(2.f, rintf(6.f * UIConfiguration::instance().get_ui_scale()));
+	const double M3 = std::max(1.f, rintf(3.f * scale));
+	const double M6 = std::max(2.f, rintf(6.f * scale));
+
+	const double M5 =  std::max(1.f, rintf(5.f * scale));
+	const double M10 = std::max(2.f, rintf(10.f * scale));
 
 	/* Shapes we use:
 	 *
@@ -166,6 +174,8 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 	 *          \  |
 	 *   MH,MH
 	 *
+	 * Cue:
+	 *  ben: put your shape here :)
 	 */
 
 	switch (type) {
@@ -181,24 +191,26 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 		points->push_back (ArdourCanvas::Duple (0.0, MH * .4));
 		points->push_back (ArdourCanvas::Duple (0.0, 0.0));
 
-		_shift = 3;
-		_label_offset = 10.0;
+		_shift = 3 * scale;
+		_label_offset = 8.0 * scale;
 		break;
 
 	case Tempo:
 	case Meter:
 		points = new ArdourCanvas::Points ();
-		points->push_back (ArdourCanvas::Duple ( M3, 0.0));
-		points->push_back (ArdourCanvas::Duple ( M6, MH * .6));
-		points->push_back (ArdourCanvas::Duple ( M6, MH));
+		points->push_back (ArdourCanvas::Duple ( M5, 0.0));
+		points->push_back (ArdourCanvas::Duple ( M10, MH * .6));
+		points->push_back (ArdourCanvas::Duple ( M10, MH));
 		points->push_back (ArdourCanvas::Duple (0.0, MH));
 		points->push_back (ArdourCanvas::Duple (0.0, MH * .6));
-		points->push_back (ArdourCanvas::Duple ( M3, 0.0));
+		points->push_back (ArdourCanvas::Duple ( M5, 0.0));
 
-		_shift = 3;
-		_label_offset = 8.0;
+		_shift = 5 * scale;
+		_label_offset = 12.0 * scale;
 		break;
 
+	case PunchIn:
+	case LoopStart:
 	case SessionStart:
 	case RangeStart:
 		points = new ArdourCanvas::Points ();
@@ -207,10 +219,12 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 		points->push_back (ArdourCanvas::Duple (    0.0, MH));
 		points->push_back (ArdourCanvas::Duple (    0.0, 0.0));
 
-		_shift = 0;
-		_label_offset = 8.0;
+		_shift = 0 * scale;
+		_label_offset = 8.0 * scale;
 		break;
 
+	case PunchOut:
+	case LoopEnd:
 	case SessionEnd:
 	case RangeEnd:
 		points = new ArdourCanvas::Points (); // leaks
@@ -220,51 +234,21 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 		points->push_back (ArdourCanvas::Duple ( M6, 0.0));
 
 		_shift = M6;
-		_label_offset = 0.0;
+		_label_offset = 0.0 * scale;
 		break;
 
-	case LoopStart:
+	case Cue:
+		float offs = 1.0 * scale;
+
 		points = new ArdourCanvas::Points ();
-		points->push_back (ArdourCanvas::Duple (0.0, 0.0));
-		points->push_back (ArdourCanvas::Duple (MH, MH));
-		points->push_back (ArdourCanvas::Duple (0.0, MH));
-		points->push_back (ArdourCanvas::Duple (0.0, 0.0));
+		points->push_back (ArdourCanvas::Duple (offs,    offs));
+		points->push_back (ArdourCanvas::Duple (MH-offs*2, offs));
+		points->push_back (ArdourCanvas::Duple (MH-offs*2, MH-offs*2));
+		points->push_back (ArdourCanvas::Duple (offs,    MH-offs*2));
+		points->push_back (ArdourCanvas::Duple (offs,    offs));
 
-		_shift = 0;
-		_label_offset = MH;
-		break;
-
-	case LoopEnd:
-		points = new ArdourCanvas::Points ();
-		points->push_back (ArdourCanvas::Duple (MH,  0.0));
-		points->push_back (ArdourCanvas::Duple (MH, MH));
-		points->push_back (ArdourCanvas::Duple (0.0, MH));
-		points->push_back (ArdourCanvas::Duple (MH, 0.0));
-
-		_shift = MH;
-		_label_offset = 0.0;
-		break;
-
-	case PunchIn:
-		points = new ArdourCanvas::Points ();
-		points->push_back (ArdourCanvas::Duple (0.0, 0.0));
-		points->push_back (ArdourCanvas::Duple (MH, 0.0));
-		points->push_back (ArdourCanvas::Duple (0.0, MH));
-		points->push_back (ArdourCanvas::Duple (0.0, 0.0));
-
-		_shift = 0;
-		_label_offset = MH;
-		break;
-
-	case PunchOut:
-		points = new ArdourCanvas::Points ();
-		points->push_back (ArdourCanvas::Duple (0.0, 0.0));
-		points->push_back (ArdourCanvas::Duple (MH, 0.0));
-		points->push_back (ArdourCanvas::Duple (MH, MH));
-		points->push_back (ArdourCanvas::Duple (0.0, 0.0));
-
-		_shift = MH;
-		_label_offset = 0.0;
+		_shift = MH/2;
+		_label_offset = 2.0 * scale;
 		break;
 
 	}
@@ -278,21 +262,38 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 	group->name = string_compose ("Marker::group for %1", annotation);
 #endif
 
-	if (type != RegionCue) {
-		_name_background = new ArdourCanvas::Rectangle (group);
+	if ((type != RegionCue) && (type != Meter) && (type != Tempo)) {
+		_name_flag = new ArdourCanvas::Rectangle (group);
 #ifdef CANVAS_DEBUG
-		_name_background->name = string_compose ("Marker::_name_background for %1", annotation);
+		_name_flag->name = string_compose ("Marker::_name_flag for %1", annotation);
 #endif
 	} else {
-		_name_background = 0;
+		_name_flag = 0;
 	}
 
 	/* adjust to properly locate the tip */
 
-	mark = new ArdourCanvas::Polygon (group);
-	CANVAS_DEBUG_NAME (mark, string_compose ("Marker::mark for %1", annotation));
+	_pcue = new ArdourCanvas::Circle (group);
+	_pmark = new ArdourCanvas::Polygon (group);
+	CANVAS_DEBUG_NAME (_pmark, string_compose ("Marker::mark for %1", annotation));
 
-	mark->set (*points);
+	_pmark->set (*points);
+
+	if (_type == Cue) {
+		_pcue->set_outline(false);
+		_pcue->set_fill(true);
+		_pcue->set_center ( ArdourCanvas::Duple (MH/2, MH/2) );
+		_pcue->set_radius ( MH/2 );
+
+		_pcue->show();
+		_pmark->hide();
+		if (_name_flag) {
+			_name_flag->hide();
+		}
+	} else {
+		_pcue->hide();
+		_pmark->show();
+	}
 
 	/* setup name pixbuf sizes */
 	name_font = get_font_for_style (N_("MarkerText"));
@@ -309,7 +310,7 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 	CANVAS_DEBUG_NAME (_name_item, string_compose ("ArdourMarker::_name_item for %1", annotation));
 	_name_item->set_font_description (name_font);
 	_name_item->set_color (RGBA_TO_UINT (0,0,0,255));
-	_name_item->set_position (ArdourCanvas::Duple (_label_offset, (marker_height - name_height - 1) * .5 ));
+	_name_item->set_position (ArdourCanvas::Duple (_label_offset, (marker_height - 4)*0.5 - (name_height) * .5 ));
 
 	set_color_rgba (rgba);
 
@@ -322,7 +323,8 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 	 */
 
 	group->set_data ("marker", this);
-	mark->set_data ("marker", this);
+	_pmark->set_data ("marker", this);
+	_pcue->set_data ("marker", this);
 
 	if (handle_events) {
 		group->Event.connect (sigc::bind (sigc::mem_fun (editor, &PublicEditor::canvas_marker_event), group, this));
@@ -354,8 +356,10 @@ ArdourMarker::set_selected (bool s)
 	_selected = s;
 	setup_line ();
 
-	mark->set_fill_color (_selected ? UIConfiguration::instance().color ("entered marker") : _color);
-	mark->set_outline_color ( _selected ? UIConfiguration::instance().color ("entered marker") : _color );
+	_pcue->set_fill_color (_selected ? UIConfiguration::instance().color ("entered marker") : _color);
+
+	_pmark->set_fill_color (_selected ? UIConfiguration::instance().color ("entered marker") : _color);
+	_pmark->set_outline_color ( _selected ? UIConfiguration::instance().color ("entered marker") : _color );
 }
 
 void
@@ -446,15 +450,20 @@ ArdourMarker::set_line_height (double h)
 }
 
 void
-ArdourMarker::set_name (const string& new_name)
+ArdourMarker::set_name (const string& new_name, const string& tooltip)
 {
 	_name = new_name;
 
-	mark->set_tooltip(new_name);
-	if (_name_background) {
-		_name_background->set_tooltip(new_name);
+	_pcue->set_tooltip (new_name);
+	_pmark->set_tooltip (new_name);
+	if (_name_flag) {
+		_name_flag->set_tooltip (new_name);
 	}
-	_name_item->set_tooltip(new_name);
+	if (tooltip.empty()) {
+		_name_item->set_tooltip (new_name);
+	} else {
+		_name_item->set_tooltip (tooltip);
+	}
 
 	setup_name_display ();
 }
@@ -477,8 +486,10 @@ ArdourMarker::setup_name_display ()
 		limit = _right_label_limit;
 	}
 
-	const float padding =  std::max(2.f, rintf(2.f * UIConfiguration::instance().get_ui_scale()));
-	const double M3 = std::max(1.f, rintf(3.f * UIConfiguration::instance().get_ui_scale()));
+	float scale = UIConfiguration::instance().get_ui_scale();
+
+	const float padding =  std::max(2.f, rintf(2.f * scale));
+	const double M3 = std::max(1.f, rintf(3.f * scale));
 
 	/* Work out how wide the name can be */
 	int name_width = min ((double) pixel_width (_name, name_font) + padding, limit);
@@ -493,13 +504,30 @@ ArdourMarker::setup_name_display ()
 		}
 
 		_name_item->clamp_width (name_width);
-		_name_item->set (_name);
 
-		if (_name_background) {
+		if (_type == Cue) {
+			if (_cue_index != CueRecord::stop_all) {
+				_name_item->set (cue_marker_name (_cue_index));
+				int tw = _name_item->text_width();
+				int th = _name_item->text_height();
+				_name_item->set_position (ArdourCanvas::Duple (_pcue->width()/2 - tw/2 - 1*scale, _pcue->height()/2 - th/2 - 1*scale ));
+
+				_pcue->show();  //show the circle
+				_pmark->hide();
+			} else {
+				_name_item->set ("");
+				_pcue->hide();  //show a square
+				_pmark->show();
+			}
+		} else {
+			_name_item->set (_name);
+		}
+
+		if (_name_flag) {
 			if (label_on_left ()) {
 				/* adjust right edge of background to fit text */
-				_name_background->set_x0 (_name_item->position().x - padding);
-				_name_background->set_x1 (_name_item->position().x + name_width + _shift);
+				_name_flag->set_x0 (_name_item->position().x - padding);
+				_name_flag->set_x1 (_name_item->position().x + name_width + _shift);
 			} else {
 				/* right edge remains at zero (group-relative). Add
 				 * arbitrary 2 pixels of extra padding at the end
@@ -508,26 +536,30 @@ ArdourMarker::setup_name_display ()
 				case Tempo:
 					_name_item->hide ();
 					// tip's x-pos is at "M3", box is 2x marker's
-					_name_background->set_x0 (-M3);
-					_name_background->set_x1 (3 * M3);
+					_name_flag->set_x0 (-M3);
+					_name_flag->set_x1 (3 * M3);
 					break;
 				case Mark:
 				case Meter:
-					_name_background->set_x0 (M3);
-					_name_background->set_x1 (_name_item->position().x + name_width + padding);
+					_name_flag->set_x0 (M3);
+					_name_flag->set_x1 (_name_item->position().x + name_width + padding);
+					break;
+				case Cue:
+					_name_flag->set_x0 (M3);
+					_name_flag->set_x1 (_name_item->position().x + name_width + padding + 1*scale);
 					break;
 				default:
-					_name_background->set_x0 (0);
-					_name_background->set_x1 (_name_item->position().x + name_width + padding);
+					_name_flag->set_x0 (0);
+					_name_flag->set_x1 (_name_item->position().x + name_width + padding);
 					break;
 				}
 			}
 		}
 	}
 
-	if (_name_background) {
-		_name_background->set_y0 (0);
-		_name_background->set_y1 (marker_height + 1);
+	if (_name_flag) {
+		_name_flag->set_y0 (0);
+		_name_flag->set_y1 (marker_height - 2);
 	}
 }
 
@@ -568,8 +600,9 @@ void
 ArdourMarker::set_points_color (uint32_t c)
 {
 	_points_color = c;
-	mark->set_fill_color (_points_color);
-	mark->set_outline_color (_points_color);
+	_pcue->set_fill_color (_points_color);
+	_pmark->set_fill_color (_points_color);
+	_pmark->set_outline_color (_points_color);
 }
 
 void
@@ -577,27 +610,27 @@ ArdourMarker::set_color_rgba (uint32_t c)
 {
 	_color = c;
 
-	mark->set_fill_color (_selected ? UIConfiguration::instance().color ("entered marker") : _color);
-	mark->set_outline_color ( _selected ? UIConfiguration::instance().color ("entered marker") : _color );
+	_pcue->set_fill_color (_selected ? UIConfiguration::instance().color ("entered marker") : _color);
+	_pmark->set_fill_color (_selected ? UIConfiguration::instance().color ("entered marker") : _color);
+	_pmark->set_outline_color ( _selected ? UIConfiguration::instance().color ("entered marker") : _color );
 
 	if (_track_canvas_line && ((_type == RegionCue) || !_selected)) {
 		_track_canvas_line->set_outline_color (_color);
 	}
 
 	if (_name_item) {
-		if (_name_background) {
+		if (_name_flag) {
 			/* make sure text stands out over bg color */
 			_name_item->set_color (contrasting_text_color (_color));
 		} else {
-			/* make sure text is same color as everything else */
-			_name_item->set_color (_color);
+			_name_item->set_color (RGBA_TO_UINT (255,255,255,255));  //white: matched to TempoCurve text
 		}
 	}
 
-	if (_name_background) {
-		_name_background->set_fill (true);
-		_name_background->set_fill_color (UINT_RGBA_CHANGE_A (_color, 0x70));
-		_name_background->set_outline (false);
+	if (_name_flag) {
+		_name_flag->set_fill (true);
+		_name_flag->set_fill_color (_color);
+		_name_flag->set_outline (false);
 	}
 }
 
@@ -631,51 +664,57 @@ ArdourMarker::set_right_label_limit (double p)
 	}
 }
 
+MetricMarker::MetricMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint32 rgba, const string& annotation,
+                            Type type, timepos_t const & pos, bool handle_events)
+	: ArdourMarker (ed, parent, rgba, annotation, type, pos, false)
+{
+}
+
 /***********************************************************************/
 
-TempoMarker::TempoMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, const string& text,
-                          Temporal::TempoPoint& temp)
-	: ArdourMarker (editor, parent, rgba, text, Tempo, temp.time(), false)
+TempoMarker::TempoMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, const string& text, Temporal::TempoPoint const & temp, samplepos_t sample, uint32_t curve_color)
+	: MetricMarker (editor, parent, rgba, text, Tempo, temp.time(), false)
 	, _tempo (&temp)
 {
 	group->Event.connect (sigc::bind (sigc::mem_fun (editor, &PublicEditor::canvas_tempo_marker_event), group, this));
+	/* points[1].x gives the width of the marker */
+	_curve = new TempoCurve (editor, *group, curve_color, temp, true, (*points)[1].x);
+	_curve->the_item().lower_to_bottom ();
 }
 
 TempoMarker::~TempoMarker ()
 {
+	delete _curve;
 }
 
 void
-TempoMarker::update_height_mark (const double ratio)
+TempoMarker::update ()
 {
-	const double MH = marker_height - .5;
-	const double top = MH * (1 - ratio);
-	const double M3 = std::max(1.f, rintf(3.f * UIConfiguration::instance().get_ui_scale()));
-	const double M6 = std::max(2.f, rintf(6.f * UIConfiguration::instance().get_ui_scale()));
+	set_position (_tempo->time());
+}
 
-	delete points;
-	points = new ArdourCanvas::Points ();
-	points->push_back (ArdourCanvas::Duple ( M3, top));
-	points->push_back (ArdourCanvas::Duple ( M6, min (top + (MH * .6), MH)));
-	points->push_back (ArdourCanvas::Duple ( M6, MH));
-	points->push_back (ArdourCanvas::Duple (0.0, MH));
-	points->push_back (ArdourCanvas::Duple (0.0, min (top + (MH * .6), MH)));
-	points->push_back (ArdourCanvas::Duple ( M3, top));
-
-	mark->set (*points);
+TempoCurve&
+TempoMarker::curve()
+{
+	return *_curve;
 }
 
 void
-TempoMarker::reset_tempo (Temporal::TempoPoint & t)
+TempoMarker::reset_tempo (Temporal::TempoPoint const & t)
 {
 	_tempo = &t;
 }
 
+Temporal::Point const &
+TempoMarker::point() const
+{
+	return *_tempo;
+}
 
 /***********************************************************************/
 
-MeterMarker::MeterMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, const string& text, Temporal::MeterPoint& m)
-	: ArdourMarker (editor, parent, rgba, text, Meter, m.time(), false)
+MeterMarker::MeterMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, const string& text, Temporal::MeterPoint const & m)
+	: MetricMarker (editor, parent, rgba, text, Meter, m.time(), false)
 	, _meter (&m)
 {
 	group->Event.connect (sigc::bind (sigc::mem_fun (editor, &PublicEditor::canvas_meter_marker_event), group, this));
@@ -686,17 +725,37 @@ MeterMarker::~MeterMarker ()
 }
 
 void
-MeterMarker::reset_meter (Temporal::MeterPoint & m)
+MeterMarker::update ()
+{
+	set_position (_meter->time());
+}
+
+void
+MeterMarker::reset_meter (Temporal::MeterPoint const & m)
 {
 	_meter = &m;
 }
 
+Temporal::Point const &
+MeterMarker::point() const
+{
+	return *_meter;
+}
+
 /***********************************************************************/
 
-BBTMarker::BBTMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, const string& text, Temporal::MusicTimePoint& p)
-	: ArdourMarker (editor, parent, rgba, text, BBTPosition, p.time(), false)
+BBTMarker::BBTMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, Temporal::MusicTimePoint const & p)
+	: MetricMarker (editor, parent, rgba, p.name(), BBTPosition, p.time(), false)
 	, _point (&p)
 {
+	std::stringstream full_tooltip;
+
+	full_tooltip << name();
+	full_tooltip << " (";
+	full_tooltip << p.bbt();
+	full_tooltip << ')';
+
+	set_name (name(), full_tooltip.str());
 	group->Event.connect (sigc::bind (sigc::mem_fun (editor, &PublicEditor::canvas_bbt_marker_event), group, this));
 }
 
@@ -705,7 +764,19 @@ BBTMarker::~BBTMarker ()
 }
 
 void
-BBTMarker::reset_point (Temporal::MusicTimePoint & p)
+BBTMarker::update ()
+{
+	set_position (_point->time());
+}
+
+void
+BBTMarker::reset_point (Temporal::MusicTimePoint const & p)
 {
 	_point = &p;
+}
+
+Temporal::Point const &
+BBTMarker::point() const
+{
+	return *_point;
 }

@@ -60,8 +60,8 @@ trim_state_for_mixer_copy (Session*s, XMLNode& node)
 					(*i)->set_property ("type", "dangling-aux-send");
 					continue;
 				}
-				boost::shared_ptr<Route> r = s->route_by_name (target->value ());
-				if (!r || boost::dynamic_pointer_cast<Track> (r)) {
+				std::shared_ptr<Route> r = s->route_by_name (target->value ());
+				if (!r || std::dynamic_pointer_cast<Track> (r)) {
 					(*i)->set_property ("type", "dangling-aux-send");
 					continue;
 				}
@@ -101,7 +101,7 @@ trim_state_for_mixer_copy (Session*s, XMLNode& node)
 }
 
 static void
-copy_mixer_settings (Session*s, boost::shared_ptr<Route> dst, XMLNode& state)
+copy_mixer_settings (Session*s, std::shared_ptr<Route> dst, XMLNode& state)
 {
 	PBD::Stateful::ForceIDRegeneration force_ids;
 
@@ -136,15 +136,15 @@ copy_session_routes (
 	}
 
 	/* get route state from first session */
-	boost::shared_ptr<RouteList> rl = s->get_routes ();
+	std::shared_ptr<RouteList> rl = s->get_routes ();
 	for (RouteList::iterator i = rl->begin (); i != rl->end (); ++i) {
-		boost::shared_ptr<Route> r = *i;
+		std::shared_ptr<Route> r = *i;
 		if (r->is_master () || r->is_monitor () || r->is_auditioner ()) {
 			continue;
 		}
 		XMLNode& state (r->get_state ());
 		routestate[r->name ()] = &state;
-		if (boost::dynamic_pointer_cast<Track> (r)) {
+		if (std::dynamic_pointer_cast<Track> (r)) {
 			continue;
 		}
 		buslist[r->name ()] = &state;
@@ -178,12 +178,12 @@ copy_session_routes (
 	 */
 	rl = s->get_routes ();
 	for (RouteList::iterator i = rl->begin (); i != rl->end (); ++i) {
-		boost::shared_ptr<Route> r = *i;
+		std::shared_ptr<Route> r = *i;
 		/* skip special busses */
 		if (r->is_master () || r->is_monitor () || r->is_auditioner ()) {
 			continue;
 		}
-		if (boost::dynamic_pointer_cast<Track> (r)) {
+		if (std::dynamic_pointer_cast<Track> (r)) {
 			continue;
 		}
 		/* find matching route by name */
@@ -205,12 +205,12 @@ copy_session_routes (
 	/* iterate over all tracks in the target session.. */
 	rl = s->get_routes ();
 	for (RouteList::iterator i = rl->begin (); i != rl->end (); ++i) {
-		boost::shared_ptr<Route> r = *i;
+		std::shared_ptr<Route> r = *i;
 		/* skip special busses */
 		if (r->is_master () || r->is_monitor () || r->is_auditioner ()) {
 			continue;
 		}
-		if (!boost::dynamic_pointer_cast<Track> (r)) {
+		if (!std::dynamic_pointer_cast<Track> (r)) {
 			continue;
 		}
 
@@ -265,11 +265,11 @@ static void usage () {
 This utility copies mixer-settings from the src-session to the dst-session.\n\
 Both <src> and <dst> are paths to .ardour session files.\n\
 If --snapshot is not given, the <dst> session file is overwritten.\n\
-When --snapshot is set, a new snaphot in the <dst> session is created.\n\
+When --snapshot is set, a new snapshot in the <dst> session is created.\n\
 \n");
 
-	printf ("Report bugs to <http://tracker.ardour.org/>\n"
-	        "Website: <http://ardour.org/>\n");
+	printf ("Report bugs to <https://tracker.ardour.org/>\n"
+	        "Website: <https://ardour.org/>\n");
 	::exit (EXIT_SUCCESS);
 }
 

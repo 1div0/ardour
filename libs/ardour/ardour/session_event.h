@@ -23,9 +23,9 @@
 #define __ardour_session_event_h__
 
 #include <list>
+#include <memory>
+
 #include <boost/function.hpp>
-#include <boost/shared_ptr.hpp>
-#include <boost/weak_ptr.hpp>
 
 #include "pbd/pool.h"
 #include "pbd/ringbuffer.h"
@@ -67,6 +67,7 @@ public:
 		StartRoll,
 		EndRoll,
 		TransportStateChange,
+		SyncCues,
 
 		/* only one of each of these events can be queued at any one time */
 
@@ -90,9 +91,10 @@ public:
 		bool             yes_or_no;
 		samplepos_t      target2_sample;
 		OverwriteReason  overwrite;
+		int32_t          scene;
 	};
 
-	boost::weak_ptr<Track> track;
+	std::weak_ptr<Track> track;
 
 	union {
 		bool second_yes_or_no;
@@ -108,8 +110,8 @@ public:
 
 	typedef boost::function<void (SessionEvent*)> RTeventCallback;
 
-	boost::shared_ptr<ControlList> controls; /* apply to */
-	boost::shared_ptr<RouteList> routes;     /* apply to */
+	std::shared_ptr<ControlList> controls; /* apply to */
+	std::shared_ptr<RouteList> routes;     /* apply to */
 	boost::function<void (void)> rt_slot;    /* what to call in RT context */
 	RTeventCallback              rt_return;  /* called after rt_slot, with this event as an argument */
 	PBD::EventLoop*              event_loop;
@@ -117,12 +119,12 @@ public:
 	std::list<TimelineRange> audio_range;
 	std::list<TimelineRange> music_range;
 
-	boost::shared_ptr<Region> region;
-	boost::shared_ptr<TransportMaster> transport_master;
+	std::shared_ptr<Region> region;
+	std::shared_ptr<TransportMaster> transport_master;
 
 	SessionEvent (Type t, Action a, samplepos_t when, samplepos_t where, double spd, bool yn = false, bool yn2 = false, bool yn3 = false);
 
-	void set_track (boost::shared_ptr<Track> t) {
+	void set_track (std::shared_ptr<Track> t) {
 		track = t;
 	}
 
@@ -146,12 +148,13 @@ public:
 	static bool has_per_thread_pool ();
 	static void create_per_thread_pool (const std::string& n, uint32_t nitems);
 	static void init_event_pool ();
+	static guint pool_available ();
 
-	CrossThreadPool* event_pool() const { return own_pool; }
+	PBD::CrossThreadPool* event_pool() const { return own_pool; }
 
 private:
-	static PerThreadPool* pool;
-	CrossThreadPool* own_pool;
+	static PBD::PerThreadPool* pool;
+	PBD::CrossThreadPool*      own_pool;
 
 	friend class Butler;
 };
@@ -196,5 +199,7 @@ protected:
 };
 
 } /* namespace */
+
+LIBARDOUR_API std::ostream& operator<<(std::ostream&, const ARDOUR::SessionEvent&);
 
 #endif /* __ardour_session_event_h__ */

@@ -44,16 +44,32 @@ write_automation_list_xml (XMLNode* node, std::string filename)
 }
 
 void
+AutomationListPropertyTest::setUp ()
+{
+	// The reference files were created with this superclock ticks per second
+	// value. Setting this here makes sure we don't need to update all the
+	// reference files whenever the default value changes.
+	_saved_superclock_ticks_per_second = Temporal::superclock_ticks_per_second();
+	Temporal::set_superclock_ticks_per_second(56448000);
+}
+
+void
+AutomationListPropertyTest::tearDown ()
+{
+	Temporal::set_superclock_ticks_per_second(_saved_superclock_ticks_per_second);
+}
+
+void
 AutomationListPropertyTest::basicTest ()
 {
 	list<string> ignore_properties;
 	ignore_properties.push_back ("id");
 
-	PropertyDescriptor<boost::shared_ptr<AutomationList> > descriptor;
+	PropertyDescriptor<std::shared_ptr<AutomationList> > descriptor;
 	descriptor.property_id = g_quark_from_static_string ("FadeIn");
 	AutomationListProperty property (
 		descriptor,
-		boost::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (FadeInAutomation)))
+		std::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (FadeInAutomation), Temporal::AudioTime))
 		);
 
 	property.clear_changes ();
@@ -61,8 +77,8 @@ AutomationListPropertyTest::basicTest ()
 	/* No change since we just cleared them */
 	CPPUNIT_ASSERT_EQUAL (false, property.changed());
 
-	property->add (1, 0.5, false, false);
-	property->add (3, 2.0, false, false);
+	property->add (timepos_t(1), 0.5, false, false);
+	property->add (timepos_t(3), 2.0, false, false);
 
 	/* Now it has changed */
 	CPPUNIT_ASSERT_EQUAL (true, property.changed());
@@ -83,8 +99,8 @@ AutomationListPropertyTest::basicTest ()
 	/* Do some more */
 	property.clear_changes ();
 	CPPUNIT_ASSERT_EQUAL (false, property.changed());
-	property->add (5, 1.5, false, false);
-	property->add (7, 1.0, false, false);
+	property->add (timepos_t(5), 1.5, false, false);
+	property->add (timepos_t(7), 1.0, false, false);
 	CPPUNIT_ASSERT_EQUAL (true, property.changed());
 	delete foo;
 	foo = new XMLNode ("test");
@@ -99,13 +115,13 @@ class Fred : public StatefulDestructible
 {
 public:
 	Fred ()
-		: _jim (_descriptor, boost::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (FadeInAutomation))))
+		: _jim (_descriptor, std::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (FadeInAutomation), Temporal::AudioTime)))
 
 	{
 		add_property (_jim);
 	}
 
-	XMLNode & get_state () {
+	XMLNode & get_state () const {
 		XMLNode* n = new XMLNode ("State");
 		add_properties (*n);
 		return *n;
@@ -121,10 +137,10 @@ public:
 	}
 
 	AutomationListProperty _jim;
-	static PropertyDescriptor<boost::shared_ptr<AutomationList> > _descriptor;
+	static PropertyDescriptor<std::shared_ptr<AutomationList> > _descriptor;
 };
 
-PropertyDescriptor<boost::shared_ptr<AutomationList> > Fred::_descriptor;
+PropertyDescriptor<std::shared_ptr<AutomationList> > Fred::_descriptor;
 
 void
 AutomationListPropertyTest::undoTest ()
@@ -134,16 +150,16 @@ AutomationListPropertyTest::undoTest ()
 
 	Fred::make_property_quarks ();
 
-	boost::shared_ptr<Fred> sheila (new Fred);
+	std::shared_ptr<Fred> sheila (new Fred);
 
 	/* Add some data */
-	sheila->_jim->add (0, 1, false, false);
-	sheila->_jim->add (1, 2, false, false);
+	sheila->_jim->add (timepos_t(0), 1, false, false);
+	sheila->_jim->add (timepos_t(1), 2, false, false);
 
 	/* Do a `command' */
 	sheila->clear_changes ();
-	sheila->_jim->add (2, 1, false, false);
-	sheila->_jim->add (3, 0, false, false);
+	sheila->_jim->add (timepos_t(2), 1, false, false);
+	sheila->_jim->add (timepos_t(3), 0, false, false);
 	StatefulDiffCommand sdc (sheila);
 
 	std::string test_data_filename = "automation_list_property_test3.ref";

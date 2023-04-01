@@ -5,6 +5,7 @@
  * Modified for Ardour and released under the same terms.
  */
 
+#include <cassert>
 #include <string.h>
 #include <iostream>
 
@@ -103,12 +104,12 @@ XMLTree::read_internal(bool validate)
 		_doc = xmlCtxtReadFile(ctxt, _filename.c_str(), NULL, XML_PARSE_HUGE);
 	}
 
-	/* check if parsing suceeded */
+	/* check if parsing succeeded */
 	if (_doc == NULL) {
 		xmlFreeParserCtxt(ctxt);
 		return false;
 	} else {
-		/* check if validation suceeded */
+		/* check if validation succeeded */
 		if (validate && ctxt->valid == 0) {
 			xmlFreeParserCtxt(ctxt);
 			throw XMLException("Failed to validate document " + _filename);
@@ -381,6 +382,26 @@ XMLNode::set_content(const string& c)
 	return _content;
 }
 
+/* Return the content of the first content child
+ *
+ * `<node>Foo</node>`.
+ * the `node` is not a content node, but has a child-node `text`.
+ *
+ * This method effectively is identical to
+ * return this->child("text")->content()
+ */
+const string&
+XMLNode::child_content() const
+{
+	static const string empty = "";
+	for (XMLNodeList::const_iterator n = children ().begin (); n != children ().end (); ++n) {
+		if ((*n)->is_content ()) {
+			return (*n)->content ();
+		}
+	}
+	return empty;
+}
+
 XMLNode*
 XMLNode::child (const char* name) const
 {
@@ -443,7 +464,7 @@ XMLNode::add_child_copy(const XMLNode& n)
 	return copy;
 }
 
-boost::shared_ptr<XMLSharedNodeList>
+std::shared_ptr<XMLSharedNodeList>
 XMLTree::find(const string xpath, XMLNode* node) const
 {
 	xmlXPathContext* ctxt;
@@ -457,8 +478,8 @@ XMLTree::find(const string xpath, XMLNode* node) const
 		ctxt = xmlXPathNewContext(_doc);
 	}
 
-	boost::shared_ptr<XMLSharedNodeList> result =
-		boost::shared_ptr<XMLSharedNodeList>(find_impl(ctxt, xpath));
+	std::shared_ptr<XMLSharedNodeList> result =
+		std::shared_ptr<XMLSharedNodeList>(find_impl(ctxt, xpath));
 
 	xmlXPathFreeContext(ctxt);
 	if (doc) {
@@ -791,7 +812,7 @@ static XMLSharedNodeList* find_impl(xmlXPathContext* ctxt, const string& xpath)
 	if (nodeset) {
 		for (int i = 0; i < nodeset->nodeNr; ++i) {
 			XMLNode* node = readnode(nodeset->nodeTab[i]);
-			nodes->push_back(boost::shared_ptr<XMLNode>(node));
+			nodes->push_back(std::shared_ptr<XMLNode>(node));
 		}
 	} else {
 		// return empty set

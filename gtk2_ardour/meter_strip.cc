@@ -124,7 +124,7 @@ MeterStrip::MeterStrip (int metricmode, MeterType mt)
 	UIConfiguration::instance().DPIReset.connect (sigc::mem_fun (*this, &MeterStrip::on_theme_changed));
 }
 
-MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
+MeterStrip::MeterStrip (Session* sess, std::shared_ptr<ARDOUR::Route> rt)
 	: SessionHandlePtr (sess)
 	, RouteUI ((Session*) 0)
 	, _route (rt)
@@ -136,11 +136,11 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	, _strip_type (0)
 	, _metricmode (-1)
 	, level_meter (0)
+	, gain_control (ArdourKnob::default_elements, ArdourKnob::Detent)
 	, _suspend_menu_callbacks (false)
 {
 	mtr_vbox.set_spacing (PX_SCALE(2, 2));
 	nfo_vbox.set_spacing (PX_SCALE(2, 2));
-	SessionHandlePtr::set_session (sess);
 	RouteUI::init ();
 	RouteUI::set_route (rt);
 
@@ -169,7 +169,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	peak_display.set_name ("meterbridge peakindicator");
 	peak_display.set_elements((ArdourButton::Element) (ArdourButton::Edge|ArdourButton::Body));
 	set_tooltip (peak_display, _("Reset Peak"));
-	peak_display.unset_flags (Gtk::CAN_FOCUS);
+	peak_display.set_can_focus (false);
 	peak_display.set_size_request(PX_SCALE(12, 12), PX_SCALE(8, 8));
 	peak_display.set_corner_radius(2); // ardour-button scales this
 
@@ -219,6 +219,17 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	solobox.pack_start(*solo_button, true, false);
 	btnbox.pack_start(solobox, false, false, 1);
 
+	/* Fader/Gain */
+	gain_control.set_size_request (PX_SCALE (18, 18), PX_SCALE (18, 18));
+	gain_control.set_tooltip_prefix (_("Level: "));
+	gain_control.set_name ("trim knob"); // XXX
+	gain_control.StartGesture.connect (sigc::mem_fun (*this, &MeterStrip::gain_start_touch));
+	gain_control.StopGesture.connect (sigc::mem_fun (*this, &MeterStrip::gain_end_touch));
+	gain_control.set_controllable (_route->gain_control ());
+
+	gain_box.pack_start(gain_control, true, false);
+	btnbox.pack_start(gain_box, false, false, 1);
+
 	rec_enable_button->set_corner_radius(2);
 	rec_enable_button->set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
 
@@ -239,6 +250,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	recbox.set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
 	mon_in_box.set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
 	mon_disk_box.set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
+	gain_box.set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
 	spacer.set_size_request(-1,0);
 
 	update_button_box();
@@ -263,6 +275,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	name_label.show();
 	peak_display.show();
 	peakbx.show();
+	gain_control.show ();
 	meter_ticks1_area.show();
 	meter_ticks2_area.show();
 	meterbox.show();
@@ -277,7 +290,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	nfo_vbox.show();
 	namenumberbx.show();
 
-	if (boost::dynamic_pointer_cast<Track>(_route)) {
+	if (std::dynamic_pointer_cast<Track>(_route)) {
 		monitor_input_button->show();
 		monitor_disk_button->show();
 	} else {
@@ -316,12 +329,12 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	if (_route->is_master()) {
 		_strip_type = 4;
 	}
-	else if (boost::dynamic_pointer_cast<AudioTrack>(_route) == 0
-			&& boost::dynamic_pointer_cast<MidiTrack>(_route) == 0) {
+	else if (std::dynamic_pointer_cast<AudioTrack>(_route) == 0
+			&& std::dynamic_pointer_cast<MidiTrack>(_route) == 0) {
 		/* non-master bus */
 		_strip_type = 3;
 	}
-	else if (boost::dynamic_pointer_cast<MidiTrack>(_route)) {
+	else if (std::dynamic_pointer_cast<MidiTrack>(_route)) {
 		_strip_type = 2;
 	}
 	else {
@@ -462,28 +475,25 @@ MeterStrip::meter_configuration_changed (ChanCount c)
 		}
 	}
 
-	if (boost::dynamic_pointer_cast<AudioTrack>(_route) == 0
-			&& boost::dynamic_pointer_cast<MidiTrack>(_route) == 0
-			) {
-		meter_ticks1_area.set_name ("MyAudioBusMetricsLeft");
-		meter_ticks2_area.set_name ("MyAudioBusMetricsRight");
-		_has_midi = false;
-	}
-	else if (type == (1 << DataType::AUDIO)) {
-		meter_ticks1_area.set_name ("MyAudioTrackMetricsLeft");
-		meter_ticks2_area.set_name ("MyAudioTrackMetricsRight");
-		_has_midi = false;
-	}
-	else if (type == (1 << DataType::MIDI)) {
+	bool is_audio_track = _route && std::dynamic_pointer_cast<AudioTrack>(_route) != 0;
+	bool is_midi_track = _route && std::dynamic_pointer_cast<MidiTrack>(_route) != 0;
+
+	if (!is_audio_track && (is_midi_track || /* MIDI Bus */ (type == (1 << DataType::MIDI)))) {
 		meter_ticks1_area.set_name ("MidiTrackMetricsLeft");
 		meter_ticks2_area.set_name ("MidiTrackMetricsRight");
-		_has_midi = true;
-	} else {
-		meter_ticks1_area.set_name ("AudioMidiTrackMetricsLeft");
-		meter_ticks2_area.set_name ("AudioMidiTrackMetricsRight");
-		_has_midi = true;
 	}
+	else if (_route && (!is_audio_track && !is_midi_track)) {
+		meter_ticks1_area.set_name ("AudioBusMetricsLeft");
+		meter_ticks2_area.set_name ("AudioBusMetricsRight");
+	}
+	else {
+		meter_ticks1_area.set_name ("AudioTrackMetricsLeft");
+		meter_ticks2_area.set_name ("AudioTrackMetricsRight");
+	}
+
 	set_tick_bar(_tick_bar);
+
+	_has_midi = 0 != (type & (1 << DataType::MIDI));
 
 	on_theme_changed();
 	if (old_has_midi != _has_midi) {
@@ -765,6 +775,12 @@ MeterStrip::update_button_box ()
 		mon_in_box.hide();
 		mon_disk_box.hide();
 	}
+	if (_session->config.get_show_fader_on_meterbridge ()) {
+		height += PX_SCALE(18, 18) + PX_SCALE(2, 2);
+		gain_box.show ();
+	} else {
+		gain_box.hide ();
+	}
 	btnbox.set_size_request(PX_SCALE(18, 18), height);
 	check_resize();
 }
@@ -799,6 +815,9 @@ MeterStrip::parameter_changed (std::string const & p)
 		update_name_box();
 	}
 	else if (p == "show-monitor-on-meterbridge") {
+		update_button_box();
+	}
+	else if (p == "show-fader-on-meterbridge") {
 		update_button_box();
 	}
 	else if (p == "meterbridge-label-height") {
@@ -990,3 +1009,14 @@ MeterStrip::color () const
 	return RouteUI::route_color ();
 }
 
+void
+MeterStrip::gain_start_touch ()
+{
+	_route->gain_control ()->start_touch (timepos_t (_session->transport_sample ()));
+}
+
+void
+MeterStrip::gain_end_touch ()
+{
+	_route->gain_control ()->stop_touch (timepos_t (_session->transport_sample ()));
+}

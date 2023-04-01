@@ -163,14 +163,13 @@ AudioGhostRegion::set_colors ()
 	guint fill_color;
 
 	if (is_automation_ghost()) {
-		fill_color = UIConfiguration::instance().color ("ghost track wave fill");
-	}
-	else {
+		fill_color = UIConfiguration::instance().color_mod("ghost track wave fill", "region alpha");
+	} else {
 		fill_color = source_track_color(200);
 	}
 
 	for (uint32_t n=0; n < waves.size(); ++n) {
-		waves[n]->set_outline_color (UIConfiguration::instance().color ("ghost track wave"));
+		waves[n]->set_outline_color (UIConfiguration::instance().color_mod ("ghost track wave", "region alpha"));
 		waves[n]->set_fill_color (fill_color);
 		waves[n]->set_clip_color (UIConfiguration::instance().color ("ghost track wave clip"));
 		waves[n]->set_zero_color (UIConfiguration::instance().color ("ghost track zero line"));
@@ -208,7 +207,7 @@ MidiGhostRegion::MidiGhostRegion(MidiRegionView& rv,
                                  TimeAxisView& source_tv,
                                  double initial_unit_pos)
 	: GhostRegion (rv,
-	               msv.midi_underlay_group,
+	               msv.midi_underlay(),
 	               msv.trackview(),
 	               source_tv,
 	               initial_unit_pos)
@@ -442,13 +441,20 @@ MidiGhostRegion::remove_note (NoteBase* note)
 
 	_optimization_iterator = events.end ();
 }
+
 void
-MidiGhostRegion::redisplay_model ()
+MidiGhostRegion::view_changed ()
+{
+	model_changed();
+}
+
+void
+MidiGhostRegion::model_changed ()
 {
 	/* we rely on the parent MRV having removed notes not in the model */
 	for (EventList::iterator i = events.begin(); i != events.end(); ) {
 
-		boost::shared_ptr<NoteType> note = i->first;
+		std::shared_ptr<NoteType> note = i->first;
 		GhostEvent* cne = i->second;
 		const bool visible = (note->note() >= parent_mrv._current_range_min) &&
 			(note->note() <= parent_mrv._current_range_max);
@@ -473,7 +479,7 @@ MidiGhostRegion::redisplay_model ()
  *  @return Our Event, or 0 if not found.
  */
 MidiGhostRegion::GhostEvent *
-MidiGhostRegion::find_event (boost::shared_ptr<NoteType> parent)
+MidiGhostRegion::find_event (std::shared_ptr<NoteType> parent)
 {
 	/* we are using _optimization_iterator to speed up the common case where a caller
 	   is going through our notes in order.

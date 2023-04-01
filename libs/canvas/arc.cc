@@ -64,33 +64,38 @@ Arc::compute_bounding_box () const
 	bbox = bbox.expand (0.5 + (_outline_width / 2));
 
 	_bounding_box = bbox;
-	bb_clean ();
+	set_bbox_clean ();
 }
 
 void
-Arc::render (Rect const & /*area*/, Cairo::RefPtr<Cairo::Context> context) const
+Arc::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
 {
-	if (_radius <= 0.0 || _arc_degrees <= 0.0 || (!fill() && !outline())) {
+	if (_radius <= 0.0 || (!fill() && !outline())) {
 		return;
 	}
 
 	Duple c = item_to_window (Duple (_center.x, _center.y));
 
-	context->arc (c.x, c.y, _radius, _start_degrees * (M_PI/180.0), _arc_degrees * (M_PI/180.0));
+	if (_arc_degrees != _start_degrees) {
 
-	if (fill()) {
-		setup_fill_context (context);
+		context->arc (c.x, c.y, _radius, _start_degrees * (M_PI/180.0), _arc_degrees * (M_PI/180.0));
+
+		if (fill()) {
+			setup_fill_context (context);
+			if (outline()) {
+				context->fill_preserve ();
+			} else {
+				context->fill ();
+			}
+		}
+
 		if (outline()) {
-			context->fill_preserve ();
-		} else {
-			context->fill ();
+			setup_outline_context (context);
+			context->stroke ();
 		}
 	}
 
-	if (outline()) {
-		setup_outline_context (context);
-		context->stroke ();
-	}
+	render_children (area, context);
 }
 
 void
@@ -100,7 +105,7 @@ Arc::set_center (Duple const & c)
 
 	_center = c;
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -111,7 +116,7 @@ Arc::set_radius (Coord r)
 
 	_radius = r;
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -122,7 +127,7 @@ Arc::set_arc (double deg)
 
 	_arc_degrees = deg;
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -134,7 +139,7 @@ Arc::set_start (double deg)
 
 	_start_degrees = deg;
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -164,5 +169,5 @@ Arc::_size_allocate (Rect const & r)
 	_radius = min (r.width(),r.height()) / 2.0;
 	_center = Duple ((r.width()/2.), (r.height() /2.));
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 }

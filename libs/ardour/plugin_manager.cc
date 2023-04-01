@@ -5,7 +5,7 @@
  * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
  * Copyright (C) 2012-2015 Tim Mayberry <mojofunk@gmail.com>
  * Copyright (C) 2014-2018 John Emmas <john@creativepost.co.uk>
- * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2023 Robin Gareus <robin@gareus.org>
  * Copyright (C) 2018 Ben Loftis <ben@harrisonconsoles.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -87,6 +87,7 @@
 #include "ardour/search_paths.h"
 
 #if (defined WINDOWS_VST_SUPPORT || defined MACVST_SUPPORT || defined LXVST_SUPPORT)
+#include "ardour/system_exec.h"
 #include "ardour/vst2_scan.h"
 #endif
 
@@ -113,6 +114,7 @@
 
 #include "ardour/audio_unit.h"
 #include "ardour/auv2_scan.h"
+#include "ardour/system_exec.h"
 #include <Carbon/Carbon.h>
 #endif
 
@@ -162,7 +164,11 @@ std::string PluginManager::vst3_scanner_bin_path = "";
 # endif
 #endif
 
-#define AUV2_BLACKLIST  "auv2_blacklist.txt"
+#ifdef __aarch64__
+# define AUV2_BLACKLIST  "auv2_a64_blacklist.txt"
+#else
+# define AUV2_BLACKLIST  "auv2_blacklist.txt"
+#endif
 
 PluginManager&
 PluginManager::instance()
@@ -189,7 +195,6 @@ PluginManager::PluginManager ()
 	, _enable_scan_timeout (false)
 {
 	char* s;
-	string lrdf_path;
 
 #if defined WINDOWS_VST_SUPPORT || defined LXVST_SUPPORT || defined MACVST_SUPPORT || defined VST3_SUPPORT
 	// source-tree (ardev, etc)
@@ -256,31 +261,28 @@ PluginManager::PluginManager ()
 	load_tags ();
 	load_stats ();
 
+	Searchpath rdfs (ARDOUR::ardour_data_search_path());
+
 	if ((s = getenv ("LADSPA_RDF_PATH"))){
-		lrdf_path = s;
+		rdfs.add_subdirectory_to_paths ("rdf");
+		Searchpath t (s);
+		rdfs += t;
+	} else {
+#ifndef PLATFORM_WINDOWS
+		rdfs += "/usr/local/share/ladspa";
+		rdfs += "/usr/share/ladspa";
+#endif
+		rdfs.add_subdirectory_to_paths ("rdf");
 	}
 
-	if (lrdf_path.length() == 0) {
-		lrdf_path = "/usr/local/share/ladspa/rdf:/usr/share/ladspa/rdf";
-	}
+	add_lrdf_data (rdfs);
 
-	add_lrdf_data(lrdf_path);
-	add_ladspa_presets();
-#ifdef WINDOWS_VST_SUPPORT
-	if (Config->get_use_windows_vst ()) {
-		add_windows_vst_presets ();
-	}
-#endif /* WINDOWS_VST_SUPPORT */
+	add_lrdf_presets ("ladspa");
 
-#ifdef LXVST_SUPPORT
-	if (Config->get_use_lxvst()) {
-		add_lxvst_presets();
-	}
-#endif /* Native LinuxVST support*/
-
-#ifdef MACVST_SUPPORT
-	if (Config->get_use_macvst ()) {
-		add_mac_vst_presets ();
+#if 0 // dump RDF
+	lrdf_statement* r = lrdf_all_statements();
+	for (lrdf_statement* it = r; it != NULL; it = it->next) {
+		printf("LRDF: (%s, %s, %s)\n", it->subject, it->predicate, it->object);
 	}
 #endif
 
@@ -383,7 +385,7 @@ PluginManager::detect_name_ambiguities (PluginInfoList* pil)
 				* by listing number of audio outputs.
 				* This is used in the instrument selector.
 				*/
-			 bool r = p->max_configurable_ouputs () != (*i)->max_configurable_ouputs ();
+			 bool r = p->max_configurable_outputs () != (*i)->max_configurable_outputs ();
 			 p->multichannel_name_ambiguity = r;
 			 (*i)->multichannel_name_ambiguity = r;
 		 }
@@ -802,6 +804,7 @@ PluginManager::ladspa_refresh ()
 	size_t n = 1;
 	size_t all_modules = ladspa_modules.size ();
 	for (vector<std::string>::iterator i = ladspa_modules.begin(); i != ladspa_modules.end(); ++i, ++n) {
+		DEBUG_TRACE (DEBUG::PluginManager, string_compose ("LADSPA: scanning: %1\n", *i));
 		ARDOUR::PluginScanMessage (string_compose (_("LADSPA (%1 / %2)"), n, all_modules), *i, false);
 		ladspa_discover (*i);
 #ifdef MIXBUS
@@ -827,48 +830,30 @@ static bool rdf_filter (const string &str, void* /*arg*/)
 #endif
 
 void
-PluginManager::add_ladspa_presets()
-{
-	add_presets ("ladspa");
-}
-
-void
-PluginManager::add_windows_vst_presets()
-{
-	add_presets ("windows-vst");
-}
-
-void
-PluginManager::add_mac_vst_presets()
-{
-	add_presets ("mac-vst");
-}
-
-void
-PluginManager::add_lxvst_presets()
-{
-	add_presets ("lxvst");
-}
-
-void
-PluginManager::add_presets(string domain)
+PluginManager::add_lrdf_presets(string domain)
 {
 #ifdef HAVE_LRDF
 	vector<string> presets;
 	vector<string>::iterator x;
 
-	char* envvar;
-	if ((envvar = getenv ("HOME")) == 0) {
+#ifdef PLATFORM_WINDOWS
+	string path = Glib::build_filename (ARDOUR::user_cache_directory (), domain, "rdf");
+#else
+	if (Glib::get_home_dir ().empty ()) {
 		return;
 	}
+	string path = Glib::build_filename (Glib::get_home_dir (), "." + domain, "rdf");
+#endif
 
-	string path = string_compose("%1/.%2/rdf", envvar, domain);
 	find_files_matching_filter (presets, path, rdf_filter, 0, false, true);
 
 	for (x = presets.begin(); x != presets.end (); ++x) {
-		string file = "file:" + *x;
-		if (lrdf_read_file(file.c_str())) {
-			warning << string_compose(_("Could not parse rdf file: %1"), *x) << endmsg;
+		const string uri (Glib::filename_to_uri(*x));
+#ifndef NDEBUG
+		info << string_compose (_("Reading RDF %1"), uri) << endmsg;
+#endif
+		if (lrdf_read_file(uri.c_str())) {
+			warning << string_compose (_("Could not parse RDF %1"), uri) << endmsg;
 		}
 	}
 
@@ -876,16 +861,19 @@ PluginManager::add_presets(string domain)
 }
 
 void
-PluginManager::add_lrdf_data (const string &path)
+PluginManager::add_lrdf_data (Searchpath const& path)
 {
 #ifdef HAVE_LRDF
 	vector<string> rdf_files;
 	vector<string>::iterator x;
 
+	info << "add_lrdf_data '" << path.to_string () << "'" << endmsg;
+
 	find_files_matching_filter (rdf_files, path, rdf_filter, 0, false, true);
 
 	for (x = rdf_files.begin(); x != rdf_files.end (); ++x) {
-		const string uri(string("file://") + *x);
+		const string uri (Glib::filename_to_uri(*x));
+		info << "read rdf_file '" << uri << "'" << endmsg;
 
 		if (lrdf_read_file(uri.c_str())) {
 			warning << "Could not parse rdf file: " << uri << endmsg;
@@ -1133,7 +1121,6 @@ auv2_whitelist (std::string id)
 {
 	string fn = Glib::build_filename (ARDOUR::user_cache_directory(), AUV2_BLACKLIST);
 	if (!Glib::file_test (fn, Glib::FILE_TEST_EXISTS)) {
-		warning << _("Expected AUv2 Blacklist file does not exist.") << endmsg;
 		return;
 	}
 
@@ -1251,7 +1238,7 @@ PluginManager::auv2_plugin (CAComponentDescription const& desc, AUv2Info const& 
 {
 	PSLEPtr psle (scan_log_entry (AudioUnit, auv2_stringify_descriptor (desc)));
 
-	AUPluginInfoPtr info (new AUPluginInfo (boost::shared_ptr<CAComponentDescription> (new CAComponentDescription (desc))));
+	AUPluginInfoPtr info (new AUPluginInfo (std::shared_ptr<CAComponentDescription> (new CAComponentDescription (desc))));
 	psle->msg (PluginScanLogEntry::OK);
 
 	info->unique_id   = nfo.id;
@@ -1420,15 +1407,33 @@ PluginManager::au_refresh (bool cache_only)
 
 #if (defined WINDOWS_VST_SUPPORT || defined MACVST_SUPPORT || defined LXVST_SUPPORT)
 
+static bool vst2_is_blacklisted (string const& module_path)
+{
+	string fn = Glib::build_filename (ARDOUR::user_cache_directory (), VST2_BLACKLIST);
+	if (!Glib::file_test (fn, Glib::FILE_TEST_EXISTS)) {
+		return false;
+	}
+
+	std::string bl;
+	try {
+		bl = Glib::file_get_contents (fn);
+	} catch (Glib::FileError const& err) {
+		return false;
+	}
+	return bl.find (module_path + "\n") != string::npos;
+}
+
 static void vst2_blacklist (string const& module_path)
 {
+	if (module_path.empty () || vst2_is_blacklisted (module_path)) {
+		return;
+	}
 	string fn = Glib::build_filename (ARDOUR::user_cache_directory (), VST2_BLACKLIST);
 	FILE* f = NULL;
 	if (! (f = g_fopen (fn.c_str (), "a"))) {
 		PBD::error << string_compose (_("Cannot write to VST2 blacklist file '%1'"), fn) << endmsg;
 		return;
 	}
-	assert (NULL == strchr (module_path.c_str(), '\n'));
 	fprintf (f, "%s\n", module_path.c_str ());
 	::fclose (f);
 }
@@ -1437,7 +1442,6 @@ static void vst2_whitelist (string module_path)
 {
 	string fn = Glib::build_filename (ARDOUR::user_cache_directory (), VST2_BLACKLIST);
 	if (!Glib::file_test (fn, Glib::FILE_TEST_EXISTS)) {
-		PBD::warning << _("Expected VST Blacklist file does not exist.") << endmsg;
 		return;
 	}
 
@@ -1458,22 +1462,6 @@ static void vst2_whitelist (string module_path)
 		return;
 	}
 	Glib::file_set_contents (fn, bl);
-}
-
-static bool vst2_is_blacklisted (string const& module_path)
-{
-	string fn = Glib::build_filename (ARDOUR::user_cache_directory (), VST2_BLACKLIST);
-	if (!Glib::file_test (fn, Glib::FILE_TEST_EXISTS)) {
-		return false;
-	}
-
-	std::string bl;
-	try {
-		bl = Glib::file_get_contents (fn);
-	} catch (Glib::FileError const& err) {
-		return false;
-	}
-	return bl.find (module_path + "\n") != string::npos;
 }
 
 static void vst2_scanner_log (std::string msg, std::stringstream* ss)
@@ -1702,17 +1690,13 @@ PluginManager::vst2_discover (string path, ARDOUR::PluginType type, bool cache_o
 	if (!tree.root()->get_property ("binary", binary) || binary != path) {
 		psle->msg (PluginScanLogEntry::Incompatible, string_compose (_("Invalid VST2 cache file '%1'"), cache_file)); // XXX log as error msg
 		psle->msg (PluginScanLogEntry::Blacklisted);
-		if (!vst2_is_blacklisted (path)) {
-			vst2_blacklist (path);
-		}
+		vst2_blacklist (path);
 		return -1;
 	}
 
 	std::string arch;
 	if (!tree.root()->get_property ("arch", arch) || arch != vst2_arch ()) {
-		if (!vst2_is_blacklisted (path)) {
-			vst2_blacklist (path);
-		}
+		vst2_blacklist (path);
 		psle->msg (PluginScanLogEntry::Blacklisted);
 		psle->msg (PluginScanLogEntry::Incompatible, string_compose (_("VST2 architecture mismatches '%1'"), arch));
 		return -1;
@@ -1947,7 +1931,11 @@ void
 PluginManager::clear_vst3_cache ()
 {
 #ifdef VST3_SUPPORT
+# if defined __APPLE__ && defined __aarch64__
+	string dn = Glib::build_filename (ARDOUR::user_cache_directory(), "vst-arm64");
+# else
 	string dn = Glib::build_filename (ARDOUR::user_cache_directory(), "vst");
+# endif
 	vector<string> v3i_files;
 	find_files_matching_regex (v3i_files, dn, "\\.v3i$", false);
 	for (vector<string>::iterator i = v3i_files.begin(); i != v3i_files.end (); ++i) {
@@ -2161,15 +2149,7 @@ PluginManager::vst3_discover (string const& path, bool cache_only)
 	XMLTree tree;
 	if (cache_file.empty ()) {
 		run_scan = true;
-	} else if (tree.read (cache_file)) {
-		/* valid cache file was found, now check version
-		 * see ARDOUR::vst3_scan_and_cache VST3Cache version
-		 */
-		int cf_version = 0;
-		if (!tree.root()->get_property ("version", cf_version) || cf_version < 1) {
-			run_scan = true;
-		}
-	} else {
+	} else if (!tree.read (cache_file)) {
 		/* failed to parse XML */
 		run_scan = true;
 	}
@@ -3339,7 +3319,7 @@ PluginManager::rescan_faulty ()
 
 /* ****************************************************************************/
 void
-PluginManager::scan_log (std::vector<boost::shared_ptr<PluginScanLogEntry> >& l) const
+PluginManager::scan_log (std::vector<std::shared_ptr<PluginScanLogEntry> >& l) const
 {
 	for (PluginScanLog::const_iterator i = _plugin_scan_log.begin(); i != _plugin_scan_log.end(); ++i) {
 		l.push_back (*i);

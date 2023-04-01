@@ -87,10 +87,10 @@ Editor::time_stretch (RegionSelection& regions, Temporal::ratio_t const & ratio)
 		return aret;
 	}
 
-	set<boost::shared_ptr<Playlist> > midi_playlists_affected;
+	set<std::shared_ptr<Playlist> > midi_playlists_affected;
 
 	for (RegionList::iterator i = midi.begin(); i != midi.end(); ++i) {
-		boost::shared_ptr<Playlist> playlist = (*i)->playlist();
+		std::shared_ptr<Playlist> playlist = (*i)->playlist();
 
 		if (playlist) {
 			playlist->clear_changes ();
@@ -102,7 +102,7 @@ Editor::time_stretch (RegionSelection& regions, Temporal::ratio_t const & ratio)
 	request.time_fraction = ratio;
 
 	for (RegionList::iterator i = midi.begin(); i != midi.end(); ++i) {
-		boost::shared_ptr<Playlist> playlist = (*i)->playlist();
+		std::shared_ptr<Playlist> playlist = (*i)->playlist();
 
 		if (!playlist) {
 			continue;
@@ -116,7 +116,7 @@ Editor::time_stretch (RegionSelection& regions, Temporal::ratio_t const & ratio)
 		midi_playlists_affected.insert (playlist);
 	}
 
-	for (set<boost::shared_ptr<Playlist> >::iterator p = midi_playlists_affected.begin(); p != midi_playlists_affected.end(); ++p) {
+	for (set<std::shared_ptr<Playlist> >::iterator p = midi_playlists_affected.begin(); p != midi_playlists_affected.end(); ++p) {
 		PBD::StatefulDiffCommand* cmd = new StatefulDiffCommand (*p);
 		_session->add_command (cmd);
 		if (!cmd->empty ()) {
@@ -169,10 +169,10 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 	}
 
 	const timecnt_t oldlen = regions.front()->length();
-	const timecnt_t newlen = regions.front()->length() * ratio;
+	const timecnt_t newlen = regions.front()->length().scale (ratio);
 	const timepos_t pos = regions.front()->position ();
 
-	current_timefx = new TimeFXDialog (*this, pitching, oldlen, newlen, pos);
+	current_timefx = new TimeFXDialog (*this, pitching, oldlen, newlen, ratio, pos);
 	current_timefx->regions = regions;
 
 	switch (current_timefx->run ()) {
@@ -187,7 +187,7 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 	current_timefx->request.time_fraction = current_timefx->get_time_fraction ();
 	current_timefx->request.pitch_fraction = current_timefx->get_pitch_fraction ();
 
-	if (current_timefx->request.time_fraction == 1.0 &&
+	if (current_timefx->request.time_fraction.to_double() == 1.0 &&
 	    current_timefx->request.pitch_fraction == 1.0) {
 		/* nothing to do */
 		current_timefx->hide ();
@@ -269,7 +269,7 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 			transients = NoTransients;
 			precise = true;
 			preserve_formants = false;
-			current_timefx->request.pitch_fraction = 1.0 / current_timefx->request.time_fraction;
+			current_timefx->request.pitch_fraction = 1.0 / current_timefx->request.time_fraction.to_double();
 			shortwin = true;
 			// peaklock = false;
 			break;
@@ -304,6 +304,10 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 		options |= RubberBandStretcher::OptionTransientsCrisp;
 		break;
 	}
+
+#ifdef HAVE_RUBBERBAND_3_0_0
+	options |= RubberBandStretcher::OptionEngineFiner;
+#endif
 
 	current_timefx->request.opts = (int) options;
 #else
@@ -353,22 +357,15 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 void
 Editor::do_timefx ()
 {
-	typedef std::map<boost::shared_ptr<Region>, boost::shared_ptr<Region> > ResultMap;
+	typedef std::map<std::shared_ptr<Region>, std::shared_ptr<Region> > ResultMap;
 	ResultMap results;
 
 	uint32_t const N = current_timefx->regions.size ();
 
 	for (RegionList::const_iterator i = current_timefx->regions.begin(); i != current_timefx->regions.end(); ++i) {
-		boost::shared_ptr<Playlist> playlist = (*i)->playlist();
-		if (playlist) {
-			playlist->clear_changes ();
-		}
-	}
 
-	for (RegionList::const_iterator i = current_timefx->regions.begin(); i != current_timefx->regions.end(); ++i) {
-
-		boost::shared_ptr<AudioRegion> region = boost::dynamic_pointer_cast<AudioRegion> (*i);
-		boost::shared_ptr<Playlist> playlist;
+		std::shared_ptr<AudioRegion> region = std::dynamic_pointer_cast<AudioRegion> (*i);
+		std::shared_ptr<Playlist> playlist;
 
 		if (!region || (playlist = region->playlist()) == 0) {
 			continue;
@@ -418,17 +415,18 @@ Editor::do_timefx ()
 	if (current_timefx->request.cancel) {
 		current_timefx->status = -1;
 		for (ResultMap::const_iterator i = results.begin(); i != results.end(); ++i) {
-			boost::weak_ptr<Region> w = i->second;
+			std::weak_ptr<Region> w = i->second;
 			RegionFactory::map_remove (w);
 		}
 	} else {
 		current_timefx->status = 0;
 		for (ResultMap::const_iterator i = results.begin(); i != results.end(); ++i) {
-			boost::shared_ptr<Region> region = i->first;
-			boost::shared_ptr<Region> new_region = i->second;
-			boost::shared_ptr<Playlist> playlist = region->playlist();
-			playlist->replace_region (region, new_region, region->position());
+			std::shared_ptr<Region> region = i->first;
+			std::shared_ptr<Region> new_region = i->second;
+			std::shared_ptr<Playlist> playlist = region->playlist();
 
+			playlist->clear_changes ();
+			playlist->replace_region (region, new_region, region->position());
 			PBD::StatefulDiffCommand* cmd = new StatefulDiffCommand (playlist);
 			_session->add_command (cmd);
 			if (!cmd->empty ()) {
@@ -445,6 +443,7 @@ void*
 Editor::timefx_thread (void *arg)
 {
 	SessionEvent::create_per_thread_pool ("timefx events", 64);
+	Temporal::TempoMap::fetch ();
 
 	TimeFXDialog* tsd = static_cast<TimeFXDialog*>(arg);
 

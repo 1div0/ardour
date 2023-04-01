@@ -48,6 +48,7 @@
 #include "automation_time_axis.h"
 #include "public_editor.h"
 #include "control_point.h"
+#include "triggerbox_ui.h"
 #include "vca_time_axis.h"
 
 #include "pbd/i18n.h"
@@ -117,6 +118,7 @@ Selection::clear ()
 	clear_playlists ();
 	clear_midi_notes ();
 	clear_markers ();
+	clear_triggers ();
 	pending_midi_note_selection.clear();
 }
 
@@ -128,6 +130,7 @@ Selection::clear_objects (bool with_signal)
 	clear_lines(with_signal);
 	clear_playlists (with_signal);
 	clear_midi_notes (with_signal);
+	clear_triggers (with_signal);
 }
 
 void
@@ -163,7 +166,7 @@ Selection::clear_regions (bool with_signal)
 void
 Selection::clear_midi_notes (bool with_signal)
 {
-	/* Remmeber: MIDI notes are only stored here if we're using a Selection
+	/* Remember: MIDI notes are only stored here if we're using a Selection
 	   object as a cut buffer.
 	*/
 
@@ -220,10 +223,29 @@ Selection::clear_markers (bool with_signal)
 }
 
 void
-Selection::toggle (boost::shared_ptr<Playlist> pl)
+Selection::clear_triggers (bool with_signal)
+{
+	if (!triggers.empty()) {
+		triggers.clear ();
+		if (with_signal) {
+			TriggersChanged ();
+		}
+	}
+}
+
+RegionSelection
+Selection::trigger_regionview_proxy () const
+{
+	RegionSelection rs;
+	return rs;
+}
+
+void
+Selection::toggle (std::shared_ptr<Playlist> pl)
 {
 	clear_time(); // enforce object/range exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	PlaylistSelection::iterator i;
 
@@ -242,6 +264,7 @@ Selection::toggle (const MidiNoteSelection& midi_note_list)
 {
 	clear_time(); // enforce object/range exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	for (MidiNoteSelection::const_iterator i = midi_note_list.begin(); i != midi_note_list.end(); ++i) {
 		toggle ((*i));
@@ -270,6 +293,7 @@ Selection::toggle (RegionView* r)
 {
 	clear_time(); // enforce object/range exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	RegionSelection::iterator i;
 
@@ -287,6 +311,7 @@ Selection::toggle (vector<RegionView*>& r)
 {
 	clear_time(); // enforce object/range exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	RegionSelection::iterator i;
 
@@ -320,12 +345,13 @@ Selection::toggle (timepos_t const & start, timepos_t const & end)
 }
 
 void
-Selection::add (boost::shared_ptr<Playlist> pl)
+Selection::add (std::shared_ptr<Playlist> pl)
 {
 
 	if (find (playlists.begin(), playlists.end(), pl) == playlists.end()) {
 		clear_time(); // enforce object/range exclusivity
 		clear_tracks(); // enforce object/track exclusivity
+		clear_triggers(); // enforce trigger exclusivity
 		pl->use ();
 		playlists.push_back(pl);
 		PlaylistsChanged ();
@@ -333,11 +359,11 @@ Selection::add (boost::shared_ptr<Playlist> pl)
 }
 
 void
-Selection::add (const list<boost::shared_ptr<Playlist> >& pllist)
+Selection::add (const list<std::shared_ptr<Playlist> >& pllist)
 {
 	bool changed = false;
 
-	for (list<boost::shared_ptr<Playlist> >::const_iterator i = pllist.begin(); i != pllist.end(); ++i) {
+	for (list<std::shared_ptr<Playlist> >::const_iterator i = pllist.begin(); i != pllist.end(); ++i) {
 		if (find (playlists.begin(), playlists.end(), (*i)) == playlists.end()) {
 			(*i)->use ();
 			playlists.push_back (*i);
@@ -348,6 +374,7 @@ Selection::add (const list<boost::shared_ptr<Playlist> >& pllist)
 	if (changed) {
 		clear_time(); // enforce object/range exclusivity
 		clear_tracks(); // enforce object/track exclusivity
+		clear_triggers(); // enforce trigger exclusivity
 		PlaylistsChanged ();
 	}
 }
@@ -361,6 +388,7 @@ Selection::add (const MidiNoteSelection& midi_list)
 	if (!midi_list.empty()) {
 		clear_time(); // enforce object/range exclusivity
 		clear_tracks(); // enforce object/track exclusivity
+		clear_triggers(); // enforce trigger exclusivity
 		midi_notes.insert (midi_notes.end(), b, e);
 		MidiNotesChanged ();
 	}
@@ -394,6 +422,7 @@ Selection::add (vector<RegionView*>& v)
 	if (changed) {
 		clear_time(); // enforce object/range exclusivity
 		clear_tracks(); // enforce object/track exclusivity
+		clear_triggers ();
 		RegionsChanged ();
 	}
 }
@@ -415,6 +444,7 @@ Selection::add (const RegionSelection& rs)
 	if (changed) {
 		clear_time(); // enforce object/range exclusivity
 		clear_tracks(); // enforce object/track exclusivity
+		clear_triggers ();
 		RegionsChanged ();
 	}
 }
@@ -427,6 +457,7 @@ Selection::add (RegionView* r)
 		if (changed) {
 			clear_time(); // enforce object/range exclusivity
 			clear_tracks(); // enforce object/track exclusivity
+			clear_triggers ();
 			RegionsChanged ();
 		}
 	}
@@ -453,7 +484,7 @@ Selection::add (timepos_t const & start, timepos_t const & end)
 void
 Selection::move_time (timecnt_t const & distance)
 {
-	if (distance.zero()) {
+	if (distance.is_zero ()) {
 		return;
 	}
 
@@ -488,9 +519,9 @@ Selection::replace (uint32_t sid, timepos_t const & start, timepos_t const & end
 }
 
 void
-Selection::add (boost::shared_ptr<Evoral::ControlList> cl)
+Selection::add (std::shared_ptr<Evoral::ControlList> cl)
 {
-	boost::shared_ptr<ARDOUR::AutomationList> al = boost::dynamic_pointer_cast<ARDOUR::AutomationList>(cl);
+	std::shared_ptr<ARDOUR::AutomationList> al = std::dynamic_pointer_cast<ARDOUR::AutomationList>(cl);
 
 	if (!al) {
 		warning << "Programming error: Selected list is not an ARDOUR::AutomationList" << endmsg;
@@ -500,14 +531,15 @@ Selection::add (boost::shared_ptr<Evoral::ControlList> cl)
 	if (!cl->empty()) {
 		clear_time(); // enforce object/range exclusivity
 		clear_tracks(); // enforce object/track exclusivity
+		clear_triggers(); // enforce trigger exclusivity
 	}
 
 	/* The original may change so we must store a copy (not a pointer) here.
 	 * e.g AutomationLine rewrites the list with gain mapping.
-	 * the downside is that we can't perfom duplicate checks.
+	 * the downside is that we can't perform duplicate checks.
 	 * This code was changed in response to #6842
 	 */
-	lines.push_back (boost::shared_ptr<ARDOUR::AutomationList> (new ARDOUR::AutomationList(*al)));
+	lines.push_back (std::shared_ptr<ARDOUR::AutomationList> (new ARDOUR::AutomationList(*al)));
 	LinesChanged();
 }
 
@@ -554,9 +586,9 @@ Selection::remove (MidiCutBuffer* midi)
 }
 
 void
-Selection::remove (boost::shared_ptr<Playlist> track)
+Selection::remove (std::shared_ptr<Playlist> track)
 {
-	list<boost::shared_ptr<Playlist> >::iterator i;
+	list<std::shared_ptr<Playlist> >::iterator i;
 	if ((i = find (playlists.begin(), playlists.end(), track)) != playlists.end()) {
 		playlists.erase (i);
 		PlaylistsChanged();
@@ -564,13 +596,13 @@ Selection::remove (boost::shared_ptr<Playlist> track)
 }
 
 void
-Selection::remove (const list<boost::shared_ptr<Playlist> >& pllist)
+Selection::remove (const list<std::shared_ptr<Playlist> >& pllist)
 {
 	bool changed = false;
 
-	for (list<boost::shared_ptr<Playlist> >::const_iterator i = pllist.begin(); i != pllist.end(); ++i) {
+	for (list<std::shared_ptr<Playlist> >::const_iterator i = pllist.begin(); i != pllist.end(); ++i) {
 
-		list<boost::shared_ptr<Playlist> >::iterator x;
+		list<std::shared_ptr<Playlist> >::iterator x;
 
 		if ((x = find (playlists.begin(), playlists.end(), (*i))) != playlists.end()) {
 			playlists.erase (x);
@@ -622,7 +654,7 @@ Selection::remove (samplepos_t /*start*/, samplepos_t /*end*/)
 }
 
 void
-Selection::remove (boost::shared_ptr<ARDOUR::AutomationList> ac)
+Selection::remove (std::shared_ptr<ARDOUR::AutomationList> ac)
 {
 	AutomationSelection::iterator i;
 	if ((i = find (lines.begin(), lines.end(), ac)) != lines.end()) {
@@ -637,24 +669,26 @@ Selection::set (const MidiNoteSelection& midi_list)
 	if (!midi_list.empty()) {
 		clear_time (); // enforce region/object exclusivity
 		clear_tracks(); // enforce object/track exclusivity
+		clear_triggers(); // enforce trigger exclusivity
 	}
 	clear_objects ();
 	add (midi_list);
 }
 
 void
-Selection::set (boost::shared_ptr<Playlist> playlist)
+Selection::set (std::shared_ptr<Playlist> playlist)
 {
 	if (playlist) {
 		clear_time (); // enforce region/object exclusivity
 		clear_tracks(); // enforce object/track exclusivity
+		clear_triggers(); // enforce trigger exclusivity
 	}
 	clear_objects ();
 	add (playlist);
 }
 
 void
-Selection::set (const list<boost::shared_ptr<Playlist> >& pllist)
+Selection::set (const list<std::shared_ptr<Playlist> >& pllist)
 {
 	if (!pllist.empty()) {
 		clear_time(); // enforce region/object exclusivity
@@ -708,7 +742,7 @@ Selection::set (timepos_t const & start, timepos_t const & end)
 	clear_objects(); // enforce region/object exclusivity
 	clear_time();
 
-	if ((start.zero() && end.zero()) || end < start) {
+	if ((start.is_zero () && end.is_zero ()) || end < start) {
 		return 0;
 	}
 
@@ -744,7 +778,7 @@ Selection::set_preserving_all_ranges (timepos_t const & start, timepos_t const &
 {
 	clear_objects(); // enforce region/object exclusivity
 
-	if ((start.zero() && end.zero()) || (end < start)) {
+	if ((start.is_zero () && end.is_zero ()) || (end < start)) {
 		return;
 	}
 
@@ -762,7 +796,7 @@ Selection::set_preserving_all_ranges (timepos_t const & start, timepos_t const &
 }
 
 void
-Selection::set (boost::shared_ptr<Evoral::ControlList> ac)
+Selection::set (std::shared_ptr<Evoral::ControlList> ac)
 {
 	clear_time(); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
@@ -799,7 +833,8 @@ Selection::empty (bool internal_selection)
 		lines.empty () &&
 		time.empty () &&
 		playlists.empty () &&
-		markers.empty()
+		markers.empty() &&
+		triggers.empty()
 		;
 
 	if (!internal_selection) {
@@ -818,6 +853,7 @@ Selection::toggle (ControlPoint* cp)
 {
 	clear_time(); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	cp->set_selected (!cp->selected ());
 	PointSelection::iterator i = find (points.begin(), points.end(), cp);
@@ -835,6 +871,7 @@ Selection::toggle (vector<ControlPoint*> const & cps)
 {
 	clear_time(); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	for (vector<ControlPoint*>::const_iterator i = cps.begin(); i != cps.end(); ++i) {
 		toggle (*i);
@@ -846,6 +883,7 @@ Selection::toggle (list<Selectable*> const & selectables)
 {
 	clear_time(); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	RegionView* rv;
 	ControlPoint* cp;
@@ -889,6 +927,7 @@ Selection::add (PointSelection const & s)
 {
 	clear_time (); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	for (PointSelection::const_iterator i = s.begin(); i != s.end(); ++i) {
 		points.push_back (*i);
@@ -900,6 +939,7 @@ Selection::add (list<Selectable*> const & selectables)
 {
 	clear_time (); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	RegionView* rv;
 	ControlPoint* cp;
@@ -944,6 +984,7 @@ Selection::add (ControlPoint* cp)
 {
 	clear_time (); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	cp->set_selected (true);
 	points.push_back (cp);
@@ -955,6 +996,7 @@ Selection::add (vector<ControlPoint*> const & cps)
 {
 	clear_time (); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	for (vector<ControlPoint*>::const_iterator i = cps.begin(); i != cps.end(); ++i) {
 		(*i)->set_selected (true);
@@ -968,6 +1010,7 @@ Selection::set (ControlPoint* cp)
 {
 	clear_time (); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	if (cp->selected () && points.size () == 1) {
 		return;
@@ -986,6 +1029,7 @@ Selection::set (ArdourMarker* m)
 {
 	clear_time ();  // enforce region/object exclusivity
 	clear_tracks();  // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 	markers.clear ();
 
 	add (m);
@@ -1019,6 +1063,7 @@ Selection::add (ArdourMarker* m)
 {
 	clear_time (); //enforce region/object exclusivity
 	clear_tracks(); //enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	if (find (markers.begin(), markers.end(), m) == markers.end()) {
 		markers.push_back (m);
@@ -1031,6 +1076,7 @@ Selection::add (const list<ArdourMarker*>& m)
 {
 	clear_time (); // enforce region/object exclusivity
 	clear_tracks(); // enforce object/track exclusivity
+	clear_triggers(); // enforce trigger exclusivity
 
 	markers.insert (markers.end(), m.begin(), m.end());
 	markers.sort ();
@@ -1098,15 +1144,15 @@ Selection::get_state () const
 	}
 
 	/* midi region views have thir own internal selection. */
-	list<pair<PBD::ID, std::set<boost::shared_ptr<Evoral::Note<Temporal::Beats> > > > > rid_notes;
+	list<pair<PBD::ID, std::set<std::shared_ptr<Evoral::Note<Temporal::Beats> > > > > rid_notes;
 	editor->get_per_region_note_selection (rid_notes);
 
-	list<pair<PBD::ID, std::set<boost::shared_ptr<Evoral::Note<Temporal::Beats> > > > >::iterator rn_it;
+	list<pair<PBD::ID, std::set<std::shared_ptr<Evoral::Note<Temporal::Beats> > > > >::iterator rn_it;
 	for (rn_it = rid_notes.begin(); rn_it != rid_notes.end(); ++rn_it) {
 		XMLNode* n = node->add_child (X_("MIDINotes"));
 		n->set_property (X_("region-id"), (*rn_it).first);
 
-		for (std::set<boost::shared_ptr<Evoral::Note<Temporal::Beats> > >::iterator i = (*rn_it).second.begin(); i != (*rn_it).second.end(); ++i) {
+		for (std::set<std::shared_ptr<Evoral::Note<Temporal::Beats> > >::iterator i = (*rn_it).second.begin(); i != (*rn_it).second.end(); ++i) {
 			XMLNode* nc = n->add_child(X_("note"));
 			nc->set_property(X_("note-id"), (*i)->id());
 		}
@@ -1166,6 +1212,7 @@ Selection::set_state (XMLNode const & node, int)
 	clear_points ();
 	clear_time ();
 	clear_markers ();
+	clear_triggers();
 
 	/* NOTE: stripable/time-axis-view selection is saved/restored by
 	 * ARDOUR::CoreSelection, not this Selection object
@@ -1260,7 +1307,7 @@ Selection::set_state (XMLNode const & node, int)
 				vector <ControlPoint *> cps;
 
 				if (stv) {
-					boost::shared_ptr<AutomationLine> li = stv->automation_child_by_alist_id (alist_id);
+					std::shared_ptr<AutomationLine> li = stv->automation_child_by_alist_id (alist_id);
 					if (li) {
 						ControlPoint* cp = li->nth(view_index);
 						if (cp) {
@@ -1289,7 +1336,7 @@ Selection::set_state (XMLNode const & node, int)
 					for (RegionSelection::iterator rsi = rs.begin(); rsi != rs.end(); ++rsi) {
 						AudioRegionView* arv = dynamic_cast<AudioRegionView*> (*rsi);
 						if (arv) {
-							boost::shared_ptr<AudioRegionGainLine> gl = arv->get_gain_line ();
+							std::shared_ptr<AudioRegionGainLine> gl = arv->get_gain_line ();
 							ControlPoint* cp = gl->nth(view_index);
 							if (cp) {
 								cps.push_back (cp);
@@ -1326,7 +1373,7 @@ Selection::set_state (XMLNode const & node, int)
 			StripableTimeAxisView* stv = editor->get_stripable_time_axis_by_id (id);
 
 			if (stv && (*i)->get_property (X_("control_id"), ctrl_id)) {
-				boost::shared_ptr<AutomationTimeAxisView> atv = stv->automation_child (EventTypeMap::instance().from_symbol (param), ctrl_id);
+				std::shared_ptr<AutomationTimeAxisView> atv = stv->automation_child (EventTypeMap::instance().from_symbol (param), ctrl_id);
 
 				/* the automation could be for an entity that was never saved
 				 * in the session file. Don't freak out if we can't find
@@ -1389,8 +1436,8 @@ Selection::toggle (const TrackViewList& track_list)
 	PresentationInfo::ChangeSuspender cs;
 
 	for (TrackSelection::const_iterator i = t.begin(); i != t.end(); ++i) {
-		boost::shared_ptr<Stripable> s = (*i)->stripable ();
-		boost::shared_ptr<AutomationControl> c = (*i)->control ();
+		std::shared_ptr<Stripable> s = (*i)->stripable ();
+		std::shared_ptr<AutomationControl> c = (*i)->control ();
 		selection.toggle (s, c);
 	}
 }
@@ -1412,8 +1459,8 @@ Selection::add (TrackViewList const & track_list)
 	PresentationInfo::ChangeSuspender cs;
 
 	for (TrackSelection::const_iterator i = t.begin(); i != t.end(); ++i) {
-		boost::shared_ptr<Stripable> s = (*i)->stripable ();
-		boost::shared_ptr<AutomationControl> c = (*i)->control ();
+		std::shared_ptr<Stripable> s = (*i)->stripable ();
+		std::shared_ptr<AutomationControl> c = (*i)->control ();
 		selection.add (s, c);
 	}
 }
@@ -1441,8 +1488,8 @@ Selection::remove (const TrackViewList& t)
 	PresentationInfo::ChangeSuspender cs;
 
 	for (TrackSelection::const_iterator i = t.begin(); i != t.end(); ++i) {
-		boost::shared_ptr<Stripable> s = (*i)->stripable ();
-		boost::shared_ptr<AutomationControl> c = (*i)->control ();
+		std::shared_ptr<Stripable> s = (*i)->stripable ();
+		std::shared_ptr<AutomationControl> c = (*i)->control ();
 		selection.remove (s, c);
 	}
 }
@@ -1462,7 +1509,7 @@ Selection::set (const TrackViewList& track_list)
 
 	CoreSelection& selection (editor->session()->selection());
 
-#if 1 // crazy optmization hack
+#if 1 // crazy optimization hack
 	/* check is the selection actually changed, ignore NO-OPs
 	 *
 	 * There are excessive calls from EditorRoutes::selection_changed():
@@ -1478,8 +1525,8 @@ Selection::set (const TrackViewList& track_list)
 	CoreSelection::StripableAutomationControls sac;
 	selection.get_stripables (sac);
 	for (TrackSelection::const_iterator i = t.begin(); i != t.end(); ++i) {
-		boost::shared_ptr<Stripable> s = (*i)->stripable ();
-		boost::shared_ptr<AutomationControl> c = (*i)->control ();
+		std::shared_ptr<Stripable> s = (*i)->stripable ();
+		std::shared_ptr<AutomationControl> c = (*i)->control ();
 		bool found = false;
 		for (CoreSelection::StripableAutomationControls::iterator j = sac.begin (); j != sac.end (); ++j) {
 			if (j->stripable == s && j->controllable == c) {
@@ -1503,8 +1550,8 @@ Selection::set (const TrackViewList& track_list)
 	selection.clear_stripables ();
 
 	for (TrackSelection::const_iterator i = t.begin(); i != t.end(); ++i) {
-		boost::shared_ptr<Stripable> s = (*i)->stripable ();
-		boost::shared_ptr<AutomationControl> c = (*i)->control ();
+		std::shared_ptr<Stripable> s = (*i)->stripable ();
+		std::shared_ptr<AutomationControl> c = (*i)->control ();
 		selection.add (s, c);
 	}
 }
@@ -1533,8 +1580,8 @@ Selection::selected (TimeAxisView* tv) const
 	}
 
 	CoreSelection& selection (session->selection());
-	boost::shared_ptr<Stripable> s = tv->stripable ();
-	boost::shared_ptr<AutomationControl> c = tv->control ();
+	std::shared_ptr<Stripable> s = tv->stripable ();
+	std::shared_ptr<AutomationControl> c = tv->control ();
 
 	if (c) {
 		return selection.selected (c);
@@ -1647,3 +1694,61 @@ Selection::midi_regions ()
 
 	return ms;
 }
+
+bool
+Selection::selected (TriggerEntry* te) const
+{
+	return find (triggers.begin(), triggers.end(), te) != triggers.end();
+}
+
+void
+Selection::set (TriggerEntry* te)
+{
+#if 0
+	clear();
+#else
+	clear_tracks ();
+	clear_regions ();
+	clear_points ();
+	clear_lines ();
+	clear_time ();
+	clear_playlists ();
+	clear_midi_notes ();
+	clear_markers ();
+	pending_midi_note_selection.clear();
+#endif
+	clear_triggers (te ? false: true); /* Do not emit signal here, add() emits signal */
+	add (te);
+}
+
+void
+Selection::add (TriggerEntry* te)
+{
+	triggers.push_back (te);
+	TriggersChanged ();
+}
+
+void
+Selection::remove (TriggerEntry* te)
+{
+	TriggerSelection::iterator e = find (triggers.begin(), triggers.end(), te);
+
+	if (e != triggers.end()) {
+		triggers.erase (e);
+		TriggersChanged ();
+	}
+}
+
+void
+Selection::toggle (TriggerEntry* te)
+{
+	TriggerSelection::iterator e;
+
+	if ((e = find (triggers.begin(), triggers.end(), te)) != triggers.end()) {
+		add (te);
+	} else {
+		triggers.erase (e);
+	}
+	TriggersChanged ();
+}
+

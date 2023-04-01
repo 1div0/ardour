@@ -73,17 +73,11 @@ BaseUI::RequestType Gtkmm2ext::AddTimeout = BaseUI::new_request_type();
 
 template class AbstractUI<Gtkmm2ext::UIRequest>;
 
-void
-UI::event_loop_precall ()
-{
-}
-
 UI::UI (string application_name, string thread_name, int *argc, char ***argv)
 	: AbstractUI<UIRequest> (thread_name)
 	, _receiver (*this)
 	, global_bindings (0)
 	, errors (0)
-	, event_callback (boost::bind (&UI::event_loop_precall, this))
 {
 	theMain = new Main (argc, argv);
 
@@ -102,10 +96,9 @@ UI::UI (string application_name, string thread_name, int *argc, char ***argv)
 	}
 
 	/* the GUI event loop runs in the main thread of the app,
-	   which is assumed to have called this.
-	*/
-
-	run_loop_thread = Threads::Thread::self();
+	 * which is assumed to have called this.
+	 */
+	_run_loop_thread = PBD::Thread::self ();
 
 	/* store "this" as the UI-for-thread of this thread, same argument
 	   as for previous line.
@@ -116,12 +109,6 @@ UI::UI (string application_name, string thread_name, int *argc, char ***argv)
 	/* we will be receiving requests */
 
 	EventLoop::register_request_buffer_factory ("gui", request_buffer_factory);
-
-	/*
-	 * every time the main loop runs (i.e. before any actual event handling
-	 */
-
-	event_callback.attach (MainContext::get_default());
 
 	/* attach our request source to the default main context */
 
@@ -156,9 +143,9 @@ UI::~UI ()
 }
 
 bool
-UI::caller_is_ui_thread ()
+UI::caller_is_ui_thread () const
 {
-	return Threads::Thread::self() == run_loop_thread;
+	return caller_is_self ();
 }
 
 int
@@ -402,13 +389,16 @@ UI::set_tip (Widget *w, const gchar *tip, const gchar *hlp)
 	}
 
 	if (action) {
-		Bindings* bindings = (Bindings*) w->get_data ("ardour-bindings");
-		if (!bindings) {
-			Gtk::Window* win = (Gtk::Window*) w->get_toplevel();
-			if (win) {
-				bindings = (Bindings*) win->get_data ("ardour-bindings");
+		/* get_bindings_from_widget_hierarchy */
+		Widget* ww = w;
+		Bindings* bindings = NULL;
+		do {
+			bindings = (Bindings*) ww->get_data ("ardour-bindings");
+			if (bindings) {
+				break;
 			}
-		}
+			ww = ww->get_parent ();
+		} while (ww);
 
 		if (!bindings) {
 			bindings = global_bindings;

@@ -30,8 +30,8 @@
 #include "pbd/openuri.h"
 
 #ifdef __APPLE__
-#include <curl/curl.h>
 	extern bool cocoa_open_url (const char*);
+	extern bool cocoa_open_folder (const char*);
 #endif
 
 #ifdef PLATFORM_WINDOWS
@@ -39,6 +39,7 @@
 # include <shellapi.h>
 #else
 # include <sys/types.h>
+# include <sys/wait.h>
 # include <unistd.h>
 #endif
 
@@ -70,9 +71,18 @@ PBD::open_uri (const char* uri)
 	while (s.find("\"") != std::string::npos)
 		s.replace(s.find("\\"), 1, "\\\"");
 
-	if (::vfork () == 0) {
-		::execlp ("xdg-open", "xdg-open", s.c_str(), (char*)NULL);
+	char const* arg = s.c_str();
+
+	pid_t pid = ::vfork ();
+
+	if (pid == 0) {
+		::execlp ("xdg-open", "xdg-open", arg, (char*)NULL);
 		_exit (EXIT_SUCCESS);
+	} else if (pid > 0) {
+		/* wait until started, keep std::string s in scope */
+		::waitpid (pid, 0, 0);
+	} else {
+		return false;
 	}
 
 #endif /* not PLATFORM_WINDOWS and not __APPLE__ */
@@ -89,15 +99,7 @@ bool
 PBD::open_folder (const std::string& d)
 {
 #ifdef __APPLE__
-	CURL *curl = curl_easy_init ();
-	bool rv = false;
-	if (curl) {
-		char * e = curl_easy_escape (curl, d.c_str(), d.size());
-		std::string url = "file:///" + std::string(e);
-		rv = PBD::open_uri (url);
-		curl_free (e);
-	}
-	return rv;
+	return cocoa_open_folder (d.c_str());
 #else
 	return PBD::open_uri (d);
 #endif

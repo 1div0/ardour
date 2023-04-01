@@ -58,9 +58,8 @@ BaseUI::RequestType BaseUI::Quit = BaseUI::new_request_type();
 BaseUI::BaseUI (const string& loop_name)
 	: EventLoop (loop_name)
 	, m_context(MainContext::get_default())
-	, run_loop_thread (0)
+	, _run_loop_thread (0)
 	, request_channel (true)
-	, glib_event_callback (boost::bind (&BaseUI::event_loop_precall, this))
 {
 	base_ui_instance = this;
 	request_channel.set_receive_handler (sigc::mem_fun (*this, &BaseUI::request_handler));
@@ -70,6 +69,7 @@ BaseUI::BaseUI (const string& loop_name)
 
 BaseUI::~BaseUI()
 {
+	delete _run_loop_thread;
 }
 
 BaseUI::RequestType
@@ -121,14 +121,8 @@ BaseUI::run ()
 	_main_loop = MainLoop::create (m_context);
 	attach_request_source ();
 
-	/*
-	 * every time the main loop runs (i.e. before any actual event handling)
-	 */
-
-	glib_event_callback.attach (m_context);
-
 	Glib::Threads::Mutex::Lock lm (_run_lock);
-	run_loop_thread = Glib::Threads::Thread::create (mem_fun (*this, &BaseUI::main_thread));
+	_run_loop_thread = PBD::Thread::create (boost::bind (&BaseUI::main_thread, this));
 	_running.wait (_run_lock);
 }
 
@@ -137,7 +131,7 @@ BaseUI::quit ()
 {
 	if (_main_loop && _main_loop->is_running()) {
 		_main_loop->quit ();
-		run_loop_thread->join ();
+		_run_loop_thread->join ();
 	}
 }
 
@@ -169,7 +163,9 @@ BaseUI::request_handler (Glib::IOCondition ioc)
 void
 BaseUI::signal_new_request ()
 {
-	DEBUG_TRACE (DEBUG::EventLoop, string_compose ("%1: signal_new_request\n", event_loop_name()));
+	if ((DEBUG::EventLoop & PBD::debug_bits).any()) {
+		std::cout << "DEBUG::EventLoop: " <<  string_compose ("%1: signal_new_request\n", event_loop_name());
+	}
 	request_channel.wakeup ();
 }
 
@@ -181,9 +177,6 @@ BaseUI::attach_request_source ()
 {
 	DEBUG_TRACE (DEBUG::EventLoop, string_compose ("%1: attach request source\n", event_loop_name()));
 	request_channel.attach (m_context);
+	maybe_install_precall_handler (m_context);
 }
 
-void
-BaseUI::event_loop_precall ()
-{
-}

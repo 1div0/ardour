@@ -19,7 +19,8 @@
 #ifndef __ardour_delayline_h__
 #define __ardour_delayline_h__
 
-#include <boost/shared_ptr.hpp>
+#include <memory>
+
 #include <boost/shared_array.hpp>
 
 #include "ardour/types.h"
@@ -51,7 +52,7 @@ public:
 	void flush ();
 
 protected:
-	XMLNode& state ();
+	XMLNode& state () const;
 
 private:
 	void allocate_pending_buffers (samplecnt_t, ChanCount const&);
@@ -71,7 +72,7 @@ private:
 	typedef std::vector<boost::shared_array<MidiBuffer> > MidiDlyBuf;
 
 	AudioDlyBuf _buf;
-	boost::shared_ptr<MidiBuffer> _midi_buf;
+	std::shared_ptr<MidiBuffer> _midi_buf;
 
 #ifndef NDEBUG
 	Glib::Threads::Mutex _set_delay_mutex;

@@ -64,7 +64,7 @@ RouteGroupMenu::build (WeakRouteList const & s)
 	/* FInd all the route groups that our subjects are members of */
 	std::set<RouteGroup*> groups;
 	for (WeakRouteList::const_iterator i = _subject.begin (); i != _subject.end(); ++i) {
-		boost::shared_ptr<Route> r = i->lock ();
+		std::shared_ptr<Route> r = i->lock ();
 		if (r) {
 			groups.insert (r->route_group ());
 		}
@@ -84,6 +84,9 @@ RouteGroupMenu::build (WeakRouteList const & s)
 	MenuList& items = _menu->items ();
 
 	items.push_back (MenuElem (_("New Group..."), sigc::mem_fun (*this, &RouteGroupMenu::new_group)));
+	if (groups.size() == 1 && *groups.begin() != 0) {
+		items.push_back (MenuElem (_("Edit Group..."), sigc::bind (sigc::mem_fun (*this, &RouteGroupMenu::edit_group), *groups.begin ())));
+	}
 	items.push_back (SeparatorElem ());
 
 	RadioMenuItem::Group group;
@@ -142,7 +145,7 @@ RouteGroupMenu::set_group (Gtk::RadioMenuItem* e, RouteGroup* g)
 	}
 
 	for (WeakRouteList::const_iterator i = _subject.begin(); i != _subject.end(); ++i) {
-		boost::shared_ptr<Route> r = i->lock ();
+		std::shared_ptr<Route> r = i->lock ();
 		if (!r || r->route_group () == g) {
 			/* lock of weak_ptr failed, or the group for this route is already right */
 			continue;
@@ -183,6 +186,14 @@ RouteGroupMenu::new_group_dialog_finished (int r, RouteGroupDialog* d)
 	}
 
 	delete_when_idle (d);
+}
+
+void
+RouteGroupMenu::edit_group (ARDOUR::RouteGroup* g)
+{
+	RouteGroupDialog* d = new RouteGroupDialog (g, false);
+	d->signal_response().connect (sigc::hide (sigc::bind (sigc::ptr_fun (&delete_when_idle<RouteGroupDialog>), d)));
+	d->present ();
 }
 
 Gtk::Menu *

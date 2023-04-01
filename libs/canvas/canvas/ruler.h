@@ -56,10 +56,10 @@ public:
 		virtual void get_marks (std::vector<Mark>&, int64_t lower, int64_t upper, int maxchars) const = 0;
 	};
 
-	Ruler (Canvas*, const Metric& m);
-	Ruler (Canvas*, const Metric& m, Rect const&);
-	Ruler (Item*, const Metric& m);
-	Ruler (Item*, const Metric& m, Rect const&);
+	Ruler (Canvas*, const Metric* m);
+	Ruler (Canvas*, const Metric* m, Rect const&);
+	Ruler (Item*, const Metric* m);
+	Ruler (Item*, const Metric* m, Rect const&);
 
 	virtual ~Ruler () {
 		delete _font_description;
@@ -68,7 +68,7 @@ public:
 	void set_range (int64_t lower, int64_t upper);
 	void set_font_description (Pango::FontDescription);
 	void set_second_font_description (Pango::FontDescription);
-	void set_metric (const Metric&);
+	void set_metric (const Metric *);
 
 	void render (Rect const & area, Cairo::RefPtr<Cairo::Context>) const;
 

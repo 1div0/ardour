@@ -37,7 +37,7 @@ FPUTest::tearDown ()
 }
 
 void
-FPUTest::run (size_t align_max)
+FPUTest::run (size_t align_max, float const max_diff)
 {
 	apply_gain_to_buffer (_test1, _size, 1.33);
 	default_apply_gain_to_buffer (_comp1, _size, 1.33);
@@ -58,15 +58,15 @@ FPUTest::run (size_t align_max)
 
 			CPPUNIT_ASSERT_MESSAGE (string_compose ("Compute peak not aligned off: %1 cnt: %2", off, cnt), fabsf (pk_test - pk_comp) < 1e-6);
 
-			/* mix buffers w/gain */
-			mix_buffers_with_gain (&_test1[off], &_test2[off], cnt, 0.45);
-			default_mix_buffers_with_gain (&_comp1[off], &_comp2[off], cnt, 0.45);
-			compare (string_compose ("Mix Buffers w/gain not aligned off: %1 cnt: %2", off, cnt), cnt);
-
 			/* mix buffers w/o gain */
 			mix_buffers_no_gain (&_test1[off], &_test2[off], cnt);
 			default_mix_buffers_no_gain (&_comp1[off], &_comp2[off], cnt);
 			compare (string_compose ("Mix Buffers no gain not aligned off: %1 cnt: %2", off, cnt), cnt);
+
+			/* mix buffers w/gain */
+			mix_buffers_with_gain (&_test1[off], &_test2[off], cnt, 0.45);
+			default_mix_buffers_with_gain (&_comp1[off], &_comp2[off], cnt, 0.45);
+			compare (string_compose ("Mix Buffers w/gain not aligned off: %1 cnt: %2", off, cnt), cnt, max_diff);
 
 			/* copy vector */
 			copy_vector (&_test1[off], &_test2[off], cnt);
@@ -86,11 +86,11 @@ FPUTest::run (size_t align_max)
 }
 
 void
-FPUTest::compare (std::string msg, size_t cnt)
+FPUTest::compare (std::string msg, size_t cnt, float max_diff)
 {
 	size_t err = 0;
 	for (size_t i = 0; i < cnt; ++i) {
-		if (_test1[i] != _comp1[i]) {
+		if (fabsf (_test1[i] - _comp1[i]) > max_diff) {
 			++err;
 		}
 	}
@@ -123,7 +123,7 @@ FPUTest::avxFmaTest ()
 	mix_buffers_no_gain   = x86_sse_avx_mix_buffers_no_gain;
 	copy_vector           = x86_sse_avx_copy_vector;
 
-	run (align_max);
+	run (align_max, FLT_EPSILON);
 }
 
 void
@@ -151,6 +151,33 @@ FPUTest::avxTest ()
 	copy_vector           = x86_sse_avx_copy_vector;
 
 	run (align_max);
+}
+
+void
+FPUTest::avx512fTest ()
+{
+	PBD::FPU* fpu = PBD::FPU::instance ();
+	if (!fpu->has_avx512f ()) {
+		printf ("AVX512F is not available at run-time\n");
+		return;
+	}
+
+#if ( defined(__x86_64__) || defined(_M_X64) )
+	size_t align_max = 64;
+#else
+	size_t align_max = 16;
+#endif
+	CPPUNIT_ASSERT_MESSAGE ("Aligned Malloc", (((intptr_t)_test1) % align_max) == 0);
+	CPPUNIT_ASSERT_MESSAGE ("Aligned Malloc", (((intptr_t)_test2) % align_max) == 0);
+
+	compute_peak          = x86_avx512f_compute_peak;
+	find_peaks            = x86_avx512f_find_peaks;
+	apply_gain_to_buffer  = x86_avx512f_apply_gain_to_buffer;
+	mix_buffers_with_gain = x86_avx512f_mix_buffers_with_gain;
+	mix_buffers_no_gain   = x86_avx512f_mix_buffers_no_gain;
+	copy_vector           = x86_avx512f_copy_vector;
+
+	run (align_max, FLT_EPSILON);
 }
 
 void
@@ -225,7 +252,11 @@ FPUTest::veclibTest ()
 	mix_buffers_no_gain   = veclib_mix_buffers_no_gain;
 	copy_vector           = default_copy_vector;
 
+#ifdef  __aarch64__
+	run (16, FLT_EPSILON);
+#else
 	run (16);
+#endif
 }
 
 #else

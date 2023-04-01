@@ -23,28 +23,28 @@
 #ifndef __ardour_source_h__
 #define __ardour_source_h__
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <set>
 
 #include <glibmm/threads.h>
 
-#include <boost/shared_ptr.hpp>
-#include <boost/enable_shared_from_this.hpp>
 #include <boost/utility.hpp>
 
 #include "pbd/statefuldestructible.h"
-#include "pbd/g_atomic_compat.h"
 
 #include "ardour/ardour.h"
 #include "ardour/session_object.h"
 #include "ardour/data_type.h"
+#include "ardour/segment_descriptor.h"
 
 namespace ARDOUR {
 
 class Session;
 
 class LIBARDOUR_API Source : public SessionObject,
-		public boost::enable_shared_from_this<ARDOUR::Source>
+		public std::enable_shared_from_this<ARDOUR::Source>
 {
 public:
 	enum Flag {
@@ -62,7 +62,8 @@ public:
 		Missing = 0x400, /* used for MIDI only */
 	};
 
-	typedef Glib::Threads::Mutex::Lock Lock;
+	typedef Glib::Threads::RWLock::ReaderLock ReaderLock;
+	typedef Glib::Threads::RWLock::WriterLock WriterLock;
 
 	Source (Session&, DataType type, const std::string& name, Flag flags=Flag(0));
 	Source (Session&, const XMLNode&);
@@ -74,23 +75,22 @@ public:
 	time_t timestamp() const { return _timestamp; }
 	void stamp (time_t when) { _timestamp = when; }
 
-	timecnt_t length() const { return _length; }
-	samplecnt_t length_samples () const { return _length.samples(); };
+	virtual timepos_t length() const { return _length; }
 
 	virtual bool        empty () const;
-	virtual void        update_length (timecnt_t const & cnt) {}
+	virtual void        update_length (timepos_t const & dur) {}
 
 	void                 set_take_id (std::string id) { _take_id =id; }
 	const std::string&   take_id ()        const { return _take_id; }
 
 	void mark_for_remove();
 
-	virtual void mark_streaming_write_started (const Lock& lock) {}
-	virtual void mark_streaming_write_completed (const Lock& lock) = 0;
+	virtual void mark_streaming_write_started (const WriterLock& lock) {}
+	virtual void mark_streaming_write_completed (const WriterLock& lock) = 0;
 
 	virtual void session_saved() {}
 
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 	int set_state (XMLNode const &, int version);
 
 	bool         writable () const;
@@ -113,6 +113,7 @@ public:
 	size_t n_captured_xruns () const { return _xruns.size (); }
 	XrunPositions const& captured_xruns () const { return _xruns; }
 	void set_captured_xruns (XrunPositions const& xruns) { _xruns = xruns; }
+	void set_captured_marks (CueMarkers const& marks);
 
 	CueMarkers const & cue_markers() const { return _cue_markers; }
 	bool add_cue_marker (CueMarker const &);
@@ -127,14 +128,19 @@ public:
 
 	bool have_natural_position() const { return _have_natural_position; }
 
+	/* This method is only for use during a capture pass. It makes no sense
+	 * in any other context.
+	 */
+	timecnt_t time_since_capture_start (timepos_t const & pos);
+
 	void set_allow_remove_if_empty (bool yn);
 
-	Glib::Threads::Mutex& mutex() { return _lock; }
+	Glib::Threads::RWLock& mutex() { return _lock; }
 	Flag flags() const { return _flags; }
 
 	virtual void inc_use_count ();
 	virtual void dec_use_count ();
-	int  use_count() const { return g_atomic_int_get (&_use_count); }
+	int  use_count() const { return _use_count.load(); }
 	bool used() const { return use_count() > 0; }
 
 	uint32_t level() const { return _level; }
@@ -145,6 +151,9 @@ public:
 	void set_captured_for (std::string str) { _captured_for = str; }
 	std::string captured_for() const { return _captured_for; }
 
+	bool get_segment_descriptor (TimelineRange const &, SegmentDescriptor&);
+	int set_segment_descriptor (SegmentDescriptor const &);
+
   protected:
 	DataType            _type;
 	Flag                _flags;
@@ -153,15 +162,18 @@ public:
 	timepos_t           _natural_position;
 	bool                _have_natural_position;
 	bool                _analysed;
-	GATOMIC_QUAL gint _use_count; /* atomic */
+	std::atomic<int> _use_count; /* atomic */
 	uint32_t            _level; /* how deeply nested is this source w.r.t a disk file */
 	std::string         _ancestor_name;
 	std::string        _captured_for;
-	timecnt_t           _length;
+	timepos_t          _length;
 	XrunPositions      _xruns;
 	CueMarkers         _cue_markers;
 
-	mutable Glib::Threads::Mutex _lock;
+	typedef std::vector<SegmentDescriptor> SegmentDescriptors;
+	SegmentDescriptors segment_descriptors;
+
+	mutable Glib::Threads::RWLock _lock;
 	mutable Glib::Threads::Mutex _analysis_lock;
 
   private:

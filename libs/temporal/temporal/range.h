@@ -130,7 +130,7 @@ template<typename T>
 	return coverage_inclusive_ends (sa, eaE.decrement(), sb, ebE.decrement());
 }
 
-template<>  /*LIBTEMPORAL_API*/ OverlapType coverage_exclusive_ends<int64_t> (int64_t sa, int64_t eaE, int64_t sb, int64_t ebE);
+template<> LIBTEMPORAL_TEMPLATE_API OverlapType coverage_exclusive_ends<int64_t> (int64_t sa, int64_t eaE, int64_t sb, int64_t ebE);
 
 
 class RangeList;
@@ -150,7 +150,13 @@ class LIBTEMPORAL_API Range {
 	 */
 
 	Range (timepos_t const & s, timepos_t const & e) : _start (s), _end (e) {}
+	Range (samplepos_t const s, samplepos_t const e) : _start (s), _end (e) {}
 	bool empty() const { return _start == _end; }
+
+	/* length semantics: start + length = end thus end - start aka * start.distance (end)
+	 * extent semantics: 1 + (end - start)
+	 */
+
 	timecnt_t length() const { return _start.distance (_end); }
 
 	RangeList subtract (RangeList &) const;
@@ -165,20 +171,24 @@ class LIBTEMPORAL_API Range {
 		return other._start == _start && other._end == _end;
 	}
 
+	void force_to_samples () {
+		_start = timepos_t((samplepos_t)_start.samples ());
+		_end   = timepos_t((samplepos_t)_end.samples ());
+	}
+
 	/** for a T, return a mapping of it into the range (used for
 	 * looping). If the argument is earlier than or equal to the end of
 	 * this range, do nothing.
 	 */
-	timepos_t squish (timepos_t const & t) const {
-		if (t >= _end) {
-			return _start + (_start.distance (t) % length());
-		}
-		return t;
-	}
+	timepos_t squish (timepos_t const & t) const;
 
 	/* end is exclusive */
 	OverlapType coverage (timepos_t const & s, timepos_t const & e) const {
 		return Temporal::coverage_exclusive_ends (_start, _end, s, e);
+	}
+
+	void dump (std::ostream& ostr) const {
+		ostr << "Range @ " << this << ' ' << _start << " .. " << _end;
 	}
 
   private:
@@ -187,6 +197,15 @@ class LIBTEMPORAL_API Range {
 };
 
 typedef Range TimeRange;
+
+}
+
+namespace std {
+LIBTEMPORAL_API std::ostream&  operator<< (std::ostream & o, Temporal::Range const &);
+}
+
+namespace Temporal {
+
 
 class LIBTEMPORAL_API RangeList {
 public:
@@ -233,6 +252,13 @@ public:
 		_dirty = false;
 	}
 
+	void dump (std::ostream& ostr) const {
+		ostr << "RangeList @ " << this << std::endl;
+		for (auto const & r : _list) {
+			ostr << r << std::endl;
+		}
+	}
+
 private:
 
 	List _list;
@@ -248,5 +274,10 @@ struct LIBTEMPORAL_API RangeMove {
 };
 
 }
+
+namespace std {
+LIBTEMPORAL_API std::ostream&  operator<< (std::ostream & o, Temporal::RangeList const &);
+}
+
 
 #endif /* __libtemporal_range_hpp__ */

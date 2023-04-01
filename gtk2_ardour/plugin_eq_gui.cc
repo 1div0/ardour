@@ -53,12 +53,13 @@
 #include "fft.h"
 #include "ardour_ui.h"
 #include "gui_thread.h"
+#include "ui_config.h"
 
 #include "pbd/i18n.h"
 
 using namespace ARDOUR;
 
-PluginEqGui::PluginEqGui (boost::shared_ptr<ARDOUR::PluginInsert> pluginInsert)
+PluginEqGui::PluginEqGui (std::shared_ptr<ARDOUR::PluginInsert> pluginInsert)
 	: _min_dB (-12.0)
 	, _max_dB (+12.0)
 	, _step_dB (3.0)
@@ -82,7 +83,7 @@ PluginEqGui::PluginEqGui (boost::shared_ptr<ARDOUR::PluginInsert> pluginInsert)
 
 	_analysis_area = new Gtk::DrawingArea();
 	_analysis_width = 256.0;
-	_analysis_height = 256.0;
+	_analysis_height = std::max<float> (256.0, 256.0 * UIConfiguration::instance().get_ui_scale ());
 	_analysis_area->set_size_request (_analysis_width, _analysis_height);
 
 	_analysis_area->add_events (Gdk::POINTER_MOTION_MASK | Gdk::LEAVE_NOTIFY_MASK | Gdk::BUTTON_PRESS_MASK);
@@ -108,6 +109,7 @@ PluginEqGui::PluginEqGui (boost::shared_ptr<ARDOUR::PluginInsert> pluginInsert)
 
 	ADD_DB_ROW( -6,  +6, 1, "-6dB .. +6dB");
 	ADD_DB_ROW(-12, +12, 3, "-12dB .. +12dB");
+	ADD_DB_ROW(-15, +15, 3, "-15dB .. +15dB");
 	ADD_DB_ROW(-24, +24, 5, "-24dB .. +24dB");
 	ADD_DB_ROW(-36, +36, 6, "-36dB .. +36dB");
 	ADD_DB_ROW(-64, +64,12, "-64dB .. +64dB");
@@ -126,12 +128,12 @@ PluginEqGui::PluginEqGui (boost::shared_ptr<ARDOUR::PluginInsert> pluginInsert)
 	dBSelectBin->add (*manage(dBScaleCombo));
 
 	_live_signal_combo = new Gtk::ComboBoxText ();
-	_live_signal_combo->append_text (_("Off"));
-	_live_signal_combo->append_text (_("Output / Input"));
-	_live_signal_combo->append_text (_("Input"));
-	_live_signal_combo->append_text (_("Output"));
-	_live_signal_combo->append_text (_("Input +40dB"));
-	_live_signal_combo->append_text (_("Output +40dB"));
+	_live_signal_combo->append (_("Off"));
+	_live_signal_combo->append (_("Output / Input"));
+	_live_signal_combo->append (_("Input"));
+	_live_signal_combo->append (_("Output"));
+	_live_signal_combo->append (_("Input +40dB"));
+	_live_signal_combo->append (_("Output +40dB"));
 	_live_signal_combo->set_active (0);
 
 	Gtk::Label *live_signal_label = new Gtk::Label (_("Live signal:"));
@@ -148,7 +150,7 @@ PluginEqGui::PluginEqGui (boost::shared_ptr<ARDOUR::PluginInsert> pluginInsert)
 	// Freq/dB info for mouse over
 	_pointer_info = new Gtk::Label ("", 1, 0.5);
 	_pointer_info->set_name ("PluginAnalysisInfoLabel");
-	Gtkmm2ext::set_size_request_to_display_given_text (*_pointer_info, "10.0kHz_000.0dB_180.0\u00B0", 0, 0);
+	Gtkmm2ext::set_size_request_to_display_given_text (*_pointer_info, u8"10.0kHz_000.0dB_180.0\u00B0", 0, 0);
 
 	// populate table
 	attach (*manage(_analysis_area), 0, 4, 0, 1);
@@ -229,7 +231,7 @@ PluginEqGui::stop_updating ()
 void
 PluginEqGui::start_updating ()
 {
-	if (!_update_connection.connected() && is_visible()) {
+	if (!_update_connection.connected() && get_visible()) {
 		_update_connection = Glib::signal_timeout().connect (sigc::mem_fun (this, &PluginEqGui::timeout_callback), 250, Glib::PRIORITY_DEFAULT_IDLE);
 	}
 }
@@ -407,7 +409,7 @@ PluginEqGui::run_impulse_analysis ()
 	/* run at most at session's block size chunks.
 	 *
 	 * This is important since VSTs may call audioMasterGetBlockSize
-	 * or access various other /real/ session paramaters using the
+	 * or access various other /real/ session parameters using the
 	 * audioMasterCallback
 	 */
 	samplecnt_t block_size = ARDOUR_UI::instance()->the_session()->get_block_size();
@@ -505,7 +507,7 @@ PluginEqGui::update_pointer_info( float x)
 	if (_phase_button->get_active ()) {
 		float phase = 180. * _impulse_fft->phase_at_bin (i) / M_PI;
 		ss << " " << std::setw (6) << std::setprecision (1) << std::showpos << phase;
-		ss << std::setw (0) << "\u00B0";
+		ss << std::setw (0) << u8"\u00B0";
 	}
 	_pointer_info->set_text (ss.str());
 }
@@ -623,9 +625,9 @@ PluginEqGui::draw_scales_phase (Gtk::Widget*, cairo_t *cr)
 
 		cairo_set_source_rgb (cr, .8, .9, 0.2);
 		if (i == 0) {
-			snprintf (buf,256, "0\u00b0");
+			snprintf (buf,256, u8"0\u00b0");
 		} else {
-			snprintf (buf,256, "%d\u00b0", (i * 45));
+			snprintf (buf,256, u8"%d\u00b0", (i * 45));
 		}
 		cairo_text_extents (cr, buf, &t_ext);
 		cairo_move_to (cr, _analysis_width - t_ext.width - t_ext.x_bearing - 2.0, y - extents.descent);
@@ -646,7 +648,7 @@ PluginEqGui::draw_scales_phase (Gtk::Widget*, cairo_t *cr)
 		y = _analysis_height / 2.0 + (float)i * (_analysis_height / 8.0) * PHASE_PROPORTION;
 
 		// label
-		snprintf (buf,256, "-%d\u00b0", (i * 45));
+		snprintf (buf,256, u8"-%d\u00b0", (i * 45));
 		cairo_set_source_rgb (cr, .8, .9, 0.2);
 		cairo_text_extents (cr, buf, &t_ext);
 		cairo_move_to (cr, _analysis_width - t_ext.width - t_ext.x_bearing - 2.0, y - extents.descent);
@@ -723,7 +725,7 @@ PluginEqGui::draw_scales_power (Gtk::Widget */*w*/, cairo_t *cr)
 	float x;
 
 	cairo_set_line_width (cr, 1.5);
-	cairo_set_font_size (cr, 9);
+	cairo_set_font_size (cr, ceil (10.0 * UIConfiguration::instance().get_ui_scale ()));
 
 	cairo_font_extents_t extents;
 	cairo_font_extents (cr, &extents);

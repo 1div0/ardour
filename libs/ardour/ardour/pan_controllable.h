@@ -20,9 +20,8 @@
 #ifndef __libardour_pan_controllable_h__
 #define __libardour_pan_controllable_h__
 
+#include <memory>
 #include <string>
-
-#include <boost/shared_ptr.hpp>
 
 #include "evoral/Parameter.h"
 
@@ -41,7 +40,7 @@ class LIBARDOUR_API PanControllable : public AutomationControl
 		: AutomationControl (s,
 		                     param,
 		                     ParameterDescriptor(param),
-		                     boost::shared_ptr<AutomationList>(new AutomationList(param, td)),
+		                     std::shared_ptr<AutomationList>(new AutomationList(param, td)),
 		                     name)
 		, owner (o)
 	{}

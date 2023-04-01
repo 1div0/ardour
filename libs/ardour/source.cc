@@ -67,7 +67,7 @@ Source::Source (Session& s, DataType type, const string& name, Flag flags)
 	, _have_natural_position (false)
 	, _level (0)
 {
-	g_atomic_int_set (&_use_count, 0);
+	_use_count.store (0);
 	_analysed = false;
 	_timestamp = 0;
 
@@ -82,7 +82,7 @@ Source::Source (Session& s, const XMLNode& node)
 	, _have_natural_position (false)
 	, _level (0)
 {
-	g_atomic_int_set (&_use_count, 0);
+	_use_count.store (0);
 	_analysed = false;
 	_timestamp = 0;
 
@@ -107,14 +107,14 @@ Source::fix_writable_flags ()
 }
 
 XMLNode&
-Source::get_state ()
+Source::get_state () const
 {
 	XMLNode *node = new XMLNode (X_("Source"));
 
 	node->set_property (X_("name"), name());
 	node->set_property (X_("take-id"), take_id());
 	node->set_property (X_("type"), _type);
-	node->set_property (X_(X_("flags")), _flags);
+	node->set_property (X_("flags"), _flags);
 	node->set_property (X_("id"), id());
 
 	if (_timestamp != 0) {
@@ -142,6 +142,15 @@ Source::get_state ()
 		node->add_child_nocopy (get_cue_state());
 	}
 
+	if (!segment_descriptors.empty()) {
+		XMLNode* sd_node = new XMLNode (X_("SegmentDescriptors"));
+		for (auto const & sd : segment_descriptors) {
+			sd_node->add_child_nocopy (sd.get_state());
+		}
+		node->add_child_nocopy (*sd_node);
+	}
+
+
 	return *node;
 }
 
@@ -152,7 +161,7 @@ Source::set_state (const XMLNode& node, int version)
 	const CueMarkers old_cues = _cue_markers;
 	XMLNodeList nlist = node.children();
 	int64_t t;
-	samplepos_t ts;
+	XMLNode* sd_node;
 
 	if (node.name() == X_("Cues")) {
 		/* partial state */
@@ -179,14 +188,12 @@ Source::set_state (const XMLNode& node, int version)
 		_timestamp = (time_t) t;
 	}
 
-	if (node.get_property ("natural-position", ts)) {
-		_natural_position = timepos_t (ts);
+	if (node.get_property ("natural-position", _natural_position)) {
 		_have_natural_position = true;
-	} else if (node.get_property ("timeline-position", ts)) {
+	} else if (node.get_property ("timeline-position", _natural_position)) {
 		/* some older versions of ardour might have stored this with
 		   this property name.
 		*/
-		_natural_position = timepos_t (ts);
 		_have_natural_position = true;
 	}
 
@@ -242,6 +249,20 @@ Source::set_state (const XMLNode& node, int version)
 		   sometimes marks sources as removable which shouldn't be.
 		*/
 		_flags = Flag (_flags & ~(Writable|Removable|RemovableIfEmpty|RemoveAtDestroy|CanRename));
+	}
+
+	sd_node = node.child (X_("SegmentDescriptors"));
+
+	if (sd_node) {
+		segment_descriptors.clear ();
+		try {
+			XMLNodeList nlist = sd_node->children();
+			for (XMLNodeIterator niter = nlist.begin(); niter != nlist.end(); ++niter) {
+				segment_descriptors.push_back (SegmentDescriptor (**niter, version));
+			}
+		} catch (...) {
+			error << string_compose (_("Segment descriptors not loaded for source %1"), name()) << endmsg;
+		}
 	}
 
 	/* support to make undo/redo actually function. Very few things about
@@ -347,10 +368,6 @@ Source::get_transients_path () const
 	vector<string> parts;
 	string s;
 
-	/* old sessions may not have the analysis directory */
-
-	_session.ensure_subdirs ();
-
 	s = _session.analysis_dir ();
 	parts.push_back (s);
 
@@ -398,7 +415,12 @@ Source::set_natural_position (timepos_t const & pos)
 {
 	_natural_position = pos;
 	_have_natural_position = true;
-	_length.set_position (pos);
+}
+
+timecnt_t
+Source::time_since_capture_start (timepos_t const & pos)
+{
+	return _natural_position.distance (pos);
 }
 
 void
@@ -418,25 +440,25 @@ Source::set_allow_remove_if_empty (bool yn)
 void
 Source::inc_use_count ()
 {
-    g_atomic_int_inc (&_use_count);
+    _use_count.fetch_add (1);
 }
 
 void
 Source::dec_use_count ()
 {
 #ifndef NDEBUG
-        gint oldval = g_atomic_int_add (&_use_count, -1);
+	int oldval = _use_count.fetch_sub (1);
         if (oldval <= 0) {
                 cerr << "Bad use dec for " << name() << endl;
                 abort ();
         }
         assert (oldval > 0);
 #else
-        g_atomic_int_add (&_use_count, -1);
+        _use_count.fetch_sub (1);
 #endif
 
 	try {
-		boost::shared_ptr<Source> sptr = shared_from_this();
+		std::shared_ptr<Source> sptr = shared_from_this();
 	} catch (...) {
 		/* no shared_ptr available, relax; */
 	}
@@ -446,6 +468,15 @@ bool
 Source::writable () const
 {
         return (_flags & Writable) && _session.writable();
+}
+
+void
+Source::set_captured_marks (CueMarkers const &marks)
+{
+	for (auto mark : marks) {
+		std::cerr << "adding " << mark.text() << " at " << mark.position() << "\n";
+		add_cue_marker(mark);
+	}
 }
 
 bool
@@ -512,5 +543,40 @@ Source::clear_cue_markers ()
 bool
 Source::empty () const
 {
-	return _length == timecnt_t();
+	return _length == timepos_t ();
+}
+
+bool
+Source::get_segment_descriptor (TimelineRange const & range, SegmentDescriptor& segment)
+{
+	/* Note: since we disallow overlapping segments, any overlap between
+	   the @p range and an existing segment counts as a match.
+	*/
+
+	for (auto const & sd : segment_descriptors) {
+		if (coverage_exclusive_ends (sd.position(), sd.position() + sd.extent(),
+		                             segment.position(), segment.position() + segment.extent()) != Temporal::OverlapNone) {
+			segment = sd;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+int
+Source::set_segment_descriptor (SegmentDescriptor const & sr)
+{
+	/* We disallow any overlap between segments. They must describe non-overlapping ranges */
+
+	for (auto const & sd : segment_descriptors) {
+		if (coverage_exclusive_ends (sd.position(), sd.position() + sd.extent(),
+		                             sr.position(), sr.position() + sr.extent()) != Temporal::OverlapNone) {
+			return -1;
+		}
+	}
+
+	segment_descriptors.push_back (sr);
+
+	return 0;
 }

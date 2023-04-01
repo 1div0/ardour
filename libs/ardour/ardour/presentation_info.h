@@ -24,12 +24,12 @@
 #include <iostream>
 #include <string>
 
-#include <stdint.h>
+#include <atomic>
+#include <cstdint>
 
 #include "pbd/signals.h"
 #include "pbd/stateful.h"
 #include "pbd/properties.h"
-#include "pbd/g_atomic_compat.h"
 
 #include "ardour/libardour_visibility.h"
 
@@ -41,6 +41,7 @@ namespace Properties {
 	LIBARDOUR_API extern PBD::PropertyDescriptor<uint32_t> order;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<uint32_t> color;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> selected;
+	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> trigger_track;
 	/* we use this; declared in region.cc */
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> hidden;
 }
@@ -128,8 +129,16 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 		/* bus type for monitor mixes */
 		FoldbackBus = 0x2000,
 
+		/* has TriggerBox, show on TriggerUI page */
+		TriggerTrack = 0x4000,
+
 		/* special mask to delect out "state" bits */
-		StatusMask = (Hidden),
+#ifdef MIXBUS
+		StatusMask = (Hidden | MixbusEditorHidden | TriggerTrack),
+#else
+		StatusMask = (Hidden | TriggerTrack),
+#endif
+
 		/* special mask to delect select type bits */
 		TypeMask = (AudioBus|AudioTrack|MidiTrack|MidiBus|VCA|MasterOut|MonitorOut|Auditioner|FoldbackBus)
 	};
@@ -160,6 +169,7 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 
 	void set_color (color_t);
 	void set_hidden (bool yn);
+	void set_trigger_track (bool yn);
 	void set_flags (Flag f) { _flags = f; }
 
 	bool order_set() const { return _flags & OrderSet; }
@@ -167,6 +177,7 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 	int selection_cnt() const { return _selection_cnt; }
 
 	bool hidden() const { return _flags & Hidden; }
+	bool trigger_track () const { return _flags & TriggerTrack; }
 	bool special(bool with_master = true) const { return _flags & ((with_master ? MasterOut : 0)|MonitorOut|Auditioner); }
 
 	bool flag_match (Flag f) const {
@@ -224,7 +235,7 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 	}
 
 	int set_state (XMLNode const&, int);
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 
 	bool operator==(PresentationInfo const& other) {
 		return (_order == other.order()) && (_flags == other.flags());
@@ -276,13 +287,15 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 
 	static PBD::PropertyChange _pending_static_changes;
 	static Glib::Threads::Mutex static_signal_lock;
-	static GATOMIC_QUAL gint   _change_signal_suspended;
+	static std::atomic<int>   _change_signal_suspended;
 
 	static int selection_counter;
 };
 
 }
 
+namespace std {
 std::ostream& operator<<(std::ostream& o, ARDOUR::PresentationInfo const& rid);
+}
 
 #endif /* __libardour_presentation_info_h__ */

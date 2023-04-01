@@ -20,17 +20,16 @@
 #ifndef __libbackend_dummy_audiobackend_h__
 #define __libbackend_dummy_audiobackend_h__
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include <set>
 
-#include <stdint.h>
 #include <pthread.h>
 
 #include <ltc.h>
-
-#include <boost/shared_ptr.hpp>
 
 #include "pbd/natsort.h"
 #include "pbd/ringbuffer.h"
@@ -52,23 +51,21 @@ namespace DummyMidiData {
 };
 
 
-class DummyMidiEvent {
+class DummyMidiEvent : public BackendMIDIEvent {
 	public:
 		DummyMidiEvent (const pframes_t timestamp, const uint8_t* data, size_t size);
 		DummyMidiEvent (const DummyMidiEvent& other);
 		~DummyMidiEvent ();
 		size_t size () const { return _size; };
 		pframes_t timestamp () const { return _timestamp; };
-		const unsigned char* const_data () const { return _data; };
-		unsigned char* data () { return _data; };
-		bool operator< (const DummyMidiEvent &other) const { return timestamp () < other.timestamp (); };
+		const uint8_t* data () const { return _data; };
 	private:
 		size_t _size;
 		pframes_t _timestamp;
 		uint8_t *_data;
 };
 
-typedef std::vector<boost::shared_ptr<DummyMidiEvent> > DummyMidiBuffer;
+typedef std::vector<std::shared_ptr<DummyMidiEvent> > DummyMidiBuffer;
 
 class DummyPort : public BackendPort {
 	protected:

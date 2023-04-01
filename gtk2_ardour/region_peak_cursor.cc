@@ -83,7 +83,7 @@ RegionPeakCursor::hide ()
 void
 RegionPeakCursor::set (AudioRegionView* arv, samplepos_t when, samplecnt_t samples_per_pixel)
 {
-	boost::shared_ptr<ARDOUR::AudioRegion> ar = boost::dynamic_pointer_cast<ARDOUR::AudioRegion> (arv->region ());
+	std::shared_ptr<ARDOUR::AudioRegion> ar = std::dynamic_pointer_cast<ARDOUR::AudioRegion> (arv->region ());
 	assert (ar);
 	assert (ar->n_channels () > 0);
 
@@ -97,6 +97,12 @@ RegionPeakCursor::set (AudioRegionView* arv, samplepos_t when, samplecnt_t sampl
 	s += ar->start_sample ();
 
 	PeakData p;
+
+	/* no default constructor, since PeakData is POD */
+
+	p.min = 0;
+	p.max = 0;
+
 	for (uint32_t chn = 0; chn < ar->n_channels (); ++chn) {
 		PeakData pc;
 		ar->read_peaks (&pc, 1, s, samples_per_pixel, chn, samples_per_pixel);

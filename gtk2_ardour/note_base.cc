@@ -61,7 +61,7 @@ NoteBase::set_colors ()
 	color_modifier = UIConfiguration::instance().modifier ("midi note");
 }
 
-NoteBase::NoteBase(MidiRegionView& region, bool with_events, const boost::shared_ptr<NoteType> note)
+NoteBase::NoteBase(MidiRegionView& region, bool with_events, const std::shared_ptr<NoteType> note)
 	: _region(region)
 	, _item (0)
 	, _text(0)
@@ -175,7 +175,7 @@ NoteBase::set_selected(bool selected)
 	const uint32_t base_col = base_color();
 	set_fill_color (base_col);
 
-	set_outline_color(calculate_outline(base_col, (_flags == Selected)));
+	set_outline_color(calculate_outline (base_col, (_flags == Selected)));
 }
 
 #define SCALE_USHORT_TO_UINT8_T(x) ((x) / 257)

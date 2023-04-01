@@ -52,6 +52,8 @@ namespace ARDOUR {
 	LIBARDOUR_API extern const char* const plugins_dir_name;
 	LIBARDOUR_API extern const char* const externals_dir_name;
 	LIBARDOUR_API extern const char* const lua_dir_name;
+	LIBARDOUR_API extern const char* const media_dir_name;
+	LIBARDOUR_API extern const char* const midi_map_dir_name;
 
 };
 

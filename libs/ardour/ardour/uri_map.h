@@ -27,8 +27,8 @@
 
 #include <glibmm/threads.h>
 
-#include "lv2.h"
-#include "lv2/lv2plug.in/ns/ext/urid/urid.h"
+#include <lv2/lv2plug.in/ns/lv2core/lv2.h>
+#include <lv2/lv2plug.in/ns/ext/urid/urid.h>
 
 #include "ardour/libardour_visibility.h"
 
@@ -65,7 +65,10 @@ public:
 		uint32_t atom_URID;
 		uint32_t atom_Blank;
 		uint32_t atom_Object;
+		uint32_t atom_Double;
 		uint32_t atom_Float;
+		uint32_t atom_Long;
+		uint32_t atom_Int;
 		uint32_t log_Error;
 		uint32_t log_Note;
 		uint32_t log_Trace;

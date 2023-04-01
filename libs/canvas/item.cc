@@ -24,9 +24,9 @@
 #include "pbd/convert.h"
 
 #include "canvas/canvas.h"
-#include "canvas/constraint_packer.h"
 #include "canvas/debug.h"
 #include "canvas/item.h"
+#include "canvas/root_group.h"
 #include "canvas/scroll_group.h"
 
 using namespace std;
@@ -42,7 +42,6 @@ Item::Item (Canvas* canvas)
 	, _parent (0)
 	, _scroll_parent (0)
 	, _visible (true)
-	, _bounding_box_dirty (true)
 	, _pack_options (PackOptions (0))
 	, _layout_sensitive (false)
 	, _lut (0)
@@ -50,6 +49,9 @@ Item::Item (Canvas* canvas)
 	, _requested_width (-1)
 	, _requested_height (-1)
 	, _ignore_events (false)
+	, _scroll_translation (true)
+	, _bounding_box_dirty (true)
+	, change_blocked (0)
 {
 	DEBUG_TRACE (DEBUG::CanvasItems, string_compose ("new canvas item %1\n", this));
 }
@@ -61,7 +63,6 @@ Item::Item (Item* parent)
 	, _parent (parent)
 	, _scroll_parent (0)
 	, _visible (true)
-	, _bounding_box_dirty (true)
 	, _pack_options (PackOptions (0))
 	, _layout_sensitive (false)
 	, _lut (0)
@@ -69,6 +70,9 @@ Item::Item (Item* parent)
 	, _requested_width (-1)
 	, _requested_height (-1)
 	, _ignore_events (false)
+	, _scroll_translation (true)
+	, _bounding_box_dirty (true)
+	, change_blocked (0)
 {
 	DEBUG_TRACE (DEBUG::CanvasItems, string_compose ("new canvas item %1\n", this));
 
@@ -87,14 +91,16 @@ Item::Item (Item* parent, Duple const& p)
 	, _scroll_parent (0)
 	, _position (p)
 	, _visible (true)
-	, _bounding_box_dirty (true)
 	, _pack_options (PackOptions (0))
 	, _layout_sensitive (false)
-	, _requested_width (-1.)
-	, _requested_height(-1.)
 	, _lut (0)
 	, _resize_queued (false)
+	, _requested_width (-1.)
+	, _requested_height(-1.)
 	, _ignore_events (false)
+	, _scroll_translation (true)
+	, _bounding_box_dirty (true)
+	, change_blocked (0)
 {
 	DEBUG_TRACE (DEBUG::CanvasItems, string_compose ("new canvas item %1\n", this));
 
@@ -405,7 +411,7 @@ Item::propagate_show_hide ()
 	/* bounding box may have changed while we were hidden */
 
 	if (_parent) {
-		_parent->child_changed (false);
+		_parent->child_changed (true);
 	}
 
 	_canvas->item_shown_or_hidden (this);
@@ -456,7 +462,9 @@ Item::reparent (Item* new_parent, bool already_added)
 	_canvas = _parent->canvas ();
 
 	find_scroll_parent ();
-	set_layout_sensitive (_parent->layout_sensitive());
+	if (!_layout_sensitive) {
+		set_layout_sensitive (_parent->layout_sensitive());
+	}
 
 	if (!already_added) {
 		_parent->add (this);
@@ -595,17 +603,11 @@ Item::is_descendant_of (const Item& candidate) const
 }
 
 void
-Item::grab_focus ()
-{
-	/* XXX */
-}
-
-void
 Item::size_allocate (Rect const & r)
 {
 	begin_change ();
 	_size_allocate (r);
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -630,8 +632,15 @@ Item::size_allocate_children (Rect const & r)
 	 * Item's allocation.
 	 */
 
+	/* parent was told "you get width x height @ x,y""
+	 *
+	 * x must be 0 and y must be 0 in parent-relatve coordinates
+	 */
+
+	Rect parent_relative = r.translate (-_position);
+
 	if (_items.size() == 1 && _items.front()->layout_sensitive()) {
-		_items.front()->size_allocate (r);
+		_items.front()->size_allocate (parent_relative);
 	}
 }
 
@@ -652,15 +661,55 @@ Item::set_size_request (double w, double h)
 	begin_change ();
 	_requested_width = w;
 	_requested_height = h;
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
+}
+
+void
+Item::set_size_request_to_display_given_text (const std::vector<std::string>& strings, gint hpadding, gint vpadding)
+{
+	Glib::RefPtr<Pango::Context> context = _canvas->get_pango_context();
+	Glib::RefPtr<Pango::Layout> layout = Pango::Layout::create (context);
+
+	int width, height;
+	int width_max = 0;
+	int height_max = 0;
+
+	vector<string> copy;
+	const vector<string>* to_use;
+	vector<string>::const_iterator i;
+
+	for (i = strings.begin(); i != strings.end(); ++i) {
+		if ((*i).find_first_of ("gy") != string::npos) {
+			/* contains a descender */
+			break;
+		}
+	}
+
+	if (i == strings.end()) {
+		/* make a copy of the strings then add one that has a descender */
+		copy = strings;
+		copy.push_back ("g");
+		to_use = &copy;
+	} else {
+		to_use = &strings;
+	}
+
+	for (vector<string>::const_iterator i = to_use->begin(); i != to_use->end(); ++i) {
+		layout->set_text (*i);
+		layout->get_pixel_size (width, height);
+		width_max = max (width_max,width);
+		height_max = max (height_max, height);
+	}
+
+	set_size_request (width_max + hpadding, height_max + vpadding);
 }
 
 /** @return Bounding box in this item's coordinates */
 ArdourCanvas::Rect
 Item::bounding_box () const
 {
-	if (_bounding_box_dirty) {
+	if (bbox_dirty()) {
 		compute_bounding_box ();
 		assert (!_bounding_box_dirty);
 		add_child_bounding_boxes ();
@@ -704,12 +753,18 @@ Item::redraw () const
 void
 Item::begin_change ()
 {
-	_pre_change_bounding_box = bounding_box ();
+	if (!change_blocked) {
+		_pre_change_bounding_box = bounding_box ();
+	}
 }
 
 void
 Item::end_change ()
 {
+	if (change_blocked) {
+		return;
+	}
+
 	if (visible()) {
 		_canvas->item_changed (this, _pre_change_bounding_box);
 
@@ -799,7 +854,7 @@ Item::covers (Duple const & point) const
 {
 	Duple p = window_to_item (point);
 
-	if (_bounding_box_dirty) {
+	if (bbox_dirty()) {
 		(void) bounding_box ();
 	}
 
@@ -816,7 +871,6 @@ Item::covers (Duple const & point) const
 
 /* nesting/grouping API */
 
-static bool debug_render = false;
 #define CANVAS_DEBUG 1
 
 void
@@ -830,8 +884,8 @@ Item::render_children (Rect const & area, Cairo::RefPtr<Cairo::Context> context)
 	std::vector<Item*> items = _lut->get (area);
 
 #ifdef CANVAS_DEBUG
-	if (debug_render || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
-		cerr << string_compose ("%1%8 %2 @ %7 render %5 @ %6 %3 items out of %4\n",
+	if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
+		cerr << string_compose (">>>> %1%8 %2 @ %7 render %5 @ %6 %3 items out of %4\n",
 		                        _canvas->render_indent(), (name.empty() ? string ("[unnamed]") : name), items.size(), _items.size(), area, _position, 0 /* this */,
 		                        whatami());
 	}
@@ -843,7 +897,7 @@ Item::render_children (Rect const & area, Cairo::RefPtr<Cairo::Context> context)
 
 		if (!(*i)->visible ()) {
 #ifdef CANVAS_DEBUG
-			if (debug_render || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
+			if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
 				cerr << _canvas->render_indent() << "Item " << (*i)->whoami() << " invisible - skipped\n";
 			}
 #endif
@@ -854,7 +908,7 @@ Item::render_children (Rect const & area, Cairo::RefPtr<Cairo::Context> context)
 
 		if (!item_bbox) {
 #ifdef CANVAS_DEBUG
-			if (debug_render || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
+			if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
 				cerr << _canvas->render_indent() << "Item " << (*i)->whoami() << " empty - skipped\n";
 			}
 #endif
@@ -868,7 +922,7 @@ Item::render_children (Rect const & area, Cairo::RefPtr<Cairo::Context> context)
 			Rect draw = d;
 			if (draw.width() && draw.height()) {
 #ifdef CANVAS_DEBUG
-				if (debug_render || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
+				if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
 					if (dynamic_cast<Container*>(*i) == 0) {
 						cerr << _canvas->render_indent() << "render "
 						     << ' '
@@ -895,7 +949,7 @@ Item::render_children (Rect const & area, Cairo::RefPtr<Cairo::Context> context)
 		} else {
 
 #ifdef CANVAS_DEBUG
-			if (debug_render || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
+			if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
 				cerr << string_compose ("%1skip render of %2, no intersection between %3 and %4\n", _canvas->render_indent(), (*i)->whoami(), item, area);
 			}
 #endif
@@ -1006,7 +1060,7 @@ Item::add (Item* i)
 	_items.push_back (i);
 	i->reparent (this, true);
 	invalidate_lut ();
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 }
 
 void
@@ -1017,7 +1071,7 @@ Item::add_front (Item* i)
 	_items.push_front (i);
 	i->reparent (this, true);
 	invalidate_lut ();
-	_bounding_box_dirty = true;
+	set_bbox_dirty();
 }
 
 void
@@ -1044,7 +1098,7 @@ Item::remove (Item* i)
 	i->set_layout_sensitive (false);
 	_items.remove (i);
 	invalidate_lut ();
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 
 	end_change ();
 }
@@ -1057,8 +1111,7 @@ Item::clear (bool with_delete)
 	clear_items (with_delete);
 
 	invalidate_lut ();
-	_bounding_box_dirty = true;
-
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -1158,10 +1211,10 @@ Item::child_changed (bool bbox_changed)
 	invalidate_lut ();
 
 	if (bbox_changed) {
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 	}
 
-	if (_parent) {
+	if (!change_blocked && _parent) {
 		_parent->child_changed (bbox_changed);
 	}
 }
@@ -1225,7 +1278,7 @@ Item::dump (ostream& o) const
 	ArdourCanvas::Rect bb = bounding_box();
 
 	o << _canvas->indent() << whoami() << ' ' << this << " self-Visible ? " << self_visible() << " visible ? " << visible() << " layout " << layout_sensitive()
-	  << " @ " << position();
+	  << " @ " << position() << " +/- " << scroll_offset();
 
 	if (bb) {
 		o << endl << _canvas->indent() << "\tbbox: " << bb;
@@ -1280,14 +1333,27 @@ Item::set_layout_sensitive (bool yn)
 	_layout_sensitive = yn;
 
 	for (list<Item*>::const_iterator i = _items.begin(); i != _items.end(); ++i) {
-		(*i)->set_layout_sensitive (yn);
+		if (!(*i)->layout_sensitive()) {
+			(*i)->set_layout_sensitive (yn);
+		}
 	}
 }
 
 void
-Item::bb_clean () const
+Item::set_bbox_clean () const
 {
 	_bounding_box_dirty = false;
+}
+
+void
+Item::set_bbox_dirty () const
+{
+	_bounding_box_dirty = true;
+	Item* i = _parent;
+	while (i) {
+		i->set_bbox_dirty ();
+		i = i->parent ();
+	}
 }
 
 void
@@ -1295,4 +1361,29 @@ Item::set_pack_options (PackOptions po)
 {
 	/* must be called before adding/packing Item in a Container */
 	_pack_options = po;
+}
+
+void
+Item::disable_scroll_translation ()
+{
+	_scroll_translation = false;
+}
+
+void
+Item::block_change_notifications ()
+{
+	if (!change_blocked) {
+		begin_change ();
+	}
+	change_blocked++;
+}
+
+void
+Item::unblock_change_notifications ()
+{
+	if (change_blocked) {
+		if (--change_blocked == 0) {
+			end_change ();
+		}
+	}
 }

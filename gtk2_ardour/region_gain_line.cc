@@ -43,7 +43,7 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
-AudioRegionGainLine::AudioRegionGainLine (const string & name, AudioRegionView& r, ArdourCanvas::Container& parent, boost::shared_ptr<AutomationList> l)
+AudioRegionGainLine::AudioRegionGainLine (const string & name, AudioRegionView& r, ArdourCanvas::Container& parent, std::shared_ptr<AutomationList> l)
 	: AutomationLine (name, r.get_time_axis_view(), parent, l, l->parameter())
 	, rv (r)
 {
@@ -115,7 +115,7 @@ AudioRegionGainLine::region_changed (const PropertyChange& what_changed)
 	PropertyChange interesting_stuff;
 
 	interesting_stuff.add (ARDOUR::Properties::start);
-	interesting_stuff.add (ARDOUR::Properties::position);
+	interesting_stuff.add (ARDOUR::Properties::length);
 
 	if (what_changed.contains (interesting_stuff)) {
 		reset ();

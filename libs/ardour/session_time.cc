@@ -32,7 +32,9 @@
 #include "pbd/error.h"
 #include "pbd/enumwriter.h"
 
+#include "ardour/location.h"
 #include "ardour/session.h"
+#include "ardour/session_playlists.h"
 #include "ardour/tempo.h"
 #include "ardour/transport_fsm.h"
 
@@ -44,14 +46,6 @@ using namespace PBD;
 using namespace Temporal;
 
 #define TFSM_EVENT(evtype) { _transport_fsm->enqueue (new TransportFSM::Event (evtype)); }
-
-/* BBT TIME*/
-
-void
-Session::bbt_time (timepos_t const & when, Temporal::BBT_Time& bbt)
-{
-	bbt = TempoMap::use()->bbt_at (when);
-}
 
 /* Timecode TIME */
 
@@ -70,7 +64,7 @@ Session::timecode_drop_frames() const
 void
 Session::sync_time_vars ()
 {
-	_current_sample_rate = (samplecnt_t) round (_nominal_sample_rate * (1.0 + (config.get_video_pullup()/100.0)));
+	_current_sample_rate = (samplecnt_t) round (_base_sample_rate * (1.0 + (config.get_video_pullup()/100.0)));
 	_samples_per_timecode_frame = (double) _current_sample_rate / (double) timecode_frames_per_second();
 	if (timecode_drop_frames()) {
 	  _frames_per_hour = (int32_t)(107892 * _samples_per_timecode_frame);
@@ -242,7 +236,7 @@ Session::convert_to_samples (AnyTime const & position)
 
 	switch (position.type) {
 	case AnyTime::BBT:
-		return Temporal::superclock_to_samples (TempoMap::use()->superclock_at (position.bbt), _current_sample_rate);
+		return Temporal::superclock_to_samples (TempoMap::use()->superclock_at (BBT_Argument (timepos_t::zero (Temporal::BeatTime), position.bbt)), _current_sample_rate);
 		break;
 
 	case AnyTime::Timecode:
@@ -303,4 +297,19 @@ Session::any_duration_to_samples (samplepos_t position, AnyTime const & duration
 	}
 
 	return duration.samples;
+}
+
+void
+Session::globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to)
+{
+	{
+		std::shared_ptr<RouteList> rl (routes.reader());
+
+		for (auto & r : *rl) {
+			r->globally_change_time_domain (from, to);
+		}
+	}
+
+	_playlists->globally_change_time_domain (from, to);
+	_locations->globally_change_time_domain (from, to);
 }

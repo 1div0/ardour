@@ -111,9 +111,7 @@ public:
 		return _current;
 	}
 
-	/* allows calling non-const methods on _current */
-
-	T & call () {
+	T& non_const_val () {
 		return _current;
 	}
 
@@ -172,7 +170,7 @@ public:
 
 	/* VARIOUS */
 
-	void apply_changes (PropertyBase const * p) {
+	void apply_change (PropertyBase const * p) {
 		T v = dynamic_cast<const PropertyTemplate<T>* > (p)->val ();
 		if (v != _current) {
 			set (v);
@@ -374,7 +372,7 @@ template <class T>
 class /*LIBPBD_API*/ SharedStatefulProperty : public PropertyBase
 {
 public:
-	typedef boost::shared_ptr<T> Ptr;
+	typedef std::shared_ptr<T> Ptr;
 
 	SharedStatefulProperty (PropertyID d, Ptr p)
 		: PropertyBase (d)
@@ -450,7 +448,7 @@ public:
 		}
 	}
 
-	void apply_changes (PropertyBase const * p) {
+	void apply_change (PropertyBase const * p) {
 		*_current = *(dynamic_cast<SharedStatefulProperty const *> (p))->val ();
 	}
 

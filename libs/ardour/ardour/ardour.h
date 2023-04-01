@@ -57,6 +57,7 @@ namespace ARDOUR {
 	extern LIBARDOUR_API PBD::Signal0<void> GUIIdle;
 	extern LIBARDOUR_API PBD::Signal3<bool,std::string,std::string,int> CopyConfigurationFiles;
 	extern LIBARDOUR_API std::map<std::string, bool> reserved_io_names;
+	extern LIBARDOUR_API float ui_scale_factor;
 
 	/**
 	 * @param try_optimization true to enable hardware optimized routines
@@ -85,7 +86,9 @@ namespace ARDOUR {
 	LIBARDOUR_API void setup_fpu ();
 	LIBARDOUR_API std::vector<SyncSource> get_available_sync_options();
 
-	/* the @param ui_handler will be called if there are old configuration
+	LIBARDOUR_API void set_global_ui_scale_factor (float s);
+
+	/* the @p ui_handler will be called if there are old configuration
 	 * files to be copied. It should (probably) ask the user about the
 	 * action, and return true or false depending on whether or not the
 	 * copy should take place.

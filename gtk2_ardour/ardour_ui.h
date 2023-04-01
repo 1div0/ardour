@@ -48,6 +48,7 @@
 #include <list>
 #include <cmath>
 
+#include <boost/utility.hpp>
 
 #include "pbd/xml++.h"
 #include <gtkmm/box.h>
@@ -109,9 +110,11 @@
 #include "export_video_dialog.h"
 #include "global_port_matrix.h"
 #include "idleometer.h"
+#include "io_plugin_window.h"
 #include "keyeditor.h"
 #include "location_ui.h"
 #include "lua_script_manager.h"
+#include "luawindow.h"
 #include "plugin_dspload_window.h"
 #include "plugin_manager_ui.h"
 #include "rc_option_editor.h"
@@ -121,6 +124,7 @@
 #include "speaker_dialog.h"
 #include "transport_masters_dialog.h"
 #include "virtual_keyboard_window.h"
+#include "library_download_dialog.h"
 #else
 class About;
 class AddRouteDialog;
@@ -133,17 +137,20 @@ class ExportVideoDialog;
 class KeyEditor;
 class LocationUIWindow;
 class LuaScriptManager;
+class LuaWindow;
 class RCOptionEditor;
 class RouteParams_UI;
 class SessionOptionEditor;
 class SpeakerDialog;
 class GlobalPortMatrixWindow;
 class IdleOMeter;
+class IOPluginWindow;
 class PluginDSPLoadWindow;
 class PluginManagerUI;
 class DspStatisticsWindow;
 class TransportMastersWindow;
 class VirtualKeyboardWindow;
+class LibraryDownloadDialog;
 #endif
 
 class VideoTimeLine;
@@ -155,6 +162,7 @@ class MainClock;
 class Mixer_UI;
 class PublicEditor;
 class RecorderUI;
+class TriggerPage;
 class SaveAsDialog;
 class SaveTemplateDialog;
 class SessionDialog;
@@ -167,6 +175,7 @@ class MidiTracer;
 class NSM_Client;
 class LevelMeterHBox;
 class GUIObjectState;
+class BasicUI;
 
 namespace ARDOUR {
 	class ControlProtocolInfo;
@@ -205,7 +214,6 @@ public:
 	void launch_reference ();
 	void launch_tracker ();
 	void launch_subscribe ();
-	void launch_cheat_sheet ();
 	void launch_website ();
 	void launch_website_dev ();
 	void launch_forums ();
@@ -216,6 +224,7 @@ public:
 	void load_from_application_api (const std::string& path);
 	void finish();
 
+	int copy_demo_sessions ();
 	int load_session (const std::string& path, const std::string& snapshot, std::string mix_template = std::string());
 	bool session_load_in_progress;
 	int build_session (std::string const& path, std::string const& snapshot, std::string const& session_template, ARDOUR::BusProfile const&, bool from_startup_fsm, bool unnamed);
@@ -235,7 +244,7 @@ public:
 	int load_session_from_startup_fsm ();
 
 	/// @return true if session was successfully unloaded.
-	int unload_session (bool hide_stuff = false);
+	int unload_session (bool hide_stuff = false, bool force_unload = false);
 	void close_session();
 
 	int  save_state_canfail (std::string state_name = "", bool switch_to_it = false);
@@ -278,9 +287,16 @@ public:
 	XMLNode* editor_settings() const;
 	XMLNode* preferences_settings() const;
 	XMLNode* mixer_settings () const;
+	XMLNode* trigger_page_settings () const;
 	XMLNode* recorder_settings () const;
 	XMLNode* keyboard_settings () const;
+	XMLNode* clock_mode_settings () const;
 	XMLNode* tearoff_settings (const char*) const;
+
+	void trigger_slot (int c, int r);
+	void trigger_cue_row (int r);
+	void stop_all_cues (bool immediately);
+	void stop_cues (int c, bool immediately);
 
 	void save_ardour_state ();
 	gboolean configure_handler (GdkEventConfigure* conf);
@@ -298,8 +314,6 @@ public:
 
 	VideoTimeLine *video_timeline;
 
-	void store_clock_modes ();
-	void restore_clock_modes ();
 	void reset_main_clocks ();
 
 	void synchronize_sync_source_and_video_pullup ();
@@ -321,11 +335,11 @@ public:
 	void export_video (bool range = false);
 
 	void session_add_audio_route (bool, int32_t, int32_t, ARDOUR::TrackMode, ARDOUR::RouteGroup *,
-	                              uint32_t, std::string const &, bool, ARDOUR::PresentationInfo::order_t order);
+	                              uint32_t, std::string const &, bool, ARDOUR::PresentationInfo::order_t order, bool trigger_visibility);
 
 	void session_add_midi_route (bool, ARDOUR::RouteGroup *, uint32_t, std::string const &, bool,
 	                             ARDOUR::PluginInfoPtr, ARDOUR::Plugin::PresetRecord*,
-	                             ARDOUR::PresentationInfo::order_t order, bool with_triggers);
+	                             ARDOUR::PresentationInfo::order_t order, bool trigger_visibility);
 
 	void session_add_foldback_bus (int32_t, uint32_t, std::string const &);
 
@@ -356,6 +370,8 @@ public:
 	void reset_peak_display ();
 	void reset_route_peak_display (ARDOUR::Route*);
 	void reset_group_peak_display (ARDOUR::RouteGroup*);
+
+	void show_library_download_window();
 
 	const std::string& announce_string() const { return _announce_string; }
 
@@ -408,8 +424,6 @@ protected:
 	void toggle_rc_options_window ();
 	void toggle_session_options_window ();
 
-	void event_loop_precall ();
-
 private:
 
 	Gtk::Window   _main_window;
@@ -420,6 +434,7 @@ private:
 	PublicEditor*  editor;
 	Mixer_UI*      mixer;
 	RecorderUI*    recorder;
+	TriggerPage*   trigger_page;
 	Gtk::Tooltips _tooltips;
 	NSM_Client*    nsm;
 	bool          _was_dirty;
@@ -427,6 +442,7 @@ private:
 
 	Gtk::Menu*    _shared_popup_menu;
 
+	BasicUI*      _basic_ui;
 	void hide_tabbable (ArdourWidgets::Tabbable*);
 	void detach_tabbable (ArdourWidgets::Tabbable*);
 	void attach_tabbable (ArdourWidgets::Tabbable*);
@@ -437,9 +453,9 @@ private:
 	void tabbable_state_change (ArdourWidgets::Tabbable&);
 
 	void toggle_meterbridge ();
-	void toggle_luawindow ();
 
 	int  setup_windows ();
+	void apply_window_settings (bool);
 	void setup_transport ();
 	void setup_clock ();
 
@@ -469,6 +485,10 @@ private:
 
 	void session_dirty_changed ();
 	void update_title ();
+
+	void cue_rec_state_changed ();
+	void cue_rec_state_clicked ();
+	void cue_ffwd_state_clicked ();
 
 	void map_transport_state ();
 	int32_t do_engine_start ();
@@ -509,14 +529,15 @@ private:
 
 	TransportControlUI transport_ctrl;
 
-	ArdourWidgets::ArdourButton punch_in_button;
-	ArdourWidgets::ArdourButton punch_out_button;
-	ArdourWidgets::ArdourButton layered_button;
+	ArdourWidgets::ArdourButton   punch_in_button;
+	ArdourWidgets::ArdourButton   punch_out_button;
+	ArdourWidgets::ArdourDropdown record_mode_selector;
 
 	ArdourWidgets::ArdourVSpacer recpunch_spacer;
 	ArdourWidgets::ArdourVSpacer latency_spacer;
 	ArdourWidgets::ArdourVSpacer monitor_spacer;
 	ArdourWidgets::ArdourVSpacer scripts_spacer;
+	ArdourWidgets::ArdourVSpacer cuectrl_spacer;
 
 	ArdourWidgets::ArdourButton monitor_dim_button;
 	ArdourWidgets::ArdourButton monitor_mono_button;
@@ -534,6 +555,9 @@ private:
 
 	ArdourWidgets::ArdourButton latency_disable_button;
 
+	ArdourWidgets::ArdourButton  _cue_rec_enable;
+	ArdourWidgets::ArdourButton  _cue_play_enable;
+
 	Gtk::Label route_latency_value;
 	Gtk::Label io_latency_label;
 	Gtk::Label io_latency_value;
@@ -544,7 +568,7 @@ private:
 
 
 	ArdourWidgets::ArdourVSpacer      meterbox_spacer;
-	ArdourWidgets::ArdourVSpacer      meterbox_spacer2;
+	Gtk::HBox                         meterbox_spacer2;
 
 	ArdourWidgets::ArdourButton auto_return_button;
 	ArdourWidgets::ArdourButton follow_edits_button;
@@ -587,7 +611,7 @@ private:
 	void audition_alert_clicked ();
 	bool error_alert_press (GdkEventButton *);
 
-	void layered_button_clicked ();
+	void set_record_mode (ARDOUR::RecordMode);
 
 	void big_clock_value_changed ();
 	void primary_clock_value_changed ();
@@ -623,7 +647,7 @@ private:
 	void update_peak_thread_work ();
 
 	Gtk::Label   sample_rate_label;
-	void update_sample_rate (ARDOUR::samplecnt_t);
+	void update_sample_rate ();
 
 	Gtk::Label    format_label;
 	void update_format ();
@@ -710,12 +734,11 @@ private:
 	int         create_mixer ();
 	int         create_editor ();
 	int         create_meterbridge ();
-	int         create_luawindow ();
 	int         create_masters ();
 	int         create_recorder ();
+	int         create_trigger_page ();
 
 	Meterbridge  *meterbridge;
-	LuaWindow    *luawindow;
 
 	/* Dialogs that can be created via new<T> */
 
@@ -731,6 +754,7 @@ private:
 	WM::Proxy<ExportVideoDialog> export_video_dialog;
 	WM::Proxy<LuaScriptManager> lua_script_window;
 	WM::Proxy<IdleOMeter> idleometer;
+	WM::Proxy<IOPluginWindow> io_plugin_window;
 	WM::Proxy<PluginManagerUI> plugin_manager_ui;
 	WM::Proxy<PluginDSPLoadWindow> plugin_dsp_load_window;
 	WM::Proxy<DspStatisticsWindow> dsp_statistics_window;
@@ -744,9 +768,11 @@ private:
 	WM::ProxyWithConstructor<BigClockWindow> big_clock_window;
 	WM::ProxyWithConstructor<BigTransportWindow> big_transport_window;
 	WM::ProxyWithConstructor<VirtualKeyboardWindow> virtual_keyboard_window;
+	WM::ProxyWithConstructor<LibraryDownloadDialog> library_download_window;
 	WM::ProxyWithConstructor<GlobalPortMatrixWindow> audio_port_matrix;
 	WM::ProxyWithConstructor<GlobalPortMatrixWindow> midi_port_matrix;
 	WM::ProxyWithConstructor<KeyEditor> key_editor;
+	WM::ProxyWithConstructor<LuaWindow> luawindow;
 
 	/* creator methods */
 
@@ -756,8 +782,10 @@ private:
 	BigClockWindow*         create_big_clock_window();
 	BigTransportWindow*     create_big_transport_window();
 	VirtualKeyboardWindow*  create_virtual_keyboard_window();
+	LibraryDownloadDialog*  create_library_download_window();
 	GlobalPortMatrixWindow* create_global_port_matrix (ARDOUR::DataType);
 	KeyEditor*              create_key_editor ();
+	LuaWindow*              create_luawindow ();
 
 	ARDOUR::SystemExec *video_server_process;
 
@@ -813,7 +841,7 @@ private:
 
 	void editor_realized ();
 
-	std::vector<std::string> positional_sync_strings;
+	std::vector<std::string> record_mode_strings;
 
 	void toggle_use_mmc ();
 	void toggle_send_mmc ();
@@ -904,6 +932,7 @@ private:
 	ArdourWidgets::ArdourButton mixer_visibility_button;
 	ArdourWidgets::ArdourButton prefs_visibility_button;
 	ArdourWidgets::ArdourButton recorder_visibility_button;
+	ArdourWidgets::ArdourButton trigger_page_visibility_button;
 
 	bool key_press_focus_accelerator_handler (Gtk::Window& window, GdkEventKey* ev, Gtkmm2ext::Bindings*);
 	bool try_gtk_accel_binding (GtkWindow* win, GdkEventKey* ev, bool translate, GdkModifierType modifier);
@@ -923,6 +952,7 @@ private:
 	void action_script_changed (int i, const std::string&);
 
 	void ask_about_scratch_deletion ();
+	bool nsm_first_session_opened;
 };
 
 #endif /* __ardour_gui_h__ */

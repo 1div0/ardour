@@ -102,6 +102,8 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 		std::string path = i->first;
 		ExportAnalysisPtr p = i->second;
 
+		const size_t p_width = p->width;
+
 		std::list<CimgPlayheadArea*> playhead_widgets;
 
 		if (with_file) {
@@ -161,7 +163,7 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 			l = manage (new Label (string_compose ("%1", info.channels), ALIGN_START));
 			t->attach (*l, 1, 2, 2, 3);
 
-			l = manage (new Label (_("Sample rate:"), ALIGN_END));
+			l = manage (new Label (_("Sample Rate:"), ALIGN_END));
 			t->attach (*l, 0, 1, 3, 4);
 			l = manage (new Label (string_compose (_("%1 Hz"), info.samplerate), ALIGN_START));
 			t->attach (*l, 1, 2, 3, 4);
@@ -246,14 +248,14 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 		const int ht = lin[0] * 1.25 + lin[1] * 1.25 + lin[2] * 1.25 + lin[3] *1.25 + lin[4] * 1.25 + lin[5];
 		const int hh = std::max (100, ht + 12);
 		const int htn = lin[0] * 1.25 + lin[1] * 1.25 + lin[2] * 1.25 + lin[3];
-		int m_l =  2 * mnw + /*hist-width*/ 540 + /*box spacing*/ 8 - /*peak-width*/ 800 - m_r; // margin left
+		int m_l =  2 * mnw + /*hist-width*/ 540 + /*box spacing*/ 8 - /*peak-width*/ p_width - m_r; // margin left
 
 		int mml = 0; // min margin left -- ensure left margin is wide enough
 		TXTWIDTH (_("Time"), get_SmallFont);
 		TXTWIDTH (_("100"), get_SmallMonospaceFont);
 		m_l = (std::max(anw + mnh + 14, std::max (m_l, mml + 8)) + 3) & ~3;
 
-		mnw = (m_l - /*hist-width*/ 540 - /*box spacing*/ 8 + /*peak-width*/ 800 + m_r) / 2;
+		mnw = (m_l - /*hist-width*/ 540 - /*box spacing*/ 8 + /*peak-width*/ p_width + m_r) / 2;
 		const int nw2 = mnw / 2; // nums, horizontal center
 
 		int y0[6];
@@ -269,7 +271,7 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 		y0[5] = y0[4] + lin[4] * 1.25;
 
 		/* calc heights & alignment of png-image */
-		const float specth = sizeof (p->spectrum[0]) / sizeof (float);
+		const float specth = p->spectrum[0].size ();
 		const float waveh2 = std::min (100, 8 * lin[0] / (int) p->n_channels);
 		const float loudnh = 180;
 
@@ -290,8 +292,8 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 
 		if (with_file && UIConfiguration::instance().get_save_export_analysis_image ()) { /*png image */
 			const int top_w = 540 + 2 * (mnw + 4); // 4px spacing
-			const int wav_w = m_l + m_r + 4 + sizeof (p->peaks) / sizeof (ARDOUR::PeakData::PeakDatum) / 4;
-			const int spc_w = m_l + m_r + 4 + sizeof (p->spectrum) / sizeof (float) / specth;
+			const int wav_w = m_l + m_r + 4 + p->width;
+			const int spc_w = m_l + m_r + 4 + p->width / specth;
 			int ann_h = 0;
 			int linesp = 0;
 
@@ -355,7 +357,7 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 				png_y0 += linesp;
 
 				IMGLABEL (lx0, _("Format:"), file_fmt);
-				IMGLABEL (lx1, _("Sample rate:"), string_compose (_("%1 Hz"), sample_rate));
+				IMGLABEL (lx1, _("Sample Rate:"), string_compose (_("%1 Hz"), sample_rate));
 				png_y0 += linesp;
 
 				if (_session) {
@@ -569,7 +571,7 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 
 		for (uint32_t c = 0; c < p->n_channels; ++c) {
 			/* draw waveform */
-			const size_t width = sizeof (p->peaks) / sizeof (ARDOUR::PeakData::PeakDatum) / 4;
+			const size_t width = p->width;
 
 			Cairo::RefPtr<Cairo::ImageSurface> wave      = ArdourGraphs::draw_waveform (get_pango_context (), p, c, waveh2, m_l, false, false);
 			Cairo::RefPtr<Cairo::ImageSurface> wave_log  = ArdourGraphs::draw_waveform (get_pango_context (), p, c, waveh2, m_l, true, false);
@@ -596,7 +598,7 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 		if (channels > 0 && file_length > 0 && sample_rate > 0)
 		{
 			/* Time Axis  -- re-use waveform width */
-			const size_t width = sizeof (p->peaks) / sizeof (ARDOUR::PeakData::PeakDatum) / 4;
+			const size_t width = p->width;
 			Cairo::RefPtr<Cairo::ImageSurface> ytme = ArdourGraphs::time_axis (get_pango_context (), width, m_l, start_off, file_length, sample_rate);
 
 			CimgPlayheadArea *tm = manage (new CimgPlayheadArea (ytme, m_l, width, true));
@@ -661,12 +663,63 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 
 		if (p->have_loudness && p->have_dbtp && p->integrated_loudness > -180) {
 
-			const float lufs = rint (p->integrated_loudness * 10.f) / 10.f;
-			const float dbfs = rint (accurate_coefficient_to_dB (p->peak) * 10.f) / 10.f;
-			const float dbtp = rint (accurate_coefficient_to_dB (p->truepeak) * 10.f) / 10.f;
+			ALoudnessPresets alp (false);
+			std::vector<ALoudnessPreset> const& lp = alp.presets ();
+			std::vector<ALoudnessPreset>::const_iterator pi;
 
-			int cw = 800 + m_l;
-			int ch = 3.25 * lin[0];
+			/* calc max label width */
+			int max_wl = 10;
+			int n_reports = 0;
+			for (pi = lp.begin (); pi != lp.end (); ++pi) {
+				if (!pi->report) {
+					continue;
+				}
+				++n_reports;
+				layout->set_font_description (UIConfiguration::instance ().get_SmallFont ());
+				layout->set_text (pi->label);
+				layout->get_pixel_size (w, h);
+				max_wl = std::max (max_wl, w);
+			}
+
+			/* calc max status width */
+			int max_wx = 10;
+			layout->set_font_description (UIConfiguration::instance ().get_ArdourLargeFont ());
+
+			layout->set_text (u8"\u274C"); // cross mark
+			layout->get_pixel_size (w, h);
+			max_wx = std::max (max_wx, w);
+			layout->set_text (u8"\U0001F509"); // speaker icon w/1 bar
+			layout->get_pixel_size (w, h);
+			max_wx = std::max (max_wx, w);
+			layout->set_text (u8"\u2714"); // heavy check mark
+			layout->get_pixel_size (w, h);
+			max_wx = std::max (max_wx, w);
+
+			/* calc geometry of conformity analysis, add 1/2 max_wx space */
+			int max_w = std::min<int> (p_width, max_wl + max_wx * 1.5);
+
+			int per_line = std::min<int> (5, p_width / max_w);
+			assert (per_line > 0);
+			int lines = ceilf ((float)n_reports / per_line);
+
+			/* calc column width */
+			std::vector<int> col_w (per_line);
+			int i;
+			for (i = 0, pi = lp.begin (); pi != lp.end (); ++pi) {
+				if (!pi->report) {
+					continue;
+				}
+				int col = i % per_line;
+				layout->set_font_description (UIConfiguration::instance ().get_SmallFont ());
+				layout->set_text (pi->label);
+				layout->get_pixel_size (w, h);
+				col_w[col] = std::max (col_w[col], w);
+				++i;
+			}
+
+			int cw = p_width + m_l;
+			int ch = (lines * 1.3 + .65) * lin[0];
+
 			Cairo::RefPtr<Cairo::ImageSurface> conf = Cairo::ImageSurface::create (Cairo::FORMAT_ARGB32, cw, ch);
 			Cairo::RefPtr<Cairo::Context> cr = Cairo::Context::create (conf);
 			cr->set_source_rgba (0, 0, 0, 1.0);
@@ -687,18 +740,18 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 			layout->show_in_cairo_context (cr);
 			layout->set_alignment (Pango::ALIGN_LEFT);
 
+			const float lufs = rint (p->integrated_loudness * 10.f) / 10.f;
+			const float dbfs = rint (accurate_coefficient_to_dB (p->peak) * 10.f) / 10.f;
+			const float dbtp = rint (accurate_coefficient_to_dB (p->truepeak) * 10.f) / 10.f;
+
 			int yl = lin[0] / 2;
 
-			int i = 0;
-			ALoudnessPresets alp (false);
-			std::vector<ALoudnessPreset> const& lp = alp.presets ();
-			std::vector<ALoudnessPreset>::const_iterator pi;
-
-			for (pi = lp.begin (); pi != lp.end () && i < 10; ++pi) {
+			for (i = 0, pi = lp.begin (); pi != lp.end (); ++pi) {
 				if (!pi->report) {
 					continue;
 				}
-				int xl = m_l + 10 + (i % 5) * (cw - 20) / 5;
+				int col = i % per_line;
+				int xl = m_l + 10 + col * (cw - 20 - m_l) / per_line;
 
 				layout->set_font_description (UIConfiguration::instance ().get_SmallFont ());
 				cr->set_source_rgba (.9, .9, .9, 1.0);
@@ -708,39 +761,27 @@ ExportReport::init (const AnalysisResults & ar, bool with_file)
 				layout->show_in_cairo_context (cr);
 				cr->move_to (xl + w + 5, yl);
 
-				layout->set_font_description (UIConfiguration::instance ().get_LargeFont ());
+				layout->set_font_description (UIConfiguration::instance ().get_ArdourLargeFont ());
 				cr->set_source_rgba (.9, .9, .9, 1.0);
 				if (lufs > pi->LUFS_range[0]
 						|| (pi->enable[0] && dbfs > pi->level[0])
 						|| (pi->enable[1] && dbtp > pi->level[1])
 					 ) {
 					cr->set_source_rgba (1, 0, .0, 1.0);
-#if (defined PLATFORM_WINDOWS || defined __APPLE__)
-					layout->set_text ("X");
-#else
-					layout->set_text ("\u274C"); // cross mark
-#endif
+					layout->set_text (u8"\u274C"); // cross mark
 				} else if (lufs < pi->LUFS_range[1]) {
 					cr->set_source_rgba (.6, .7, 0, 1.0);
-#ifdef PLATFORM_WINDOWS
-					layout->set_text ("\u2713"); // check mark
-#else
-					layout->set_text ("\u2713\u26A0"); // check mark + warning sign
-#endif
+					layout->set_text (u8"\U0001F509"); // speaker icon w/1 bar
 				} else {
 					cr->set_source_rgba (.1, 1, .1, 1.0);
-#ifdef __APPLE__
-					layout->set_text ("\u2713"); // check mark
-#else
-					layout->set_text ("\u2714"); // heavy check mark
-#endif
+					layout->set_text (u8"\u2714"); // heavy check mark
 				}
 				int ww, hh;
 				layout->get_pixel_size (ww, hh);
-				cr->move_to (xl + w + 4, yl - (hh - h) * .5);
+				cr->move_to (xl + col_w[col] + 4, yl - (hh - h) * .5);
 				layout->show_in_cairo_context (cr);
 
-				if (i % 5 == 4) {
+				if (i % per_line == per_line - 1) {
 					yl += lin[0] * 1.3;
 				}
 				++i;
@@ -879,9 +920,9 @@ ExportReport::audition (std::string path, unsigned n_chn, int page)
 	}
 	if (SMFSource::valid_midi_file (path)) { return; }
 
-	boost::shared_ptr<Region> r;
+	std::shared_ptr<Region> r;
 	SourceList srclist;
-	boost::shared_ptr<AudioFileSource> afs;
+	std::shared_ptr<AudioFileSource> afs;
 	bool old_sbp = AudioSource::get_build_peakfiles ();
 
 	/* don't even think of building peakfiles for these files */
@@ -889,12 +930,12 @@ ExportReport::audition (std::string path, unsigned n_chn, int page)
 
 	for (unsigned int n = 0; n < n_chn; ++n) {
 		try {
-			afs = boost::dynamic_pointer_cast<AudioFileSource> (
+			afs = std::dynamic_pointer_cast<AudioFileSource> (
 				SourceFactory::createExternal (DataType::AUDIO, *_session,
 										 path, n,
 										 Source::Flag (ARDOUR::AudioFileSource::NoPeakFile), false));
 			if (afs->sample_rate() != _session->nominal_sample_rate()) {
-				boost::shared_ptr<SrcFileSource> sfs (new SrcFileSource(*_session, afs, ARDOUR::SrcGood));
+				std::shared_ptr<SrcFileSource> sfs (new SrcFileSource(*_session, afs, ARDOUR::SrcGood));
 				srclist.push_back(sfs);
 			} else {
 				srclist.push_back(afs);
@@ -912,7 +953,7 @@ ExportReport::audition (std::string path, unsigned n_chn, int page)
 		return;
 	}
 
-	afs = boost::dynamic_pointer_cast<AudioFileSource> (srclist[0]);
+	afs = std::dynamic_pointer_cast<AudioFileSource> (srclist[0]);
 	std::string rname = region_name_from_path (afs->path(), false);
 
 	PBD::PropertyList plist;
@@ -922,7 +963,7 @@ ExportReport::audition (std::string path, unsigned n_chn, int page)
 	plist.add (ARDOUR::Properties::name, rname);
 	plist.add (ARDOUR::Properties::layer, 0);
 
-	r = boost::dynamic_pointer_cast<AudioRegion> (RegionFactory::create (srclist, plist, false));
+	r = std::dynamic_pointer_cast<AudioRegion> (RegionFactory::create (srclist, plist, false));
 
 	r->set_position (timepos_t ());
 	_session->audition_region(r);

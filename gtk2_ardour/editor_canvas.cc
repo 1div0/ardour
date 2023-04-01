@@ -35,6 +35,7 @@
 
 #include "pbd/error.h"
 
+#include "canvas/arc.h"
 #include "canvas/canvas.h"
 #include "canvas/rectangle.h"
 #include "canvas/pixbuf.h"
@@ -80,7 +81,7 @@ Editor::initialize_canvas ()
 	_track_canvas = _track_canvas_viewport->canvas ();
 
 	_track_canvas->set_background_color (UIConfiguration::instance().color ("arrange base"));
-	_track_canvas->use_nsglview ();
+	_track_canvas->use_nsglview (UIConfiguration::instance().get_nsgl_view_mode () == NSGLHiRes);
 
 	/* scroll group for items that should not automatically scroll
 	 *  (e.g verbose cursor). It shares the canvas coordinate space.
@@ -142,6 +143,12 @@ Editor::initialize_canvas ()
 	_time_markers_group = new ArdourCanvas::Container (h_scroll_group);
 	CANVAS_DEBUG_NAME (_time_markers_group, "time bars");
 
+
+	/* Note that because of ascending-y-axis coordinates, this order is
+	 * bottom-to-top. But further note that the actual order is set in
+	 * ::update_ruler_visibility()
+	 */
+
 	cd_marker_group = new ArdourCanvas::Container (_time_markers_group, ArdourCanvas::Duple (0.0, 0.0));
 	CANVAS_DEBUG_NAME (cd_marker_group, "cd marker group");
 	/* the vide is temporarily placed a the same location as the
@@ -159,30 +166,62 @@ Editor::initialize_canvas ()
 	CANVAS_DEBUG_NAME (tempo_group, "tempo group");
 	meter_group = new ArdourCanvas::Container (_time_markers_group, ArdourCanvas::Duple (0.0, (timebar_height * 5.0) + 1.0));
 	CANVAS_DEBUG_NAME (meter_group, "meter group");
+	mapping_group = new ArdourCanvas::Container (_time_markers_group, ArdourCanvas::Duple (0.0, (timebar_height * 6.0) + 1.0));
+	CANVAS_DEBUG_NAME (mapping_group, "mapping group");
 
-	meter_bar = new ArdourCanvas::Rectangle (meter_group, ArdourCanvas::Rect (0.0, 0.0, ArdourCanvas::COORD_MAX, timebar_height));
+	float timebar_thickness = timebar_height; //was 4
+	float timebar_top = (timebar_height - timebar_thickness)/2;
+	float timebar_btm = timebar_height - timebar_top;
+
+	meter_bar = new ArdourCanvas::Rectangle (meter_group, ArdourCanvas::Rect (0.0, 0., ArdourCanvas::COORD_MAX, timebar_height));
 	CANVAS_DEBUG_NAME (meter_bar, "meter Bar");
-	meter_bar->set_outline_what (ArdourCanvas::Rectangle::BOTTOM);
+	meter_bar->set_outline(false);
 
 	tempo_bar = new ArdourCanvas::Rectangle (tempo_group, ArdourCanvas::Rect (0.0, 0.0, ArdourCanvas::COORD_MAX, timebar_height));
-	CANVAS_DEBUG_NAME (tempo_bar, "Tempo  Bar");
-	tempo_bar->set_outline_what (ArdourCanvas::Rectangle::BOTTOM);
+	CANVAS_DEBUG_NAME (tempo_bar, "Tempo Bar");
+	tempo_bar->set_fill(true);
+	tempo_bar->set_outline(false);
+	tempo_bar->set_outline_what(ArdourCanvas::Rectangle::BOTTOM);
 
-	range_marker_bar = new ArdourCanvas::Rectangle (range_marker_group, ArdourCanvas::Rect (0.0, 0.0, ArdourCanvas::COORD_MAX, timebar_height));
+	mapping_bar = new ArdourCanvas::Rectangle (mapping_group, ArdourCanvas::Rect (0.0, 0.0, ArdourCanvas::COORD_MAX, timebar_height));
+	CANVAS_DEBUG_NAME (mapping_bar, "Mapping Bar");
+	mapping_bar->set_fill(true);
+	mapping_bar->set_outline(false);
+	mapping_bar->set_outline_what(ArdourCanvas::Rectangle::BOTTOM);
+
+	mapping_cursor = new ArdourCanvas::Arc (mapping_group);
+	CANVAS_DEBUG_NAME (mapping_cursor, "Mapping Cursor");
+	mapping_cursor->set_fill (false);
+	mapping_cursor->set_outline (true);
+	mapping_cursor->set_outline_color (0xff0000ff);
+	mapping_cursor->set_outline_width (3. * UIConfiguration::instance().get_ui_scale());
+	mapping_cursor->set_radius ((timebar_height-5.)/2);
+	mapping_cursor->set_arc (360);
+	mapping_cursor->set_position (ArdourCanvas::Duple (35., (timebar_height-5.)/2.0)); // x is arbitrary at this time
+	mapping_cursor->hide ();
+
+	range_marker_bar = new ArdourCanvas::Rectangle (range_marker_group, ArdourCanvas::Rect (0.0, timebar_top, ArdourCanvas::COORD_MAX, timebar_btm));
 	CANVAS_DEBUG_NAME (range_marker_bar, "Range Marker Bar");
-	range_marker_bar->set_outline_what (ArdourCanvas::Rectangle::BOTTOM);
 
-	transport_marker_bar = new ArdourCanvas::Rectangle (transport_marker_group, ArdourCanvas::Rect (0.0, 0.0, ArdourCanvas::COORD_MAX, timebar_height));
+	transport_marker_bar = new ArdourCanvas::Rectangle (transport_marker_group, ArdourCanvas::Rect (0.0, timebar_top, ArdourCanvas::COORD_MAX, timebar_btm));
 	CANVAS_DEBUG_NAME (transport_marker_bar, "transport Marker Bar");
-	transport_marker_bar->set_outline_what (ArdourCanvas::Rectangle::BOTTOM);
 
-	marker_bar = new ArdourCanvas::Rectangle (marker_group, ArdourCanvas::Rect (0.0, 0.0, ArdourCanvas::COORD_MAX, timebar_height));
+	marker_bar = new ArdourCanvas::Rectangle (marker_group, ArdourCanvas::Rect (0.0, timebar_top, ArdourCanvas::COORD_MAX, timebar_btm));
 	CANVAS_DEBUG_NAME (marker_bar, "Marker Bar");
-	marker_bar->set_outline_what (ArdourCanvas::Rectangle::BOTTOM);
 
-	cd_marker_bar = new ArdourCanvas::Rectangle (cd_marker_group, ArdourCanvas::Rect (0.0, 0.0, ArdourCanvas::COORD_MAX, timebar_height));
+	cd_marker_bar = new ArdourCanvas::Rectangle (cd_marker_group, ArdourCanvas::Rect (0.0, timebar_top, ArdourCanvas::COORD_MAX, timebar_btm));
 	CANVAS_DEBUG_NAME (cd_marker_bar, "CD Marker Bar");
-	cd_marker_bar->set_outline_what (ArdourCanvas::Rectangle::BOTTOM);
+
+	cue_marker_group = new ArdourCanvas::Container (_time_markers_group, ArdourCanvas::Duple (0.0, 0.0));
+	cue_marker_bar = new ArdourCanvas::Rectangle (cue_marker_group, ArdourCanvas::Rect (0.0, timebar_top, ArdourCanvas::COORD_MAX, timebar_btm));
+	CANVAS_DEBUG_NAME (cue_marker_bar, "Cue Marker Bar");
+
+	ruler_separator = new ArdourCanvas::Line(_time_markers_group);
+	CANVAS_DEBUG_NAME (ruler_separator, "separator between ruler and main canvas");
+	ruler_separator->set (ArdourCanvas::Duple(0.0, 0.0), ArdourCanvas::Duple(ArdourCanvas::COORD_MAX, 0.0));
+	ruler_separator->set_outline_color(Gtkmm2ext::rgba_to_color (0, 0, 0, 1.0));
+	ruler_separator->set_outline_width(1.0);
+	ruler_separator->show();
 
 	ARDOUR_UI::instance()->video_timeline = new VideoTimeLine(this, videotl_group, (timebar_height * videotl_bar_height));
 
@@ -190,6 +229,11 @@ Editor::initialize_canvas ()
 	CANVAS_DEBUG_NAME (cd_marker_bar_drag_rect, "cd marker drag");
 	cd_marker_bar_drag_rect->set_outline (false);
 	cd_marker_bar_drag_rect->hide ();
+
+	cue_marker_bar_drag_rect = new ArdourCanvas::Rectangle (cue_marker_group, ArdourCanvas::Rect (0.0, 0.0, 100, timebar_height));
+	CANVAS_DEBUG_NAME (cd_marker_bar_drag_rect, "cd marker drag");
+	cue_marker_bar_drag_rect->set_outline (false);
+	cue_marker_bar_drag_rect->hide ();
 
 	range_bar_drag_rect = new ArdourCanvas::Rectangle (range_marker_group, ArdourCanvas::Rect (0.0, 0.0, 100, timebar_height));
 	CANVAS_DEBUG_NAME (range_bar_drag_rect, "range drag");
@@ -215,13 +259,16 @@ Editor::initialize_canvas ()
 	transport_punchout_line->set_y1 (ArdourCanvas::COORD_MAX);
 	transport_punchout_line->hide();
 
-	tempo_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_tempo_bar_event), tempo_bar));
-	meter_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_meter_bar_event), meter_bar));
-	marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_marker_bar_event), marker_bar));
-	cd_marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_cd_marker_bar_event), cd_marker_bar));
+	tempo_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), tempo_bar, TempoBarItem, "tempo bar"));
+	mapping_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), mapping_bar, MappingBarItem, "mapping bar"));
+	mapping_cursor->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), mapping_cursor, MappingCursorItem, "mapping cursor"));
+	meter_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), meter_bar, MeterBarItem, "meter bar"));
+	marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), marker_bar, MarkerBarItem, "marker bar"));
+	cd_marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), cd_marker_bar, CdMarkerBarItem, "cd marker bar"));
+	cue_marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), cue_marker_bar, CueMarkerBarItem, "cd marker bar"));
 	videotl_group->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_videotl_bar_event), videotl_group));
-	range_marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_range_marker_bar_event), range_marker_bar));
-	transport_marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_transport_marker_bar_event), transport_marker_bar));
+	range_marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), range_marker_bar, RangeMarkerBarItem, "range marker bar"));
+	transport_marker_bar->Event.connect (sigc::bind (sigc::mem_fun (*this, &Editor::canvas_ruler_bar_event), transport_marker_bar, TransportMarkerBarItem, "transport marker bar"));
 
 	_playhead_cursor = new EditorCursor (*this, &Editor::canvas_playhead_cursor_event, X_("playhead"));
 
@@ -249,7 +296,7 @@ Editor::initialize_canvas ()
 	_track_canvas->add_events (Gdk::POINTER_MOTION_HINT_MASK | Gdk::SCROLL_MASK | Gdk::KEY_PRESS_MASK | Gdk::KEY_RELEASE_MASK);
 	_track_canvas->signal_leave_notify_event().connect (sigc::mem_fun(*this, &Editor::left_track_canvas), false);
 	_track_canvas->signal_enter_notify_event().connect (sigc::mem_fun(*this, &Editor::entered_track_canvas), false);
-	_track_canvas->set_flags (CAN_FOCUS);
+	_track_canvas->set_can_focus ();
 
 	_track_canvas->PreRender.connect (sigc::mem_fun(*this, &Editor::pre_render));
 
@@ -257,8 +304,7 @@ Editor::initialize_canvas ()
 
 	vector<TargetEntry> target_table;
 
-	target_table.push_back (TargetEntry ("regions")); // DnD from the region list will generate this target
-	target_table.push_back (TargetEntry ("sources")); // DnD from the source list will generate this target
+	target_table.push_back (TargetEntry ("x-ardour/region.pbdid", TARGET_SAME_APP));
 	target_table.push_back (TargetEntry ("text/uri-list"));
 	target_table.push_back (TargetEntry ("text/plain"));
 	target_table.push_back (TargetEntry ("application/x-rootwin-drop"));
@@ -320,11 +366,11 @@ Editor::reset_controls_layout_width ()
 	GtkRequisition req = { 0, 0 };
 	gint w;
 
-	edit_controls_vbox.size_request (req);
+	req = edit_controls_vbox.size_request ();
 	w = req.width;
 
-	if (_group_tabs->is_visible()) {
-		_group_tabs->size_request (req);
+	if (_group_tabs->get_visible()) {
+		req = _group_tabs->size_request ();
 		w += req.width;
 	}
 
@@ -380,10 +426,8 @@ Editor::track_canvas_drag_data_received (const RefPtr<Gdk::DragContext>& context
 	if (!ARDOUR_UI_UTILS::engine_is_running ()) {
 		return;
 	}
-	if (data.get_target() == X_("regions")) {
-		drop_regions (context, x, y, data, info, time, true);
-	} else if (data.get_target() == X_("sources")) {
-		drop_regions (context, x, y, data, info, time, false);
+	if (data.get_target() == "x-ardour/region.pbdid") {
+		drop_regions (context, x, y, data, info, time);
 	} else {
 		drop_paths (context, x, y, data, info, time);
 	}
@@ -423,8 +467,8 @@ Editor::drop_paths_part_two (const vector<string>& paths, timepos_t const & p, d
 
 		/* drop onto canvas background: create new tracks */
 
-		InstrumentSelector is; // instantiation builds instrument-list and sets default.
-	        do_import (midi_paths, Editing::ImportDistinctFiles, ImportAsTrack, SrcBest, SMFTrackName, SMFTempoIgnore, pos, is.selected_instrument(), false);
+		InstrumentSelector is(InstrumentSelector::ForTrackDefault); // instantiation builds instrument-list and sets default.
+	        do_import (midi_paths, Editing::ImportDistinctFiles, ImportAsTrack, SrcBest, SMFTrackNumber, SMFTempoIgnore, pos, is.selected_instrument());
 
 		if (UIConfiguration::instance().get_only_copy_imported_files() || copy) {
 			do_import (audio_paths, Editing::ImportDistinctFiles, Editing::ImportAsTrack,
@@ -438,17 +482,14 @@ Editor::drop_paths_part_two (const vector<string>& paths, timepos_t const & p, d
 		/* check that its a track, not a bus */
 
 		if (tv->track()) {
-			/* select the track, then embed/import */
-			selection->set (tv);
-
 			do_import (midi_paths, Editing::ImportSerializeFiles, ImportToTrack,
-				   SrcBest, SMFTrackName, SMFTempoIgnore, pos);
+				   SrcBest, SMFTrackNumber, SMFTempoIgnore, pos, std::shared_ptr<ARDOUR::PluginInfo>(), tv->track ());
 
 			if (UIConfiguration::instance().get_only_copy_imported_files() || copy) {
 				do_import (audio_paths, Editing::ImportSerializeFiles, Editing::ImportToTrack,
-					   SrcBest, SMFTrackName, SMFTempoIgnore, pos, boost::shared_ptr<PluginInfo>(), false);
+					   SrcBest, SMFTrackName, SMFTempoIgnore, pos, std::shared_ptr<PluginInfo>(), tv->track ());
 			} else {
-				do_embed (audio_paths, Editing::ImportSerializeFiles, ImportToTrack, pos);
+				do_embed (audio_paths, Editing::ImportSerializeFiles, ImportToTrack, pos, std::shared_ptr<ARDOUR::PluginInfo>(), tv->track ());
 			}
 		}
 	}
@@ -464,10 +505,9 @@ Editor::drop_paths (const RefPtr<Gdk::DragContext>& context,
 	GdkEvent ev;
 	double cy;
 
-	if (convert_drop_to_paths (paths, context, x, y, data, info, time) == 0) {
+	if (_session && convert_drop_to_paths (paths, data)) {
 
-		/* D-n-D coordinates are window-relative, so convert to canvas coordinates
-		 */
+		/* D-n-D coordinates are window-relative, so convert to canvas coordinates */
 
 		ev.type = GDK_BUTTON_RELEASE;
 		ev.button.x = x;
@@ -617,9 +657,9 @@ Editor::session_gui_extents (bool use_extra) const
 	 * NOTE: we should listen to playlists, and cache these values so we don't calculate them every time.
 	 */
 	{
-		boost::shared_ptr<RouteList> rl = _session->get_routes();
+		std::shared_ptr<RouteList> rl = _session->get_routes();
 		for (RouteList::iterator r = rl->begin(); r != rl->end(); ++r) {
-			boost::shared_ptr<Track> tr = boost::dynamic_pointer_cast<Track> (*r);
+			std::shared_ptr<Track> tr = std::dynamic_pointer_cast<Track> (*r);
 
 			if (!tr) {
 				continue;
@@ -650,7 +690,7 @@ Editor::session_gui_extents (bool use_extra) const
 	if (session_extent_end >= timepos_t::max (Temporal::AudioTime)) {
 		session_extent_end = timepos_t::max (Temporal::AudioTime);
 	}
-	if (session_extent_start.negative()) {
+	if (session_extent_start.is_negative()) {
 		session_extent_start = timepos_t (0);
 	}
 
@@ -949,6 +989,9 @@ Editor::ensure_time_axis_view_is_visible (TimeAxisView const & track, bool at_to
 		return;
 	}
 
+	/* apply any pending [height] changes */
+	(void) process_redisplay_track_views ();
+
 	/* compute visible area of trackview group, as offsets from top of
 	 * trackview group.
 	 */
@@ -1025,13 +1068,17 @@ Editor::color_handler()
 	meter_bar->set_outline_color (UIConfiguration::instance().color ("marker bar separator"));
 
 	tempo_bar->set_fill_color (UIConfiguration::instance().color_mod ("tempo bar", "marker bar"));
-	tempo_bar->set_outline_color (UIConfiguration::instance().color ("marker bar separator"));
+
+	mapping_bar->set_fill_color (UIConfiguration::instance().color_mod ("mapping bar", "marker bar"));
 
 	marker_bar->set_fill_color (UIConfiguration::instance().color_mod ("marker bar", "marker bar"));
 	marker_bar->set_outline_color (UIConfiguration::instance().color ("marker bar separator"));
 
 	cd_marker_bar->set_fill_color (UIConfiguration::instance().color_mod ("cd marker bar", "marker bar"));
 	cd_marker_bar->set_outline_color (UIConfiguration::instance().color ("marker bar separator"));
+
+	cue_marker_bar->set_fill_color (UIConfiguration::instance().color_mod ("cd marker bar", "marker bar"));
+	cue_marker_bar->set_outline_color (UIConfiguration::instance().color ("marker bar separator"));
 
 	range_marker_bar->set_fill_color (UIConfiguration::instance().color_mod ("range marker bar", "marker bar"));
 	range_marker_bar->set_outline_color (UIConfiguration::instance().color ("marker bar separator"));
@@ -1314,7 +1361,7 @@ Editor::which_canvas_cursor(ItemType type) const
 		/* We don't choose a cursor for these items on top of a region view,
 		   because this would push a new context on the enter stack which
 		   means switching the region context for things like smart mode
-		   won't actualy change the cursor. */
+		   won't actually change the cursor. */
 		// case WaveItem:
 		case StreamItem:
 		case AutomationTrackItem:
@@ -1443,6 +1490,7 @@ Editor::which_canvas_cursor(ItemType type) const
 	case MarkerBarItem:
 	case RangeMarkerBarItem:
 	case CdMarkerBarItem:
+	case CueMarkerBarItem:
 	case VideoBarItem:
 	case TransportMarkerBarItem:
 	case DropZoneItem:

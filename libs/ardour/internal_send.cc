@@ -50,10 +50,10 @@ using namespace std;
 PBD::Signal1<void, pframes_t> InternalSend::CycleStart;
 
 InternalSend::InternalSend (Session&                      s,
-                            boost::shared_ptr<Pannable>   p,
-                            boost::shared_ptr<MuteMaster> mm,
-                            boost::shared_ptr<Route>      sendfrom,
-                            boost::shared_ptr<Route>      sendto,
+                            std::shared_ptr<Pannable>   p,
+                            std::shared_ptr<MuteMaster> mm,
+                            std::shared_ptr<Route>      sendfrom,
+                            std::shared_ptr<Route>      sendto,
                             Delivery::Role                role,
                             bool                          ignore_bitslot)
 	: Send (s, p, mm, role, ignore_bitslot)
@@ -105,7 +105,7 @@ InternalSend::propagate_solo ()
 			_send_to->solo_isolate_control()->mod_solo_isolated_by_upstream (-1);
 		}
 		/* propagate further downstream alike Route::input_change_handler() */
-		boost::shared_ptr<RouteList> routes = _session.get_routes ();
+		std::shared_ptr<RouteList> routes = _session.get_routes ();
 		for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
 			if ((*i) == _send_to || (*i)->is_master() || (*i)->is_monitor() || (*i)->is_auditioner()) {
 				continue;
@@ -123,7 +123,7 @@ InternalSend::propagate_solo ()
 		_send_from->solo_control()->mod_solo_by_others_downstream (-1);
 
 		/* propagate further upstream alike Route::output_change_handler() */
-		boost::shared_ptr<RouteList> routes = _session.get_routes ();
+		std::shared_ptr<RouteList> routes = _session.get_routes ();
 		for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
 			if (*i == _send_from || !(*i)->can_solo()) {
 				continue;
@@ -140,15 +140,15 @@ InternalSend::init_gain ()
 {
 	if (_role == Listen) {
 		/* send to monitor bus is always at unity */
-		_gain_control->set_value (GAIN_COEFF_UNITY, PBD::Controllable::NoGroup);
+		gain_control ()->set_value (GAIN_COEFF_UNITY, PBD::Controllable::NoGroup);
 	} else {
 		/* aux sends start at -inf dB */
-		_gain_control->set_value (GAIN_COEFF_ZERO, PBD::Controllable::NoGroup);
+		gain_control ()->set_value (GAIN_COEFF_ZERO, PBD::Controllable::NoGroup);
 	}
 }
 
 int
-InternalSend::use_target (boost::shared_ptr<Route> sendto, bool update_name)
+InternalSend::use_target (std::shared_ptr<Route> sendto, bool update_name)
 {
 	if (_send_to) {
 		propagate_solo ();
@@ -211,7 +211,9 @@ InternalSend::send_to_going_away ()
 void
 InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, double speed, pframes_t nframes, bool)
 {
-	if ((!_active && !_pending_active) || !_send_to) {
+	automation_run (start_sample, nframes);
+
+	if (!check_active() || !_send_to) {
 		_meter->reset ();
 		return;
 	}
@@ -314,7 +316,7 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 		/* we were quiet last time, and we're still supposed to be quiet. */
 		_meter->reset ();
 		Amp::apply_simple_gain (mixbufs, nframes, GAIN_COEFF_ZERO);
-		goto out;
+		return;
 	} else if (tgain != GAIN_COEFF_UNITY) {
 		/* target gain has not changed, but is not zero or unity */
 		Amp::apply_simple_gain (mixbufs, nframes, tgain);
@@ -329,7 +331,7 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 
 	/* consider metering */
 	if (_metering) {
-		if (_amp->gain_control ()->get_value () == GAIN_COEFF_ZERO) {
+		if (gain_control ()->get_value () == GAIN_COEFF_ZERO) {
 			_meter->reset ();
 		} else {
 			_meter->run (mixbufs, start_sample, end_sample, speed, nframes, true);
@@ -339,9 +341,6 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 	_thru_delay->run (bufs, start_sample, end_sample, speed, nframes, true);
 
 	/* target will pick up our output when it is ready */
-
-out:
-	_active = _pending_active;
 }
 
 void
@@ -374,7 +373,7 @@ InternalSend::set_allow_feedback (bool yn)
 }
 
 bool
-InternalSend::feeds (boost::shared_ptr<Route> other) const
+InternalSend::feeds (std::shared_ptr<Route> other) const
 {
 	if (_role == Listen || !_allow_feedback) {
 		return _send_to == other;
@@ -383,7 +382,7 @@ InternalSend::feeds (boost::shared_ptr<Route> other) const
 }
 
 XMLNode&
-InternalSend::state ()
+InternalSend::state () const
 {
 	XMLNode& node (Send::state ());
 
@@ -421,12 +420,13 @@ InternalSend::set_state (const XMLNode& node, int version)
 		 * exist.
 		 */
 
-		if (!IO::connecting_legal) {
-			IO::ConnectingLegal.connect_same_thread (connect_c, boost::bind (&InternalSend::connect_when_legal, this));
+		if (_session.loading()) {
+			Session::AfterConnect.connect_same_thread (connect_c, boost::bind (&InternalSend::after_connect, this));
 		} else {
-			connect_when_legal ();
+			after_connect ();
 		}
 	}
+
 	allow_pan_reset ();
 
 	if (!is_foldback ()) {
@@ -439,7 +439,7 @@ InternalSend::set_state (const XMLNode& node, int version)
 }
 
 int
-InternalSend::connect_when_legal ()
+InternalSend::after_connect ()
 {
 	connect_c.disconnect ();
 
@@ -448,7 +448,7 @@ InternalSend::connect_when_legal ()
 		return 0;
 	}
 
-	boost::shared_ptr<Route> sendto;
+	std::shared_ptr<Route> sendto;
 
 	if ((sendto = _session.route_by_id (_send_to_id)) == 0) {
 		error << string_compose (_("%1 - cannot find any track/bus with the ID %2 to connect to"), display_name (), _send_to_id) << endmsg;

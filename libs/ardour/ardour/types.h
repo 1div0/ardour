@@ -31,13 +31,15 @@
 #ifndef __ardour_types_h__
 #define __ardour_types_h__
 
+#include <bitset>
+#include <cstdint>
 #include <istream>
-#include <vector>
 #include <map>
+#include <memory>
 #include <set>
-#include <boost/shared_ptr.hpp>
+#include <vector>
+
 #include <sys/types.h>
-#include <stdint.h>
 #include <pthread.h>
 
 #include <inttypes.h>
@@ -68,6 +70,7 @@ namespace ARDOUR {
 
 class Source;
 class AudioSource;
+class GraphNode;
 class Route;
 class Region;
 class Stripable;
@@ -95,9 +98,9 @@ static const layer_t    max_layer    = UINT32_MAX;
 // a set of (time) intervals: first of pair is the offset of the start within the region, second is the offset of the end
 typedef std::list<std::pair<sampleoffset_t, sampleoffset_t> > AudioIntervalResult;
 // associate a set of intervals with regions (e.g. for silence detection)
-typedef std::map<boost::shared_ptr<ARDOUR::Region>,AudioIntervalResult> AudioIntervalMap;
+typedef std::map<std::shared_ptr<ARDOUR::Region>,AudioIntervalResult> AudioIntervalMap;
 
-typedef std::list<boost::shared_ptr<Region> > RegionList;
+typedef std::list<std::shared_ptr<Region> > RegionList;
 
 struct IOChange {
 
@@ -168,6 +171,7 @@ enum AutomationType {
 	MonitoringAutomation,
 	BusSendLevel,
 	BusSendEnable,
+	InsertReturnLevel,
 	MainOutVolume,
 
 	/* used only by Controllable Descriptor to access send parameters */
@@ -235,6 +239,12 @@ enum TrackMode {
 	NonLayered,
 	/* No longer in use but kept to allow loading of older sessions */
 	Destructive,
+};
+
+enum RecordMode {
+	RecLayered,
+	RecNonLayered,
+	RecSoundOnSound
 };
 
 enum NoteMode {
@@ -412,8 +422,13 @@ enum MeterHold {
 enum EditMode {
 	Slide,
 	Ripple,
-	RippleAll,
 	Lock
+};
+
+enum RippleMode {
+	RippleSelected,
+	RippleAll,
+	RippleInterview
 };
 
 enum RegionSelectionAfterSplit {
@@ -605,7 +620,7 @@ enum ShuttleUnits {
 	Semitones
 };
 
-typedef std::vector<boost::shared_ptr<Source> > SourceList;
+typedef std::vector<std::shared_ptr<Source> > SourceList;
 
 enum SrcQuality {
 	SrcBest,
@@ -618,18 +633,23 @@ enum SrcQuality {
 typedef std::list<samplepos_t> AnalysisFeatureList;
 typedef std::vector<samplepos_t> XrunPositions;
 
-typedef std::list<boost::shared_ptr<Route> > RouteList;
-typedef std::list<boost::shared_ptr<Stripable> > StripableList;
-typedef std::list<boost::weak_ptr  <Route> > WeakRouteList;
-typedef std::list<boost::weak_ptr  <Stripable> > WeakStripableList;
-typedef std::list<boost::shared_ptr<AutomationControl> > ControlList;
-typedef std::list<boost::shared_ptr<SlavableAutomationControl> > SlavableControlList;
-typedef std::set <boost::shared_ptr<AutomationControl> > AutomationControlSet;
+typedef std::list<std::shared_ptr<Route> > RouteList;
+typedef std::list<std::shared_ptr<GraphNode> > GraphNodeList;
+typedef std::list<std::shared_ptr<Stripable> > StripableList;
+typedef std::list<std::weak_ptr  <Route> > WeakRouteList;
+typedef std::list<std::weak_ptr  <Stripable> > WeakStripableList;
+typedef std::list<std::shared_ptr<AutomationControl> > ControlList;
+typedef std::list<std::weak_ptr  <AutomationControl> > WeakControlList;
+typedef std::list<std::shared_ptr<SlavableAutomationControl> > SlavableControlList;
+typedef std::set <AutomationType> AutomationTypeSet;
 
-typedef std::list<boost::shared_ptr<VCA> > VCAList;
+typedef std::list<std::shared_ptr<VCA> > VCAList;
 
 class Bundle;
-typedef std::vector<boost::shared_ptr<Bundle> > BundleList;
+typedef std::vector<std::shared_ptr<Bundle> > BundleList;
+
+class IOPlug;
+typedef std::vector<std::shared_ptr<IOPlug> > IOPlugList;
 
 enum RegionEquivalence {
 	Exact,
@@ -660,15 +680,32 @@ struct CleanupReport {
 	size_t                   space;
 };
 
+enum PluginGUIBehavior {
+	PluginGUIHide,
+	PluginGUIDestroyAny,
+	PluginGUIDestroyVST,
+};
+
+enum AppleNSGLViewMode {
+	NSGLHiRes,
+	NSGLLoRes,
+	NSGLDisable,
+};
+
 /** A struct used to describe changes to processors in a route.
  *  This is useful because objects that respond to a change in processors
  *  can optimise what work they do based on details of what has changed.
+ *
+ *  While the signal themselves are distinct values, the Session
+ *  can accumulate then via ProcessorChangeBlocker and batch process
+ *  them.
  */
 struct RouteProcessorChange {
 	enum Type {
-		GeneralChange = 0x0,
 		MeterPointChange = 0x1,
-		RealTimeChange = 0x2
+		RealTimeChange   = 0x2,
+		GeneralChange    = 0x4,
+		SendReturnChange = 0x8
 	};
 
 	RouteProcessorChange () : type (GeneralChange), meter_visibly_changed (true)
@@ -811,7 +848,92 @@ enum LocateTransportDisposition {
 	RollIfAppropriate
 };
 
+enum CueBehavior {
+	FollowCues = 0x1,
+	ImplicitlyIgnoreCues = 0x2
+};
+
 typedef std::vector<CaptureInfo*> CaptureInfos;
+
+struct FollowAction {
+	enum Type {
+		None,
+		Stop,
+		Again,
+		ForwardTrigger, /* any "next" skipping empties */
+		ReverseTrigger, /* any "prev" skipping empties */
+		FirstTrigger,
+		LastTrigger,
+		JumpTrigger,
+	};
+
+	/* We could theoretically limit this to default_triggers_per_box but
+	 * doing it this way makes it likely that this will not change. Could
+	 * be worth a constexpr-style compile time assert to check
+	 * default_triggers_per_box < 64
+	 */
+
+	typedef std::bitset<64> Targets;
+
+	Type type;
+	Targets targets;
+
+	FollowAction () : type (None) {}
+	FollowAction (Type t, Targets const & tgts = Targets()) : type (t), targets (tgts) {}
+	FollowAction (Type t, std::string const & bitstring) : type (t), targets (bitstring) {}
+	FollowAction (std::string const &);
+
+	static Targets target_any () { Targets t; t.set(); return t; }
+	static Targets target_other (uint8_t skip) { Targets t; t.set (); t.reset (skip); return t; }
+	static Targets target_next_wrap (uint8_t from) { Targets t; if (from < t.size() - 1) { t.set (from + 1); } else { t.set (0); } return t; }
+	static Targets target_prev_wrap (uint8_t from) { Targets t; if (from) { t.set (from - 1); } else { t.set (t.size() - 1); } return t; }
+	static Targets target_next_nowrap (uint8_t from) { Targets t; if (from < t.size() - 1) { t.set (from + 1); } return t; }
+	static Targets target_prev_nowrap (uint8_t from) { Targets t; if (from) { t.set (from - 1); } return t; }
+
+	bool operator!= (FollowAction const & other) const {
+		return other.type != type || other.targets != targets;
+	}
+
+	bool operator== (FollowAction const & other) const {
+		return other.type == type && other.targets == targets;
+	}
+
+	bool is_arrangement() {
+		return (
+			(type==ForwardTrigger) ||
+			(type==ReverseTrigger) ||
+			(type==JumpTrigger)    );
+	}
+
+	std::string to_string() const;
+};
+
+struct CueEvent {
+	int32_t cue;
+	samplepos_t time;
+
+	CueEvent (int32_t c, samplepos_t t) : cue (c), time (t) {}
+};
+
+typedef std::vector<CueEvent> CueEvents;
+
+/* Describes the one or two contiguous time ranges processsed by a process
+ * callback. The @param cnt member indicates if there are 1 or 2 valid
+ * elements; It will only be 2 if a locate-for-loop-end occured during the
+ * process cycle.
+ *
+ * Owned by Session. Readable ONLY within process context AFTER
+ * Session::process() has returned.
+ */
+
+struct ProcessedRanges {
+	samplepos_t start[2];
+	samplepos_t end[2];
+	uint32_t    cnt;
+
+	ProcessedRanges() : start { 0, 0 }, end { 0, 0 }, cnt (0) {}
+};
+
 
 } // namespace ARDOUR
 

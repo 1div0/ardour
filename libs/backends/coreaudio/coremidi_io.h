@@ -27,10 +27,10 @@
 #include <AudioToolbox/AudioToolbox.h>
 
 #include <map>
+#include <memory>
 #include <vector>
 #include <string>
 
-#include <boost/shared_ptr.hpp>
 #include "pbd/ringbuffer.h"
 
 namespace ARDOUR {
@@ -62,7 +62,7 @@ typedef struct _CoreMIDIPacket {
 	}
 } CoreMIDIPacket;
 
-typedef std::vector<boost::shared_ptr<CoreMIDIPacket> > CoreMIDIQueue;
+typedef std::vector<std::shared_ptr<CoreMIDIPacket> > CoreMIDIQueue;
 
 class CoreMidiIo {
 public:
