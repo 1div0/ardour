@@ -27,8 +27,8 @@
 #include <pango/pango.h>
 #include <pango/pangocairo.h>
 
-#include <gdk/gdkkeysyms.h>
-#include <gtk/gtk.h>
+#include <ydk/gdkkeysyms.h>
+#include <ytk/ytk.h>
 
 #include "gtkmm2ext/keyboard.h"
 
@@ -315,6 +315,18 @@ APianoKeyboard::handle_fixed_keys (GdkEventKey* ev)
 			case GDK_KEY_F4:
 				PitchBend (16383, false);
 				return true;
+			case GDK_KEY_F5:
+				SetVelocity (32);
+				return true;
+			case GDK_KEY_F6:
+				SetVelocity (64);
+				return true;
+			case GDK_KEY_F7:
+				SetVelocity (96);
+				return true;
+			case GDK_KEY_F8:
+				SetVelocity (127);
+				return true;
 			case GDK_KEY_Down:
 				PitchBend (0, true);
 				return true;
@@ -534,8 +546,9 @@ APianoKeyboard::on_motion_notify_event (GdkEventMotion* event)
 {
 	int note;
 
-	if ((event->state & GDK_BUTTON1_MASK) == 0)
+	if ((event->state & GDK_BUTTON1_MASK) == 0) {
 		return true;
+	}
 
 	int x = event->x;
 	int y = event->y;
@@ -704,7 +717,7 @@ APianoKeyboard::on_size_allocate (Gtk::Allocation& allocation)
 APianoKeyboard::APianoKeyboard ()
 {
 	using namespace Gdk;
-	add_events (KEY_PRESS_MASK | KEY_RELEASE_MASK | BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK | POINTER_MOTION_HINT_MASK);
+	add_events (KEY_PRESS_MASK | KEY_RELEASE_MASK | BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK);
 
 	_sustain_new_notes              = false;
 	_highlight_grand_piano_range    = true;

@@ -25,7 +25,7 @@
 #include <cassert>
 #include <utility>
 
-#include <gtkmm.h>
+#include <ytkmm/ytkmm.h>
 
 #include <gtkmm2ext/gtk_ui.h>
 
@@ -68,6 +68,11 @@ AudioStreamView::AudioStreamView (AudioTimeAxisView& tv)
 
 	_amplitude_above_axis = 1.0;
 	color_handler ();
+}
+
+AudioStreamView::~AudioStreamView ()
+{
+	undisplay_track ();
 }
 
 int
@@ -151,7 +156,7 @@ AudioStreamView::add_region_view_internal (std::shared_ptr<Region> r, bool wait_
 
 	/* catch region going away */
 
-	r->DropReferences.connect (*this, invalidator (*this), boost::bind (&AudioStreamView::remove_region_view, this, std::weak_ptr<Region> (r)), gui_context());
+	r->DropReferences.connect (*this, invalidator (*this), std::bind (&AudioStreamView::remove_region_view, this, std::weak_ptr<Region> (r)), gui_context());
 
 	RegionViewAdded (region_view);
 
@@ -174,8 +179,8 @@ AudioStreamView::redisplay_track ()
 	list<RegionView *>::iterator i;
 
 	// Flag region views as invalid and disable drawing
-	for (i = region_views.begin(); i != region_views.end(); ++i) {
-		(*i)->set_valid (false);
+	for (auto & rv : region_views) {
+		rv->set_valid (false);
 	}
 
 	// Add and display views, and flag them as valid
@@ -191,8 +196,8 @@ void
 AudioStreamView::reload_waves ()
 {
 	list<RegionView *>::iterator i;
-	for (i = region_views.begin(); i != region_views.end(); ++i) {
-		AudioRegionView* arv = dynamic_cast<AudioRegionView*> (*i);
+	for (auto & rv : region_views) {
+		AudioRegionView* arv = dynamic_cast<AudioRegionView*> (rv);
 		if (!arv) {
 			continue;
 		}
@@ -212,7 +217,7 @@ AudioStreamView::setup_rec_box ()
 		// cerr << "\trolling\n";
 
 		if (!rec_active &&
-		    _trackview.session()->record_status() == Session::Recording &&
+		    _trackview.session()->record_status() == Recording &&
 		    _trackview.track()->rec_enable_control()->get_value()) {
 			if (_trackview.audio_track()->mode() == Normal && UIConfiguration::instance().get_show_waveforms_while_recording() && rec_regions.size() == rec_rects.size()) {
 
@@ -229,7 +234,7 @@ AudioStreamView::setup_rec_box ()
 						sources.push_back (src);
 						src->PeakRangeReady.connect (rec_data_ready_connections,
 						                             invalidator (*this),
-						                             boost::bind (&AudioStreamView::rec_peak_range_ready, this, _1, _2, std::weak_ptr<Source>(src)),
+						                             std::bind (&AudioStreamView::rec_peak_range_ready, this, _1, _2, std::weak_ptr<Source>(src)),
 						                             gui_context());
 					}
 				}
@@ -265,7 +270,7 @@ AudioStreamView::setup_rec_box ()
 			create_rec_box(sample_pos, 0);
 
 		} else if (rec_active &&
-		           (_trackview.session()->record_status() != Session::Recording ||
+		           (_trackview.session()->record_status() != Recording ||
 		            !_trackview.track()->rec_enable_control()->get_value())) {
 			screen_update_connection.disconnect();
 			rec_active = false;
@@ -276,40 +281,7 @@ AudioStreamView::setup_rec_box ()
 
 		// cerr << "\tNOT rolling, rec_rects = " << rec_rects.size() << " rec_regions = " << rec_regions.size() << endl;
 
-		if (!rec_rects.empty() || !rec_regions.empty()) {
-
-			/* disconnect rapid update */
-			screen_update_connection.disconnect();
-			rec_data_ready_connections.drop_connections ();
-			rec_updating = false;
-			rec_active = false;
-
-			/* remove temp regions */
-
-			for (list<pair<std::shared_ptr<Region>,RegionView*> >::iterator iter = rec_regions.begin(); iter != rec_regions.end(); ) {
-				list<pair<std::shared_ptr<Region>,RegionView*> >::iterator tmp;
-
-				tmp = iter;
-				++tmp;
-
-				(*iter).first->drop_references ();
-
-				iter = tmp;
-			}
-
-			rec_regions.clear();
-
-			// cerr << "\tclear " << rec_rects.size() << " rec rects\n";
-
-			/* transport stopped, clear boxes */
-			for (vector<RecBoxInfo>::iterator iter=rec_rects.begin(); iter != rec_rects.end(); ++iter) {
-				RecBoxInfo &rect = (*iter);
-				delete rect.rectangle;
-			}
-
-			rec_rects.clear();
-
-		}
+		cleanup_rec_box ();
 	}
 }
 
@@ -503,8 +475,8 @@ AudioStreamView::set_selected_points (PointSelection& points)
 {
 	for (list<RegionView *>::iterator i = region_views.begin(); i != region_views.end(); ++i) {
 		AudioRegionView* const arv = dynamic_cast<AudioRegionView*>(*i);
-		if (arv && arv->get_gain_line ()) {
-			arv->get_gain_line ()->set_selected_points (points);
+		if (arv && arv->fx_line ()) {
+			arv->fx_line ()->set_selected_points (points);
 		}
 	}
 }

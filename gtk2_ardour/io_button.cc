@@ -60,11 +60,12 @@ exclusively_connected (std::shared_ptr<IO> dest_io, std::shared_ptr<IO> io, Data
 	uint32_t           n   = 0;
 	uint32_t           cnt = 0;
 	std::set<uint32_t> pn;
-	PortSet const&     psa (dest_io->ports ());
-	PortSet const&     psb (io->ports ());
 
-	for (auto a = psa.begin (dt); a != psa.end (dt); ++a, ++n) {
-		for (auto b = psb.begin (dt); b != psb.end (dt); ++b) {
+	std::shared_ptr<PortSet const> psa (dest_io->ports ());
+	std::shared_ptr<PortSet const> psb (io->ports ());
+
+	for (auto a = psa->begin (dt); a != psa->end (dt); ++a, ++n) {
+		for (auto b = psb->begin (dt); b != psb->end (dt); ++b) {
 			if (a->connected_to (b->name ())) {
 				++cnt;
 				pn.insert (n);
@@ -117,7 +118,7 @@ IOButtonBase::guess_main_type (std::shared_ptr<IO> io)
 
 	/* Find most likely type among connected ports */
 	DataType type = DataType::NIL; /* NIL is always last so least likely */
-	for (PortSet::iterator p = io->ports ().begin (); p != io->ports ().end (); ++p) {
+	for (auto const& p : *io->ports ()) {
 		if (p->connected () && p->type () < type)
 			type = p->type ();
 	}
@@ -213,7 +214,7 @@ IOButtonBase::set_label (IOButtonBase& self, ARDOUR::Session& session, std::shar
 
 	vector<string> port_connections;
 
-	for (auto const& port : io->ports ()) {
+	for (auto const& port : *io->ports ()) {
 		port_connections.clear ();
 		port->get_connections (port_connections);
 
@@ -252,13 +253,13 @@ IOButtonBase::set_label (IOButtonBase& self, ARDOUR::Session& session, std::shar
 
 	/* Are all main-typed channels connected to the same route ? */
 	if (!have_label) {
-		std::shared_ptr<ARDOUR::RouteList> routes = session.get_routes ();
+		std::shared_ptr<ARDOUR::RouteList const> routes = session.get_routes ();
 		for (auto const& route : *routes) {
 			std::shared_ptr<IO> dest_io = input ? route->output () : route->input ();
 			if (io->bundle ()->connected_to (dest_io->bundle (), session.engine (), dt, true)) {
 				label << Gtkmm2ext::markup_escape_text (route->name ());
 				have_label = true;
-				route->PropertyChanged.connect (self._bundle_connections, invalidator (self), boost::bind (&IOButtonBase::maybe_update, &self, _1), gui_context ());
+				route->PropertyChanged.connect (self._bundle_connections, invalidator (self), std::bind (&IOButtonBase::maybe_update, &self, _1), gui_context ());
 				break;
 			}
 
@@ -268,7 +269,7 @@ IOButtonBase::set_label (IOButtonBase& self, ARDOUR::Session& session, std::shar
 
 			if (exclusively_connected (dest_io, io, dt, typed_connection_count, route->name (), label)) {
 				have_label = true;
-				route->PropertyChanged.connect (self._bundle_connections, invalidator (self), boost::bind (&IOButtonBase::maybe_update, &self, _1), gui_context ());
+				route->PropertyChanged.connect (self._bundle_connections, invalidator (self), std::bind (&IOButtonBase::maybe_update, &self, _1), gui_context ());
 			}
 			break;
 		}
@@ -276,9 +277,9 @@ IOButtonBase::set_label (IOButtonBase& self, ARDOUR::Session& session, std::shar
 
 	/* Are all main-typed channels connected to the same (user) bundle ? */
 	if (!have_label) {
-		std::shared_ptr<ARDOUR::BundleList> bundles       = session.bundles ();
-		std::shared_ptr<ARDOUR::Port>       ap            = std::dynamic_pointer_cast<ARDOUR::Port> (session.vkbd_output_port ());
-		std::string                           vkbd_portname = AudioEngine::instance ()->make_port_name_non_relative (ap->name ());
+		std::shared_ptr<ARDOUR::BundleList const> bundles       = session.bundles ();
+		std::shared_ptr<ARDOUR::Port>             ap            = std::dynamic_pointer_cast<ARDOUR::Port> (session.vkbd_output_port ());
+		std::string                               vkbd_portname = AudioEngine::instance ()->make_port_name_non_relative (ap->name ());
 		for (auto const& bundle : *bundles) {
 			if (std::dynamic_pointer_cast<UserBundle> (bundle) == 0) {
 				if (!bundle->offers_port (vkbd_portname)) {
@@ -306,8 +307,9 @@ IOButtonBase::set_label (IOButtonBase& self, ARDOUR::Session& session, std::shar
 			session.engine ().get_physical_outputs (dt, phys);
 			playorcapture = "playback_";
 		}
-		for (PortSet::iterator port = io->ports ().begin (dt);
-		     port != io->ports ().end (dt);
+		std::shared_ptr<PortSet> ps (io->ports ());
+		for (PortSet::iterator port = ps->begin (dt);
+		     port != ps->end (dt);
 		     ++port) {
 			string pn = "";
 			for (auto const& s : phys) {
@@ -328,7 +330,7 @@ IOButtonBase::set_label (IOButtonBase& self, ARDOUR::Session& session, std::shar
 				temp_label.str (""); /* erase the failed attempt */
 				break;
 			}
-			if (port != io->ports ().begin (dt)) {
+			if (port != ps->begin (dt)) {
 				temp_label << "/";
 			}
 			temp_label << pn;
@@ -368,13 +370,17 @@ IOButtonBase::set_label (IOButtonBase& self, ARDOUR::Session& session, std::shar
 	/* Is each main-typed channel connected to a single and different port with
 	 * the same client name (e.g. another JACK client) ? */
 	if (!have_label && each_typed_port_has_one_connection) {
-		string         maybe_client = "";
-		vector<string> connections;
-		for (PortSet::iterator port = io->ports ().begin (dt);
-		     port != io->ports ().end (dt);
+		string                   maybe_client = "";
+		vector<string>           connections;
+		std::shared_ptr<PortSet> ps (io->ports ());
+		for (PortSet::iterator port = ps->begin (dt);
+		     port != ps->end (dt);
 		     ++port) {
 			port_connections.clear ();
 			port->get_connections (port_connections);
+			if (port_connections.empty ()) {
+				continue;
+			}
 			string connection = port_connections.front ();
 
 			vector<string>::iterator i = connections.begin ();
@@ -443,12 +449,12 @@ IOButton::set_route (std::shared_ptr<ARDOUR::Route> rt, RouteUI* routeui)
 		return;
 	}
 
-	AudioEngine::instance ()->PortConnectedOrDisconnected.connect (_connections, invalidator (*this), boost::bind (&IOButton::port_connected_or_disconnected, this, _1, _3), gui_context ());
-	AudioEngine::instance ()->PortPrettyNameChanged.connect (_connections, invalidator (*this), boost::bind (&IOButton::port_pretty_name_changed, this, _1), gui_context ());
+	AudioEngine::instance ()->PortConnectedOrDisconnected.connect (_connections, invalidator (*this), std::bind (&IOButton::port_connected_or_disconnected, this, _1, _3), gui_context ());
+	AudioEngine::instance ()->PortPrettyNameChanged.connect (_connections, invalidator (*this), std::bind (&IOButton::port_pretty_name_changed, this, _1), gui_context ());
 
-	io ()->changed.connect (_connections, invalidator (*this), boost::bind (&IOButton::update, this), gui_context ());
+	io ()->changed.connect (_connections, invalidator (*this), std::bind (&IOButton::update, this), gui_context ());
 	/* We're really only interested in BundleRemoved when connected to that bundle */
-	_route->session ().BundleAddedOrRemoved.connect (_connections, invalidator (*this), boost::bind (&IOButton::update, this), gui_context ());
+	_route->session ().BundleAddedOrRemoved.connect (_connections, invalidator (*this), std::bind (&IOButton::update, this), gui_context ());
 
 	update ();
 }
@@ -480,6 +486,9 @@ IOButton::port_pretty_name_changed (std::string pn)
 void
 IOButton::port_connected_or_disconnected (std::weak_ptr<Port> wa, std::weak_ptr<Port> wb)
 {
+	if (!_route) {
+		return;
+	}
 	std::shared_ptr<Port> a = wa.lock ();
 	std::shared_ptr<Port> b = wb.lock ();
 
@@ -576,20 +585,20 @@ IOButton::button_press (GdkEventButton* ev)
 	uint32_t const n_with_separator = citems.size ();
 
 	_menu_bundles.clear ();
-	ARDOUR::BundleList                    current = io ()->bundles_connected ();
-	std::shared_ptr<ARDOUR::BundleList> b       = _route->session ().bundles ();
+	ARDOUR::BundleList                        current = io ()->bundles_connected ();
+	std::shared_ptr<ARDOUR::BundleList const> b       = _route->session ().bundles ();
 
 	if (_input) {
 		/* give user bundles first chance at being in the menu */
-		for (ARDOUR::BundleList::iterator i = b->begin (); i != b->end (); ++i) {
-			if (std::dynamic_pointer_cast<UserBundle> (*i)) {
-				maybe_add_bundle_to_menu (*i, current);
+		for (auto const& i : *b) {
+			if (std::dynamic_pointer_cast<UserBundle> (i)) {
+				maybe_add_bundle_to_menu (i, current);
 			}
 		}
 
-		for (ARDOUR::BundleList::iterator i = b->begin (); i != b->end (); ++i) {
-			if (std::dynamic_pointer_cast<UserBundle> (*i) == 0) {
-				maybe_add_bundle_to_menu (*i, current);
+		for (auto const& i : *b) {
+			if (std::dynamic_pointer_cast<UserBundle> (i) == 0) {
+				maybe_add_bundle_to_menu (i, current);
 			}
 		}
 	} else {
@@ -598,13 +607,12 @@ IOButton::button_press (GdkEventButton* ev)
 
 		/* try adding the master bus first */
 		std::shared_ptr<Route> master = _route->session ().master_out ();
-		if (master) {
+		if (master && !_route->is_monitor ()) {
 			maybe_add_bundle_to_menu (master->input ()->bundle (), current, intended_type);
 		}
 	}
 
-	std::shared_ptr<ARDOUR::RouteList> routes = _route->session ().get_routes ();
-	RouteList                            copy   = *routes;
+	RouteList copy = *_route->session ().get_routes ();
 	copy.sort (RouteCompareByName ());
 
 	if (_input) {
@@ -642,16 +650,16 @@ IOButton::button_press (GdkEventButton* ev)
 		}
 
 		/* then try adding user output bundles, often labeled/grouped physical inputs */
-		for (ARDOUR::BundleList::iterator i = b->begin (); i != b->end (); ++i) {
-			if (std::dynamic_pointer_cast<UserBundle> (*i)) {
-				maybe_add_bundle_to_menu (*i, current, intended_type);
+		for (auto const& i : *b) {
+			if (std::dynamic_pointer_cast<UserBundle> (i)) {
+				maybe_add_bundle_to_menu (i, current, intended_type);
 			}
 		}
 
 		/* then all other bundles, including physical outs or other software */
-		for (ARDOUR::BundleList::iterator i = b->begin (); i != b->end (); ++i) {
-			if (std::dynamic_pointer_cast<UserBundle> (*i) == 0) {
-				maybe_add_bundle_to_menu (*i, current, intended_type);
+		for (auto const& i : *b) {
+			if (std::dynamic_pointer_cast<UserBundle> (i) == 0) {
+				maybe_add_bundle_to_menu (i, current, intended_type);
 			}
 		}
 
@@ -700,10 +708,18 @@ IOButton::update ()
 	std::shared_ptr<ARDOUR::Bundle> bundle;
 	_bundle_connections.drop_connections ();
 
+	if (!_route) {
+		/* There may still be a signal queued before `set_route (0)` unsets the route
+		 * and unsubscribes. invalidation only happens when the button is destroyed. */
+		set_text (_input ? _("Input") : _("Output"));
+		set_tooltip (this, "");
+		return;
+	}
+
 	set_label (*this, _route->session (), bundle, _input ? _route->input () : _route->output ());
 
 	if (bundle) {
-		bundle->Changed.connect (_bundle_connections, invalidator (*this), boost::bind (&IOButton::update, this), gui_context ());
+		bundle->Changed.connect (_bundle_connections, invalidator (*this), std::bind (&IOButton::update, this), gui_context ());
 	}
 }
 

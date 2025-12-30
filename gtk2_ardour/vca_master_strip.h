@@ -23,10 +23,10 @@
 
 #include <memory>
 
-#include <gtkmm/box.h>
-#include <gtkmm/colorselection.h>
-#include <gtkmm/menuitem.h>
-#include <gtkmm/messagedialog.h>
+#include <ytkmm/box.h>
+#include <ytkmm/colorselection.h>
+#include <ytkmm/menuitem.h>
+#include <ytkmm/messagedialog.h>
 
 #include "widgets/ardour_button.h"
 
@@ -56,7 +56,7 @@ public:
 	std::string state_id() const;
 	std::shared_ptr<ARDOUR::VCA> vca() const { return _vca; }
 
-	static PBD::Signal1<void,VCAMasterStrip*> CatchDeletion;
+	static PBD::Signal<void(VCAMasterStrip*)> CatchDeletion;
 
 	bool marked_for_display () const;
 	bool set_marked_for_display (bool);
@@ -95,6 +95,7 @@ private:
 	void unassign ();
 	void start_name_edit ();
 	void finish_name_edit (std::string, int);
+	bool vertical_button_press (GdkEventButton*);
 	bool vertical_button_release (GdkEventButton*);
 	bool number_button_press (GdkEventButton*);
 	void vca_property_changed (PBD::PropertyChange const & what_changed);
@@ -108,6 +109,7 @@ private:
 	void unassign_all_selected ();
 
 	void parameter_changed (std::string const& p);
+	void dpi_reset ();
 	void set_button_names ();
 	void update_bottom_padding ();
 

@@ -22,8 +22,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_streamview_h__
-#define __ardour_streamview_h__
+#pragma once
 
 #include <list>
 #include <cmath>
@@ -31,7 +30,11 @@
 #include "pbd/signals.h"
 
 #include "ardour/location.h"
+
 #include "enums.h"
+#include "selectable.h"
+#include "time_axis_view_item.h"
+#include "view_background.h"
 
 namespace Gdk {
 	class Color;
@@ -57,14 +60,13 @@ struct RecBoxInfo {
 	ARDOUR::samplecnt_t      length;
 };
 
-class Selectable;
 class RouteTimeAxisView;
 class RegionView;
 class RegionSelection;
 class CrossfadeView;
 class Selection;
 
-class StreamView : public sigc::trackable, public PBD::ScopedConnectionList
+class StreamView : public PBD::ScopedConnectionList, public virtual ViewBackground, public SelectableOwner
 {
 public:
 	virtual ~StreamView ();
@@ -75,6 +77,13 @@ public:
 	void attach ();
 
 	void set_zoom_all();
+
+	int height() const;
+	int width() const;
+	int contents_height() const {
+		return child_height() - TimeAxisViewItem::NAME_HIGHLIGHT_SIZE - 2;
+	}
+	int y_position () const;
 
 	int set_position (gdouble x, gdouble y);
 	virtual int set_height (double);
@@ -104,7 +113,7 @@ public:
 	void         foreach_selected_regionview (sigc::slot<void,RegionView*> slot);
 
 	void set_selected_regionviews (RegionSelection&);
-	void get_selectables (Temporal::timepos_t const &, Temporal::timepos_t const &, double, double, std::list<Selectable* >&, bool within = false);
+	void _get_selectables (Temporal::timepos_t const &, Temporal::timepos_t const &, double, double, std::list<Selectable* >&, bool within);
 	void get_inverted_selectables (Selection&, std::list<Selectable* >& results);
 	void get_regionviews_at_or_after (Temporal::timepos_t const &, RegionSelection&);
 
@@ -126,6 +135,7 @@ public:
 	void check_record_layers (std::shared_ptr<ARDOUR::Region>, ARDOUR::samplepos_t);
 
 	virtual void playlist_layered (std::weak_ptr<ARDOUR::Track>);
+	void update_coverage_frame ();
 
 	sigc::signal<void, RegionView*> RegionViewAdded;
 	sigc::signal<void> RegionViewRemoved;
@@ -137,11 +147,13 @@ public:
 protected:
 	StreamView (RouteTimeAxisView&, ArdourCanvas::Container* canvas_group = 0);
 
-	void         transport_changed();
-	void         transport_looped();
-	void         rec_enable_changed();
-	void         sess_rec_enable_changed();
-	void         create_rec_box(samplepos_t sample_pos, double width);
+	void transport_changed();
+	void transport_looped();
+	void rec_enable_changed();
+	void sess_rec_enable_changed();
+	void create_rec_box(samplepos_t sample_pos, double width);
+	void cleanup_rec_box ();
+
 	virtual void setup_rec_box () = 0;
 	virtual void update_rec_box ();
 
@@ -151,7 +163,7 @@ protected:
 
 	void         display_track (std::shared_ptr<ARDOUR::Track>);
 	virtual void undisplay_track ();
-	void         layer_regions ();
+	void layer_regions ();
 
 	void playlist_switched (std::weak_ptr<ARDOUR::Track>);
 
@@ -181,7 +193,7 @@ protected:
 	ARDOUR::layer_t _layers;
 	LayerDisplay    _layer_display;
 
-	double height;
+	double _height;
 
 	PBD::ScopedConnectionList rec_data_ready_connections;
 	samplepos_t               last_rec_data_sample;
@@ -191,10 +203,6 @@ protected:
 	*/
 	samplepos_t _new_rec_layer_time;
 	void setup_new_rec_layer_time (std::shared_ptr<ARDOUR::Region>);
-
-private:
-	void update_coverage_frame ();
 };
 
-#endif /* __ardour_streamview_h__ */
 

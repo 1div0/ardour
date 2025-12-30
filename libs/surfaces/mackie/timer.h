@@ -21,16 +21,13 @@
 #ifndef timer_h
 #define timer_h
 
-#ifdef _WIN32
-#include "windows.h"
-#else
-#include <sys/time.h>
-#endif
+#include <glib.h>
 
-namespace ArdourSurface {
+#include "types.h"
 
-namespace Mackie
-{
+#include <cstdint>
+
+namespace ArdourSurface { namespace MACKIE_NAMESPACE {
 
 /**
 	millisecond timer class.

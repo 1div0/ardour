@@ -18,9 +18,11 @@
 
 #include <glib/gstdio.h>
 
+#include "temporal/tempo.h"
+
 #include "ardour/export_smf_writer.h"
 #include "ardour/midi_buffer.h"
-#include "temporal/tempo.h"
+#include "ardour/rc_configuration.h"
 
 using namespace ARDOUR;
 using namespace Evoral;
@@ -43,7 +45,7 @@ int
 ExportSMFWriter::init (std::string const& path, samplepos_t timespan_start)
 {
 	::g_unlink (path.c_str ());
-	if (SMF::create (path)) {
+	if (SMF::create (path, 1, Temporal::ticks_per_beat * Config->get_ppqn_factor_for_export ())) {
 		return -1;
 	}
 	_path                 = path;
@@ -92,4 +94,10 @@ ExportSMFWriter::process (MidiBuffer const& buf, sampleoffset_t off, samplecnt_t
 	} else {
 		_pos += n_samples;
 	}
+}
+
+Temporal::Beats
+ExportSMFWriter::duration() const
+{
+	return std::numeric_limits<Temporal::Beats>::max ();
 }

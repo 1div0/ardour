@@ -26,8 +26,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_gtk_utils_h__
-#define __ardour_gtk_utils_h__
+#pragma once
 
 #include <string>
 #include <cmath>
@@ -36,8 +35,8 @@
 
 #include "ardour/types.h"
 
-#include <gdkmm/types.h>
-#include <gtkmm/menushell.h>
+#include <ydkmm/types.h>
+#include <ytkmm/menushell.h>
 
 #include "canvas/types.h"
 
@@ -59,6 +58,7 @@ namespace ArdourCanvas {
 
 namespace ARDOUR {
 	class Auditioner;
+	class Session;
 	class Trigger;
 }
 
@@ -94,11 +94,13 @@ const char* const *get_xpm_data (std::string path);
 std::string longest (std::vector<std::string>&);
 bool key_is_legal_for_numeric_entry (guint keyval);
 
+int guess_default_ui_scale ();
+
 void resize_window_to_proportion_of_monitor (Gtk::Window*, int, int);
 
 std::string escape_underscores (std::string const &);
 
-Gdk::Color unique_palette_color (std::list<Gdk::Color> &);
+Gdk::Color round_robin_palette_color (bool just_peek = false);
 Gdk::Color unique_random_color (std::list<Gdk::Color> &);
 
 std::string rate_as_string (float r);
@@ -117,5 +119,6 @@ void copy_patch_changes (std::shared_ptr<ARDOUR::Auditioner>, std::shared_ptr<AR
 
 bool convert_drop_to_paths (std::vector<std::string>&, const Gtk::SelectionData&);
 
+void format_position (ARDOUR::Session*, Temporal::timepos_t const& pos, char* buf, size_t bufsize, bool onoff = true);
+
 } // namespace
-#endif /* __ardour_gtk_utils_h__ */

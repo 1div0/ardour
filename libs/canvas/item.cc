@@ -650,7 +650,7 @@ Item::size_request (double& w, double& h) const
 	Rect r (bounding_box());
 
 	w = _requested_width < 0 ? r.width()  : _requested_width;
-	h = _requested_width < 0 ? r.height() : _requested_height;
+	h = _requested_height < 0 ? r.height() : _requested_height;
 }
 
 void
@@ -893,56 +893,60 @@ Item::render_children (Rect const & area, Cairo::RefPtr<Cairo::Context> context)
 
 	++render_depth;
 
-	for (std::vector<Item*>::const_iterator i = items.begin(); i != items.end(); ++i) {
+	for (auto const & item : items) {
 
-		if (!(*i)->visible ()) {
+		if (!item->visible ()) {
 #ifdef CANVAS_DEBUG
 			if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
-				cerr << _canvas->render_indent() << "Item " << (*i)->whoami() << " invisible - skipped\n";
+				cerr << _canvas->render_indent() << "Item " << item->whoami() << " invisible - skipped\n";
 			}
 #endif
 			continue;
 		}
 
-		Rect item_bbox = (*i)->bounding_box ();
+		Rect item_bbox = item->bounding_box ();
 
 		if (!item_bbox) {
 #ifdef CANVAS_DEBUG
 			if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
-				cerr << _canvas->render_indent() << "Item " << (*i)->whoami() << " empty - skipped\n";
+				cerr << _canvas->render_indent() << "Item " << item->whoami() << " empty - skipped\n";
 			}
 #endif
 			continue;
 		}
 
-		Rect item = (*i)->item_to_window (item_bbox, false);
-		Rect d = item.intersection (area);
+		Rect window_bbox = item->item_to_window (item_bbox, false);
+		Rect d = window_bbox.intersection (area);
 
 		if (d) {
-			Rect draw = d;
-			if (draw.width() && draw.height()) {
+			if (d.width() && d.height()) {
 #ifdef CANVAS_DEBUG
 				if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
-					if (dynamic_cast<Container*>(*i) == 0) {
+					if (!dynamic_cast<Container*> (item)) {
 						cerr << _canvas->render_indent() << "render "
 						     << ' '
-						     << (*i)
+						     << area
 						     << ' '
-						     << (*i)->whoami()
+						     << item->whoami()
 						     << " item "
 						     << item_bbox
 						     << " window = "
-						     << item
+						     << window_bbox
 						     << " intersect = "
-						     << draw
+						     << d
 						     << " @ "
 						     << _position
 						     << endl;
 					}
 				}
 #endif
-
-				(*i)->render (area, context);
+				if (_canvas->item_save_restore) {
+					context->save();
+				}
+				item->render (area, context);
+				if (_canvas->item_save_restore) {
+					context->restore();
+				}
 				++render_count;
 			}
 
@@ -950,7 +954,7 @@ Item::render_children (Rect const & area, Cairo::RefPtr<Cairo::Context> context)
 
 #ifdef CANVAS_DEBUG
 			if (_canvas->debug_render() || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
-				cerr << string_compose ("%1skip render of %2, no intersection between %3 and %4\n", _canvas->render_indent(), (*i)->whoami(), item, area);
+				cerr << string_compose ("%1skip render of %2, no intersection between %3 and %4\n", _canvas->render_indent(), item->whoami(), item, area);
 			}
 #endif
 
@@ -971,27 +975,27 @@ Item::prepare_for_render_children (Rect const & area) const
 	ensure_lut ();
 	std::vector<Item*> items = _lut->get (area);
 
-	for (std::vector<Item*>::const_iterator i = items.begin(); i != items.end(); ++i) {
+	for (auto const & item : items) {
 
-		if (!(*i)->visible ()) {
+		if (!item->needs_prepare_for_render()) {
 			continue;
 		}
 
-		Rect item_bbox = (*i)->bounding_box ();
+		if (!item->visible ()) {
+			continue;
+		}
+
+		Rect item_bbox = item->bounding_box ();
 
 		if (!item_bbox) {
 			continue;
 		}
 
-		Rect item = (*i)->item_to_window (item_bbox, false);
-		Rect d = item.intersection (area);
+		Rect item_rect = item->item_to_window (item_bbox, false);
+		Rect draw = item_rect.intersection (area);
 
-		if (d) {
-			Rect draw = d;
-			if (draw.width() && draw.height()) {
-				(*i)->prepare_for_render (area);
-			}
-
+		if (draw.width() && draw.height()) {
+			item->prepare_for_render (area);
 		} else {
 			// Item does not intersect with visible canvas area
 		}
@@ -1010,19 +1014,19 @@ Item::add_child_bounding_boxes (bool include_hidden) const
 		have_one = true;
 	}
 
-	for (list<Item*>::const_iterator i = _items.begin(); i != _items.end(); ++i) {
+	for (auto const & item : _items) {
 
-		if (!(*i)->visible() && !include_hidden) {
+		if (!item->visible() && !include_hidden) {
 			continue;
 		}
 
-		Rect item_bbox = (*i)->bounding_box ();
+		Rect item_bbox = item->bounding_box ();
 
 		if (!item_bbox) {
 			continue;
 		}
 
-		Rect child_bbox = (*i)->item_to_parent (item_bbox);
+		Rect child_bbox = item->item_to_parent (item_bbox);
 		if (have_one) {
 			bbox = bbox.extend (child_bbox);
 		} else {
@@ -1247,8 +1251,8 @@ Item::add_items_at_point (Duple const point, vector<Item const *>& items) const
 		items.push_back (this);
 	}
 
-	for (vector<Item*>::iterator i = our_items.begin(); i != our_items.end(); ++i) {
-		(*i)->add_items_at_point (point, items);
+	for (const auto & i : our_items) {
+		i->add_items_at_point (point, items);
 	}
 }
 
@@ -1312,8 +1316,8 @@ Item::dump (ostream& o) const
 
 		ArdourCanvas::dump_depth++;
 
-		for (list<Item*>::const_iterator i = _items.begin(); i != _items.end(); ++i) {
-			o << **i;
+		for (auto const & item : _items) { 
+			o << *item;
 		}
 
 		ArdourCanvas::dump_depth--;
@@ -1332,10 +1336,8 @@ Item::set_layout_sensitive (bool yn)
 {
 	_layout_sensitive = yn;
 
-	for (list<Item*>::const_iterator i = _items.begin(); i != _items.end(); ++i) {
-		if (!(*i)->layout_sensitive()) {
-			(*i)->set_layout_sensitive (yn);
-		}
+	for (auto & item : _items) {
+		item->set_layout_sensitive (yn);
 	}
 }
 

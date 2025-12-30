@@ -16,8 +16,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_monitor_return_h__
-#define __ardour_monitor_return_h__
+#pragma once
 
 #include "ardour/internal_return.h"
 
@@ -28,7 +27,7 @@ class AudioPort;
 class LIBARDOUR_API MonitorReturn : public InternalReturn
 {
 public:
-	MonitorReturn (Session&, Temporal::TimeDomain);
+	MonitorReturn (Session&, Temporal::TimeDomainProvider const &);
 	~MonitorReturn ();
 
 	void run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, double speed, pframes_t nframes, bool);
@@ -42,4 +41,3 @@ protected:
 
 } // namespace ARDOUR
 
-#endif

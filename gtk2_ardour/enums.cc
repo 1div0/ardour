@@ -20,7 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/dialog.h>
+#include <ytkmm/dialog.h>
 
 #include "pbd/enumwriter.h"
 
@@ -59,7 +59,11 @@ setup_gtk_ardour_enums ()
 	StartupFSM::MainState startup_state;
 	StartupFSM::DialogID startup_dialog;
 	Gtk::ResponseType dialog_response;
+	Gtk::WindowPosition window_position;
 	AddRouteDialog::TypeWanted type_wanted;
+	NoteNameDisplay note_name_display;
+	MarkerClickBehavior marker_click_behavior;
+	RegionEditDisposition region_edit_disposition;
 
 #define REGISTER(e) enum_writer.register_distinct (typeid(e).name(), i, s); i.clear(); s.clear()
 #define REGISTER_BITS(e) enum_writer.register_bits (typeid(e).name(), i, s); i.clear(); s.clear()
@@ -127,6 +131,11 @@ setup_gtk_ardour_enums ()
 	REGISTER_ENUM (GridTypeCDFrame);
 	REGISTER (grid_type);
 
+	/* GridTypePlayhead was not intended to get into the wild */
+	enum_writer.add_to_hack_table ("GridTypePlayhead", "GridTypeNone");
+
+	enum_writer.add_to_hack_table ("Editing", "MouseAudition");
+
 	REGISTER_ENUM (SnapOff);
 	REGISTER_ENUM (SnapNormal);
 	REGISTER_ENUM (SnapMagnetic);
@@ -145,24 +154,21 @@ setup_gtk_ardour_enums ()
 	REGISTER_ENUM (StreamItem);
 	REGISTER_ENUM (PlayheadCursorItem);
 	REGISTER_ENUM (MarkerItem);
+	REGISTER_ENUM (SceneMarkerItem);
 	REGISTER_ENUM (MarkerBarItem);
 	REGISTER_ENUM (RangeMarkerBarItem);
-	REGISTER_ENUM (CdMarkerBarItem);
-	REGISTER_ENUM (CueMarkerBarItem);
+	REGISTER_ENUM (SectionMarkerBarItem);
 	REGISTER_ENUM (VideoBarItem);
-	REGISTER_ENUM (TransportMarkerBarItem);
 	REGISTER_ENUM (SelectionItem);
 	REGISTER_ENUM (ControlPointItem);
 	REGISTER_ENUM (GainLineItem);
-	REGISTER_ENUM (AutomationLineItem);
+	REGISTER_ENUM (EditorAutomationLineItem);
 	REGISTER_ENUM (MeterMarkerItem);
 	REGISTER_ENUM (TempoCurveItem);
 	REGISTER_ENUM (TempoMarkerItem);
 	REGISTER_ENUM (BBTMarkerItem);
 	REGISTER_ENUM (MeterBarItem);
 	REGISTER_ENUM (TempoBarItem);
-	REGISTER_ENUM (MappingBarItem);
-	REGISTER_ENUM (MappingCursorItem);
 	REGISTER_ENUM (RegionViewNameHighlight);
 	REGISTER_ENUM (RegionViewName);
 	REGISTER_ENUM (StartSelectionTrimItem);
@@ -183,13 +189,21 @@ setup_gtk_ardour_enums ()
 	REGISTER_ENUM (MinsecRulerItem);
 	REGISTER_ENUM (BBTRulerItem);
 	REGISTER_ENUM (SamplesRulerItem);
+	REGISTER_ENUM (SelectionMarkerItem);
+	REGISTER_ENUM (SelectionMarkerItem);
+	REGISTER_ENUM (DropZoneItem);
+	REGISTER_ENUM (GridZoneItem);
+	REGISTER_ENUM (VelocityItem);
+	REGISTER_ENUM (VelocityBaseItem);
+	REGISTER_ENUM (ClipStartItem);
+	REGISTER_ENUM (ClipEndItem);
 	REGISTER (item_type);
 
 	REGISTER_ENUM(MouseObject);
 	REGISTER_ENUM(MouseRange);
 	REGISTER_ENUM(MouseDraw);
 	REGISTER_ENUM(MouseTimeFX);
-	REGISTER_ENUM(MouseAudition);
+	REGISTER_ENUM(MouseGrid);
 	REGISTER_ENUM(MouseCut);
 	REGISTER_ENUM(MouseContent);
 	REGISTER (mouse_mode);
@@ -221,6 +235,13 @@ setup_gtk_ardour_enums ()
 	REGISTER_ENUM (RESPONSE_HELP);
 	REGISTER (dialog_response);
 
+	REGISTER_ENUM (WIN_POS_NONE);
+	REGISTER_ENUM (WIN_POS_CENTER);
+	REGISTER_ENUM (WIN_POS_MOUSE);
+	REGISTER_ENUM (WIN_POS_CENTER_ALWAYS);
+	REGISTER_ENUM (WIN_POS_CENTER_ON_PARENT);
+	REGISTER (window_position);
+
 	REGISTER_CLASS_ENUM (AddRouteDialog, AudioTrack);
 	REGISTER_CLASS_ENUM (AddRouteDialog, MidiTrack);
 	REGISTER_CLASS_ENUM (AddRouteDialog, AudioBus);
@@ -228,4 +249,20 @@ setup_gtk_ardour_enums ()
 	REGISTER_CLASS_ENUM (AddRouteDialog, VCAMaster);
 	REGISTER_CLASS_ENUM (AddRouteDialog, FoldbackBus);
 	REGISTER (type_wanted);
+
+	REGISTER_CLASS_ENUM (Editing, MarkerClickSelectOnly);
+	REGISTER_CLASS_ENUM (Editing, MarkerClickLocate);
+	REGISTER_CLASS_ENUM (Editing, MarkerClickLocateWhenStopped);
+	REGISTER (marker_click_behavior);
+
+	REGISTER_CLASS_ENUM (Editing, Always);
+	REGISTER_CLASS_ENUM (Editing, WithMIDNAM);
+	REGISTER_CLASS_ENUM (Editing, Never);
+	REGISTER (note_name_display);
+
+	REGISTER_ENUM(BottomPaneOnly);
+	REGISTER_ENUM(OpenBottomPane);
+	REGISTER_ENUM(PreferBottomPane);
+	REGISTER_ENUM(NeverBottomPane);
+	REGISTER (region_edit_disposition);
 }

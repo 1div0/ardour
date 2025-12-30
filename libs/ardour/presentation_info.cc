@@ -46,7 +46,7 @@ using std::string;
 
 string PresentationInfo::state_node_name = X_("PresentationInfo");
 
-PBD::Signal1<void,PropertyChange const &> PresentationInfo::Change;
+PBD::Signal<void(PropertyChange const &)> PresentationInfo::Change;
 Glib::Threads::Mutex PresentationInfo::static_signal_lock;
 std::atomic<int> PresentationInfo::_change_signal_suspended (0);
 PBD::PropertyChange PresentationInfo::_pending_static_changes;
@@ -116,8 +116,8 @@ const PresentationInfo::order_t PresentationInfo::max_order = UINT32_MAX;
 const PresentationInfo::Flag PresentationInfo::Bus = PresentationInfo::Flag (PresentationInfo::AudioBus|PresentationInfo::MidiBus);
 const PresentationInfo::Flag PresentationInfo::Track = PresentationInfo::Flag (PresentationInfo::AudioTrack|PresentationInfo::MidiTrack);
 const PresentationInfo::Flag PresentationInfo::Route = PresentationInfo::Flag (PresentationInfo::Bus|PresentationInfo::Track);
-const PresentationInfo::Flag PresentationInfo::AllRoutes = PresentationInfo::Flag (PresentationInfo::Route|PresentationInfo::MasterOut|PresentationInfo::MonitorOut|PresentationInfo::FoldbackBus);
-const PresentationInfo::Flag PresentationInfo::MixerRoutes = PresentationInfo::Flag (PresentationInfo::Route|PresentationInfo::MasterOut|PresentationInfo::MonitorOut);
+const PresentationInfo::Flag PresentationInfo::AllRoutes = PresentationInfo::Flag (PresentationInfo::Route|PresentationInfo::MasterOut|PresentationInfo::MonitorOut|PresentationInfo::FoldbackBus|PresentationInfo::SurroundMaster);
+const PresentationInfo::Flag PresentationInfo::MixerRoutes = PresentationInfo::Flag (PresentationInfo::Route|PresentationInfo::MasterOut|PresentationInfo::MonitorOut|PresentationInfo::SurroundMaster);
 const PresentationInfo::Flag PresentationInfo::AllStripables = PresentationInfo::Flag (PresentationInfo::AllRoutes|PresentationInfo::VCA);
 const PresentationInfo::Flag PresentationInfo::MixerStripables = PresentationInfo::Flag (PresentationInfo::MixerRoutes|PresentationInfo::VCA);
 const PresentationInfo::Flag PresentationInfo::MidiIndicatingFlags = PresentationInfo::Flag (PresentationInfo::MidiTrack|PresentationInfo::MidiBus);

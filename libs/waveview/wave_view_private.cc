@@ -342,7 +342,7 @@ WaveViewThreads::start_threads ()
 {
 	assert (!_threads.size());
 
-	const int num_cpus = hardware_concurrency ();
+	const int num_cpus = PBD::hardware_concurrency ();
 
 	/* the upper limit of 8 here is entirely arbitrary. It just doesn't
 	 * seem worthwhile having "ncpus" of low priority threads for
@@ -405,7 +405,7 @@ WaveViewDrawingThread::start ()
 {
 	assert (!_thread);
 
-	_thread = PBD::Thread::create (&WaveViewThreads::thread_proc);
+	_thread = PBD::Thread::create (&WaveViewThreads::thread_proc, "WaveViewDrawing");
 }
 
 void
@@ -477,8 +477,6 @@ WaveViewThreads::thread_proc ()
 void
 WaveViewThreads::_thread_proc ()
 {
-	pthread_set_name ("WaveViewDrawing");
-
 	while (true) {
 
 		_queue_mutex.lock ();

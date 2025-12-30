@@ -52,7 +52,7 @@ using namespace ARDOUR;
 using namespace std;
 using namespace PBD;
 
-PBD::Signal1<void, std::shared_ptr<Source>> SourceFactory::SourceCreated;
+PBD::Signal<void(std::shared_ptr<Source>)> SourceFactory::SourceCreated;
 Glib::Threads::Cond                           SourceFactory::PeaksToBuild;
 Glib::Threads::Mutex                          SourceFactory::peak_building_lock;
 std::list<std::weak_ptr<AudioSource>>       SourceFactory::files_with_peaks;
@@ -65,8 +65,6 @@ static void
 peak_thread_work ()
 {
 	SessionEvent::create_per_thread_pool (X_("PeakFile Builder "), 64);
-	pthread_set_name ("PeakFileBuilder");
-
 	while (true) {
 		SourceFactory::peak_building_lock.lock ();
 
@@ -119,7 +117,7 @@ SourceFactory::init ()
 	}
 	peak_thread_run = true;
 	for (int n = 0; n < 2; ++n) {
-		peak_thread_pool.push_back (PBD::Thread::create (&peak_thread_work));
+		peak_thread_pool.push_back (PBD::Thread::create (&peak_thread_work, string_compose ("PeakFileBuilder-%1", n)));
 	}
 }
 
@@ -162,7 +160,7 @@ SourceFactory::setup_peakfile (std::shared_ptr<Source> s, bool async)
 std::shared_ptr<Source>
 SourceFactory::createSilent (Session& s, const XMLNode& node, samplecnt_t nframes, float sr)
 {
-	Source*                   src = new SilentFileSource (s, node, nframes, sr);
+	Source* src = new SilentFileSource (s, node, nframes, sr);
 	std::shared_ptr<Source> ret (src);
 	BOOST_MARK_SOURCE (ret);
 	// no analysis data - the file is non-existent
@@ -202,7 +200,7 @@ SourceFactory::create (Session& s, const XMLNode& node, bool defer_peaks)
 
 		} else {
 			try {
-				Source*                   src = new SndFileSource (s, node);
+				Source* src = new SndFileSource (s, node);
 				std::shared_ptr<Source> ret (src);
 				BOOST_MARK_SOURCE (ret);
 				if (setup_peakfile (ret, defer_peaks)) {
@@ -216,7 +214,7 @@ SourceFactory::create (Session& s, const XMLNode& node, bool defer_peaks)
 
 #ifdef HAVE_COREAUDIO
 			try {
-				Source*                   src = new CoreAudioSource (s, node);
+				Source* src = new CoreAudioSource (s, node);
 				std::shared_ptr<Source> ret (src);
 				BOOST_MARK_SOURCE (ret);
 
@@ -254,13 +252,17 @@ SourceFactory::createExternal (DataType type, Session& s, const string& path,
 {
 	if (type == DataType::AUDIO) {
 		try {
-			Source*                   src = new SndFileSource (s, path, chn, flags);
+			AudioSource* src = new SndFileSource (s, path, chn, flags);
 			std::shared_ptr<Source> ret (src);
 			BOOST_MARK_SOURCE (ret);
 			if (setup_peakfile (ret, defer_peaks)) {
 				throw failed_constructor ();
 			}
 			ret->check_for_analysis_data_on_disk ();
+			{
+				Source::WriterLock lm (src->mutex ());
+				src->estimate_tempo ();
+			}
 			if (announce) {
 				SourceCreated (ret);
 			}
@@ -270,13 +272,17 @@ SourceFactory::createExternal (DataType type, Session& s, const string& path,
 
 #ifdef HAVE_COREAUDIO
 		try {
-			Source*                   src = new CoreAudioSource (s, path, chn, flags);
+			AudioSource* src = new CoreAudioSource (s, path, chn, flags);
 			std::shared_ptr<Source> ret (src);
 			BOOST_MARK_SOURCE (ret);
 			if (setup_peakfile (ret, defer_peaks)) {
 				throw failed_constructor ();
 			}
 			ret->check_for_analysis_data_on_disk ();
+			{
+				Source::WriterLock lm (src->mutex ());
+				src->estimate_tempo ();
+			}
 			if (announce) {
 				SourceCreated (ret);
 			}
@@ -417,7 +423,7 @@ SourceFactory::createFromPlaylist (DataType type, Session& s, std::shared_ptr<Pl
 					start = timecnt_t::zero (Temporal::AudioTime);
 				}
 
-				Source*                   src = new AudioPlaylistSource (s, orig, name, ap, chn, start, len, Source::Flag (0));
+				AudioSource* src = new AudioPlaylistSource (s, orig, name, ap, chn, start, len, Source::Flag (0));
 				std::shared_ptr<Source> ret (src);
 
 				if (setup_peakfile (ret, defer_peaks)) {
@@ -425,6 +431,10 @@ SourceFactory::createFromPlaylist (DataType type, Session& s, std::shared_ptr<Pl
 				}
 
 				ret->check_for_analysis_data_on_disk ();
+				{
+					Source::WriterLock lm (src->mutex ());
+					src->estimate_tempo ();
+				}
 				SourceCreated (ret);
 				return ret;
 			}

@@ -17,9 +17,9 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/label.h>
-#include <gtkmm/liststore.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/label.h>
+#include <ytkmm/liststore.h>
 
 #include "pbd/unwind.h"
 #include "pbd/strsplit.h"
@@ -126,7 +126,7 @@ LCXLGUI::LCXLGUI (LaunchControlXL& p)
 	row++;
 
 	/* User Settings */
-#ifdef MIXBUS32C
+#ifdef MIXBUS
 	l = manage (new Gtk::Label (_("Control sends 7-12 in Mixer Mode")));
 	l->set_alignment (1.0, 0.5);
 	table.attach (*l, 0, 1, row, row+1, AttachOptions(FILL|EXPAND), AttachOptions (0));
@@ -162,9 +162,9 @@ LCXLGUI::LCXLGUI (LaunchControlXL& p)
 
 	/* catch future changes to connection state */
 
-	ARDOUR::AudioEngine::instance()->PortRegisteredOrUnregistered.connect (_port_connections, invalidator (*this), boost::bind (&LCXLGUI::connection_handler, this), gui_context());
-	ARDOUR::AudioEngine::instance()->PortPrettyNameChanged.connect (_port_connections, invalidator (*this), boost::bind (&LCXLGUI::connection_handler, this), gui_context());
-	lcxl.ConnectionChange.connect (_port_connections, invalidator (*this), boost::bind (&LCXLGUI::connection_handler, this), gui_context());
+	ARDOUR::AudioEngine::instance()->PortRegisteredOrUnregistered.connect (_port_connections, invalidator (*this), std::bind (&LCXLGUI::connection_handler, this), gui_context());
+	ARDOUR::AudioEngine::instance()->PortPrettyNameChanged.connect (_port_connections, invalidator (*this), std::bind (&LCXLGUI::connection_handler, this), gui_context());
+	lcxl.ConnectionChange.connect (_port_connections, invalidator (*this), std::bind (&LCXLGUI::connection_handler, this), gui_context());
 }
 
 LCXLGUI::~LCXLGUI ()
@@ -303,7 +303,7 @@ LCXLGUI::toggle_fader8master ()
 	DEBUG_TRACE(DEBUG::LaunchControlXL, string_compose("use_fader8master IS: %1\n", lcxl.fader8master()));
 }
 
-#ifdef MIXBUS32C
+#ifdef MIXBUS
 void
 LCXLGUI::toggle_ctrllowersends ()
 {

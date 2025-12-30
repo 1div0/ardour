@@ -38,8 +38,8 @@
 
 #include <glibmm/error.h>
 
-#include <gtkmm/progressbar.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/progressbar.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/basename.h"
 #include "pbd/localtime_r.h"
@@ -47,6 +47,7 @@
 
 #include "gtkmm2ext/application.h"
 #include "gtkmm2ext/doi.h"
+#include "gtkmm2ext/utils.h"
 
 #include "widgets/prompter.h"
 
@@ -58,6 +59,7 @@
 #include "ardour/session_utils.h"
 #include "ardour/session_state_utils.h"
 #include "ardour/session_directory.h"
+#include "ardour/wrong_program.h"
 
 #include "ardour_message.h"
 #include "ardour_ui.h"
@@ -112,20 +114,20 @@ ARDOUR_UI::ask_about_loading_existing_session (const std::string& session_path)
 }
 
 void
-ARDOUR_UI::build_session_from_dialog (SessionDialog& sd, const std::string& session_path, const std::string& session_name, std::string const& session_template)
+ARDOUR_UI::build_session_from_dialog (SessionDialog& sd, const std::string& session_path, const std::string& session_name, std::string const& session_template, Temporal::TimeDomain domain)
 {
 	BusProfile bus_profile;
 
 	if (nsm) {
 		bus_profile.master_out_channels = 2;
-	} else if ( Profile->get_mixbus()) {
+	} else if (Profile->get_mixbus ()) {
 		bus_profile.master_out_channels = 2;
 	} else {
 		/* get settings from advanced section of NSD */
 		bus_profile.master_out_channels = (uint32_t) sd.master_channel_count();
 	}
 
-	build_session (session_path, session_name, session_template, bus_profile, false, !sd.was_new_name_edited());
+	build_session (session_path, session_name, session_template, bus_profile, false, !sd.was_new_name_edited(), domain);
 }
 
 /** This is only ever used once Ardour is already running with a session
@@ -150,8 +152,9 @@ ARDOUR_UI::start_session_load (bool create_new)
 		}
 	}
 
-	SessionDialog* session_dialog = new SessionDialog (create_new, string(), Config->get_default_session_parent_dir(), string(), true);
+	SessionDialog* session_dialog = new SessionDialog (create_new ? SessionDialog::New : SessionDialog::Recent, string(), Config->get_default_session_parent_dir(), string(), true);
 	session_dialog->signal_response().connect (sigc::bind (sigc::mem_fun (*this, &ARDOUR_UI::session_dialog_response_handler), session_dialog));
+	session_dialog->set_position (WIN_POS_CENTER);
 	session_dialog->present ();
 }
 
@@ -161,6 +164,7 @@ ARDOUR_UI::session_dialog_response_handler (int response, SessionDialog* session
 	string session_name;
 	string session_path;
 	string template_name;
+	Temporal::TimeDomain session_domain;
 	bool likely_new = false;
 
 	session_path = "";
@@ -175,6 +179,7 @@ ARDOUR_UI::session_dialog_response_handler (int response, SessionDialog* session
 
 	session_name = session_dialog->session_name (likely_new);
 	session_path = session_dialog->session_folder ();
+	session_domain = session_dialog->session_domain ();
 
 	if (nsm) {
 		likely_new = true;
@@ -193,6 +198,20 @@ ARDOUR_UI::session_dialog_response_handler (int response, SessionDialog* session
 			return; /* back to main event loop */
 		} else if (rv == 0) {
 			session_dialog->set_provided_session (session_name, session_path);
+		} else {
+
+			rv = new_session_from_aaf (session_name, Config->get_default_session_parent_dir(), session_path, session_name);
+			if (rv < 0) {
+				ArdourMessageDialog msg (*session_dialog, _("Extracting AAF failed"));
+				msg.run ();
+				return; /* back to main event loop */
+			} else if (rv == 0) {
+				session_dialog->set_provided_session (session_name, session_path);
+				/* we got a session now */
+				session_dialog->hide ();
+				delete_when_idle (session_dialog);
+				return;
+			}
 		}
 	}
 
@@ -289,7 +308,7 @@ ARDOUR_UI::session_dialog_response_handler (int response, SessionDialog* session
 
 	if (!template_name.empty() || likely_new) {
 
-		build_session_from_dialog (*session_dialog, session_path, session_name, template_name);
+		build_session_from_dialog (*session_dialog, session_path, session_name, template_name, session_domain);
 
 	} else {
 
@@ -385,6 +404,8 @@ ARDOUR_UI::audio_midi_setup_reconfigure_done (int response, std::string path, st
 int
 ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& snap_name, std::string mix_template)
 {
+	PBD::Unwinder uw (_loading_session, true);
+
 	Session *new_session;
 	int retval = -1;
 
@@ -418,6 +439,7 @@ ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& s
 		}
 		goto out;
 	}
+
 	catch (SessionException const& e) {
 		gchar* escaped_error_txt = 0;
 		stringstream ss;
@@ -442,10 +464,27 @@ ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& s
 
 		(void) msg.run ();
 		msg.hide ();
-		delete escaped_error_txt;
+		g_free (escaped_error_txt);
 
 		goto out;
 	}
+
+	catch (ARDOUR::WrongProgram const & wp) {
+
+		std::string first_word = wp.creator.substr (0, wp.creator.find (' '));
+
+		ArdourMessageDialog msg (string_compose ("<span size=\"large\">%1\ncannot load sessions\nlast modified by\n%2</span>", PROGRAM_NAME, first_word),
+		                         true,
+		                         Gtk::MESSAGE_ERROR,
+		                         BUTTONS_OK);
+		msg.set_title (_("Session not loaded"));
+		msg.set_position (Gtk::WIN_POS_CENTER);
+
+		(void) msg.run ();
+		msg.hide ();
+		goto out;
+	}
+
 	catch (Glib::Error const& e) {
 		const std::string& glib_what = e.what();
 		gchar* escaped_error_txt = 0;
@@ -473,10 +512,11 @@ ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& s
 
 		(void) msg.run ();
 		msg.hide ();
-		delete escaped_error_txt;
+		g_free (escaped_error_txt);
 
 		goto out;
 	}
+
 	catch (...) {
 		gchar* escaped_error_txt = 0;
 		stringstream ss;
@@ -501,7 +541,7 @@ ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& s
 
 		(void) msg.run ();
 		msg.hide ();
-		delete escaped_error_txt;
+		g_free (escaped_error_txt);
 
 		goto out;
 	}
@@ -561,6 +601,15 @@ ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& s
 		msg.hide ();
 	}
 
+	{
+		if (new_session) {
+			std::string rus_path = Glib::build_filename (new_session->session_directory().root_path(), "rus.xml");
+			region_ui_settings_manager.load (rus_path);
+		} else {
+			region_ui_settings_manager.clear ();
+		}
+	}
+
 
 	/* Now the session been created, add the transport controls */
 	new_session->add_controllable(roll_controllable);
@@ -573,6 +622,7 @@ ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& s
 
 	set_session (new_session);
 
+
 	if (_session) {
 		_session->set_clean ();
 	}
@@ -581,6 +631,7 @@ ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& s
 		Timers::TimerSuspender t;
 		flush_pending (10);
 	}
+
 
 	retval = 0;
 
@@ -604,7 +655,7 @@ ARDOUR_UI::load_session_stage_two (const std::string& path, const std::string& s
 }
 
 int
-ARDOUR_UI::build_session (const std::string& path, const std::string& snap_name, const std::string& session_template, BusProfile const& bus_profile, bool from_startup_fsm, bool unnamed)
+ARDOUR_UI::build_session (const std::string& path, const std::string& snap_name, const std::string& session_template, BusProfile const& bus_profile, bool from_startup_fsm, bool unnamed, Temporal::TimeDomain domain)
 {
 	int x;
 
@@ -623,11 +674,11 @@ ARDOUR_UI::build_session (const std::string& path, const std::string& snap_name,
 	 * asked for the SR (even if try-autostart-engine is set)
 	 */
 	if (from_startup_fsm && AudioEngine::instance()->running ()) {
-		return build_session_stage_two (path, snap_name, session_template, bus_profile, unnamed);
+		return build_session_stage_two (path, snap_name, session_template, bus_profile, unnamed, domain);
 	}
 	/* Sample-rate cannot be changed when JACK is running */
 	if (!ARDOUR::AudioEngine::instance()->setup_required () && AudioEngine::instance()->running ()) {
-		return build_session_stage_two (path, snap_name, session_template, bus_profile, unnamed);
+		return build_session_stage_two (path, snap_name, session_template, bus_profile, unnamed, domain);
 	}
 
 	/* Work-around missing "OK" button:
@@ -643,7 +694,7 @@ ARDOUR_UI::build_session (const std::string& path, const std::string& snap_name,
 	audio_midi_setup->set_position (WIN_POS_CENTER);
 	audio_midi_setup->set_modal ();
 	audio_midi_setup->present ();
-	_engine_dialog_connection = audio_midi_setup->signal_response().connect (sigc::bind (sigc::mem_fun (*this, &ARDOUR_UI::audio_midi_setup_for_new_session_done), path, snap_name, session_template, bus_profile, unnamed));
+	_engine_dialog_connection = audio_midi_setup->signal_response().connect (std::bind (&ARDOUR_UI::audio_midi_setup_for_new_session_done, this, _1, path, snap_name, session_template, bus_profile, unnamed, domain));
 
 	/* not done yet, but we're avoiding modal dialogs */
 	return 0;
@@ -651,7 +702,7 @@ ARDOUR_UI::build_session (const std::string& path, const std::string& snap_name,
 
 
 void
-ARDOUR_UI::audio_midi_setup_for_new_session_done (int response, std::string path, std::string snap_name, std::string template_name, BusProfile const& bus_profile, bool unnamed)
+ARDOUR_UI::audio_midi_setup_for_new_session_done (int response, std::string path, std::string snap_name, std::string template_name, BusProfile const& bus_profile, bool unnamed, Temporal::TimeDomain domain)
 {
 	_engine_dialog_connection.disconnect ();
 
@@ -669,18 +720,18 @@ ARDOUR_UI::audio_midi_setup_for_new_session_done (int response, std::string path
 	audio_midi_setup->set_modal (false);
 	audio_midi_setup->hide();
 
-	build_session_stage_two (path, snap_name, template_name, bus_profile, unnamed);
+	build_session_stage_two (path, snap_name, template_name, bus_profile, unnamed, domain);
 }
 
 int
-ARDOUR_UI::build_session_stage_two (std::string const& path, std::string const& snap_name, std::string const& session_template, BusProfile const& bus_profile, bool unnamed)
+ARDOUR_UI::build_session_stage_two (std::string const& path, std::string const& snap_name, std::string const& session_template, BusProfile const& bus_profile, bool unnamed, Temporal::TimeDomain domain, samplecnt_t samplerate)
 {
 	Session* new_session;
 
 	bool meta_session = !session_template.empty() && session_template.substr (0, 11) == "urn:ardour:";
 
 	try {
-		new_session = new Session (*AudioEngine::instance(), path, snap_name, bus_profile.master_out_channels > 0 ? &bus_profile : NULL, meta_session ? "" : session_template, unnamed);
+		new_session = new Session (*AudioEngine::instance(), path, snap_name, bus_profile.master_out_channels > 0 ? &bus_profile : NULL, meta_session ? "" : session_template, unnamed, samplerate);
 	}
 	catch (SessionException const& e) {
 		gchar* escaped_error_txt = 0;
@@ -700,7 +751,7 @@ ARDOUR_UI::build_session_stage_two (std::string const& path, std::string const& 
 		msg.set_title (_("Loading Error"));
 		msg.set_position (Gtk::WIN_POS_CENTER);
 		msg.run ();
-		delete escaped_error_txt;
+		g_free (escaped_error_txt);
 		return -1;
 	}
 	catch (Glib::Error const& e) {
@@ -724,7 +775,7 @@ ARDOUR_UI::build_session_stage_two (std::string const& path, std::string const& 
 		msg.set_title (_("Loading Error"));
 		msg.set_position (Gtk::WIN_POS_CENTER);
 		msg.run ();
-		delete escaped_error_txt;
+		g_free (escaped_error_txt);
 		return -1;
 	}
 	catch (...) {
@@ -745,7 +796,7 @@ ARDOUR_UI::build_session_stage_two (std::string const& path, std::string const& 
 		msg.set_title (_("Loading Error"));
 		msg.set_position (Gtk::WIN_POS_CENTER);
 		msg.run ();
-		delete escaped_error_txt;
+		g_free (escaped_error_txt);
 		return -1;
 	}
 
@@ -773,6 +824,8 @@ ARDOUR_UI::build_session_stage_two (std::string const& path, std::string const& 
 		n->set_property (X_("playhead"), X_("0"));
 		n->set_property (X_("left-frame"), X_("0"));
 	}
+
+	new_session->config.set_default_time_domain(domain);
 
 	set_session (new_session);
 
@@ -1029,7 +1082,7 @@ If you still wish to proceed, please use the\n\n\
 		 * copied so far, and the total number to copy.
 		 */
 
-		sa.Progress.connect_same_thread (c, boost::bind (&ARDOUR_UI::save_as_progress_update, this, _1, _2, _3, label, progress_bar));
+		sa.Progress.connect_same_thread (c, std::bind (&ARDOUR_UI::save_as_progress_update, this, _1, _2, _3, label, progress_bar));
 
 		progress_dialog.show_all ();
 		progress_dialog.present ();
@@ -1099,6 +1152,12 @@ ARDOUR_UI::process_snapshot_session_prompter (Prompter& prompter, bool switch_to
 
 	bool do_save = (snapname.length() != 0);
 
+	if (do_save && snapname == _session->snap_name ()) {
+		ArdourMessageDialog msg (_("The currently loaded session name cannot be used as new snapshot.\nJust save the session for this operation."));
+		msg.run ();
+		return false;
+	}
+
 	if (do_save) {
 		std::string const& illegal = Session::session_name_is_legal (snapname);
 		if (!illegal.empty()) {
@@ -1109,9 +1168,7 @@ ARDOUR_UI::process_snapshot_session_prompter (Prompter& prompter, bool switch_to
 		}
 	}
 
-	vector<std::string> p;
-	get_state_files_in_directory (_session->session_directory().root_path(), p);
-	vector<string> n = get_file_names_no_extension (p);
+	vector<std::string> n = Session::possible_states (_session->session_directory().root_path());
 
 	if (find (n.begin(), n.end(), snapname) != n.end()) {
 
@@ -1138,117 +1195,17 @@ ARDOUR_UI::open_session ()
 		return;
 	}
 
-	/* ardour sessions are folders */
-	Gtk::FileChooserDialog open_session_selector(_("Open Session"), FILE_CHOOSER_ACTION_OPEN);
-	open_session_selector.add_button (Gtk::Stock::CANCEL, Gtk::RESPONSE_CANCEL);
-	open_session_selector.add_button (Gtk::Stock::OPEN, Gtk::RESPONSE_ACCEPT);
-	open_session_selector.set_default_response(Gtk::RESPONSE_ACCEPT);
-
-	if (_session) {
-		string session_parent_dir = Glib::path_get_dirname(_session->path());
-		open_session_selector.set_current_folder(session_parent_dir);
-	} else {
-		open_session_selector.set_current_folder(Config->get_default_session_parent_dir());
-	}
-
-	Gtkmm2ext::add_volume_shortcuts (open_session_selector);
-	try {
-		/* add_shortcut_folder throws an exception if the folder being added already has a shortcut */
-		string default_session_folder = Config->get_default_session_parent_dir();
-		open_session_selector.add_shortcut_folder (default_session_folder);
-	}
-	catch (Glib::Error const& e) {
-		std::cerr << "open_session_selector.add_shortcut_folder() threw Glib::Error " << e.what() << std::endl;
-	}
-
-	FileFilter session_filter;
-	session_filter.add_pattern (string_compose(X_("*%1"), ARDOUR::statefile_suffix));
-	session_filter.set_name (string_compose (_("%1 sessions"), PROGRAM_NAME));
-	open_session_selector.add_filter (session_filter);
-
-	FileFilter archive_filter;
-	archive_filter.add_pattern (string_compose(X_("*%1"), ARDOUR::session_archive_suffix));
-	archive_filter.set_name (_("Session Archives"));
-
-	open_session_selector.add_filter (archive_filter);
-
-	open_session_selector.set_filter (session_filter);
-
-	int response = open_session_selector.run();
-	open_session_selector.hide ();
-
-	switch (response) {
-		case Gtk::RESPONSE_ACCEPT:
-			break;
-		default:
-			return;
-	}
-
-	string session_path = open_session_selector.get_filename();
-	string path, name;
-	bool isnew;
-
-	if (session_path.length() > 0) {
-		int rv = ARDOUR::inflate_session (session_path,
-				Config->get_default_session_parent_dir(), path, name);
-		if (rv == 0) {
-			_session_is_new = false;
-			load_session (path, name);
-		}
-		else if (rv < 0) {
-			ArdourMessageDialog msg (_main_window,
-			                         string_compose (_("Extracting session-archive failed: %1"), inflate_error (rv)));
-			msg.run ();
-		}
-		else if (ARDOUR::find_session (session_path, path, name, isnew) == 0) {
-			_session_is_new = isnew;
-			load_session (path, name);
-		}
-	}
+	SessionDialog* session_dialog = new SessionDialog (SessionDialog::Open, string(), Config->get_default_session_parent_dir(), string(), true);
+	session_dialog->signal_response().connect (sigc::bind (sigc::mem_fun (*this, &ARDOUR_UI::session_dialog_response_handler), session_dialog));
+	session_dialog->present ();
 }
 
 void
 ARDOUR_UI::open_recent_session ()
 {
-	bool can_return = (_session != 0);
-
-	SessionDialog recent_session_dialog;
-
-	while (true) {
-
-		ResponseType r = (ResponseType) recent_session_dialog.run ();
-
-		switch (r) {
-		case RESPONSE_ACCEPT:
-			break;
-		default:
-			if (can_return) {
-				recent_session_dialog.hide();
-				return;
-			} else {
-				exit (EXIT_FAILURE);
-			}
-		}
-
-		recent_session_dialog.hide();
-
-		bool should_be_new;
-
-		std::string path = recent_session_dialog.session_folder();
-		std::string state = recent_session_dialog.session_name (should_be_new);
-
-		if (should_be_new == true) {
-			continue;
-		}
-
-		_session_is_new = false;
-
-		if (load_session (path, state) == 0) {
-			break;
-		}
-
-		can_return = false;
-	}
+	SessionDialog* session_dialog = new SessionDialog (SessionDialog::Recent, string(), Config->get_default_session_parent_dir(), string(), true);
+	session_dialog->signal_response().connect (sigc::bind (sigc::mem_fun (*this, &ARDOUR_UI::session_dialog_response_handler), session_dialog));
+	session_dialog->present ();
 }
 
 int

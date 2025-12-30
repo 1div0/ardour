@@ -18,20 +18,24 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtk_ardour_editor_route_groups_h__
-#define __gtk_ardour_editor_route_groups_h__
+#pragma once
 
-#include <gtkmm/liststore.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/treemodel.h>
-#include <gtkmm/treeview.h>
+#include <ytkmm/box.h>
+#include <ytkmm/colorselection.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/treemodel.h>
+#include <ytkmm/treeview.h>
 
 #include "editor_component.h"
+
+#include "ardour/route_group.h"
+#include "ardour/session_handle.h"
 
 class EditorRouteGroups : public EditorComponent, public ARDOUR::SessionHandlePtr
 {
 public:
-	EditorRouteGroups (Editor *);
+	EditorRouteGroups (Editor&);
 
 	void set_session (ARDOUR::Session *);
 
@@ -73,18 +77,18 @@ private:
 		Gtk::TreeModelColumn<bool> select;
 		Gtk::TreeModelColumn<bool> active_shared;
 		Gtk::TreeModelColumn<bool> active_state;
-		Gtk::TreeModelColumn<ARDOUR::RouteGroup*> routegroup;
+		Gtk::TreeModelColumn<std::shared_ptr<ARDOUR::RouteGroup>> routegroup;
 	};
 
 	Columns _columns;
 
-	void add (ARDOUR::RouteGroup *);
+	void add (std::shared_ptr<ARDOUR::RouteGroup>);
 	void row_change (const Gtk::TreeModel::Path&,const Gtk::TreeModel::iterator&);
 	void name_edit (const std::string&, const std::string&);
 	void button_clicked ();
 	bool button_press_event (GdkEventButton* ev);
 	void groups_changed ();
-	void property_changed (ARDOUR::RouteGroup*, const PBD::PropertyChange &);
+	void property_changed (std::weak_ptr<ARDOUR::RouteGroup>, const PBD::PropertyChange &);
 	void remove_selected ();
 	void run_new_group_dialog ();
 	void row_deleted (Gtk::TreeModel::Path const &);
@@ -97,8 +101,6 @@ private:
 	bool _in_row_change;
 	bool _in_rebuild;
 	PBD::ScopedConnectionList _property_changed_connections;
-	PBD::ScopedConnection all_route_groups_changed_connection;
 	Gtk::ColorSelectionDialog color_dialog;
 };
 
-#endif // __gtk_ardour_editor_route_groups_h__

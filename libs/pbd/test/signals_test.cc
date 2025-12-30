@@ -10,9 +10,6 @@ CPPUNIT_TEST_SUITE_REGISTRATION (SignalsTest);
 void
 SignalsTest::setUp ()
 {
-	if (!Glib::thread_supported ()) {
-		Glib::thread_init ();
-	}
 }
 
 class Emitter {
@@ -21,7 +18,7 @@ public:
 		Fred ();
 	}
 
-	PBD::Signal0<void> Fred;
+	PBD::Signal<void()> Fred;
 };
 
 static int N = 0;
@@ -37,7 +34,7 @@ SignalsTest::testEmission ()
 {
 	Emitter* e = new Emitter;
 	PBD::ScopedConnection c;
-	e->Fred.connect_same_thread (c, boost::bind (&receiver));
+	e->Fred.connect_same_thread (c, std::bind (&receiver));
 
 	N = 0;
 	e->emit ();
@@ -45,7 +42,7 @@ SignalsTest::testEmission ()
 	CPPUNIT_ASSERT_EQUAL (2, N);
 
 	PBD::ScopedConnection d;
-	e->Fred.connect_same_thread (d, boost::bind (&receiver));
+	e->Fred.connect_same_thread (d, std::bind (&receiver));
 	N = 0;
 	e->emit ();
 	CPPUNIT_ASSERT_EQUAL (2, N);
@@ -56,7 +53,7 @@ SignalsTest::testDestruction ()
 {
 	Emitter* e = new Emitter;
 	PBD::ScopedConnection c;
-	e->Fred.connect_same_thread (c, boost::bind (&receiver));
+	e->Fred.connect_same_thread (c, std::bind (&receiver));
 	e->emit ();
 	delete e;
 	c.disconnect ();
@@ -68,7 +65,7 @@ class AReceiver : public PBD::ScopedConnectionList
 {
 public:
 	AReceiver (Emitter* e) {
-		e->Fred.connect_same_thread (*this, boost::bind (&AReceiver::receiver, this));
+		e->Fred.connect_same_thread (*this, std::bind (&AReceiver::receiver, this));
 	}
 
 	void receiver () {

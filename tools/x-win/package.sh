@@ -16,10 +16,11 @@ test -f gtk2_ardour/wscript || exit 1
 : ${MAKEFLAGS=-j4}
 : ${TMPDIR=/var/tmp}
 : ${SRCCACHE=/var/tmp/winsrc}  # source-code tgz cache
+: ${CURLOPT="-s -S --retry-connrefused --retry 3"}
 
 : ${HARRISONCHANNELSTRIP=harrison_channelstrip}
 : ${HARRISONLV2=harrison_lv2s-n}
-: ${HARRISONDSPURL=https://rsrc.harrisonconsoles.com/plugins/releases/public}
+: ${HARRISONDSPURL=https://builder.harrisonconsoles.com/pub/dsp}
 
 # see also wscript, video_tool_paths.cc, bundle_env_mingw.cc
 # registry keys based on this are used there
@@ -30,9 +31,14 @@ PROGRAM_VERSION=${major_version}
 PRODUCT_NAME=Ardour
 PRODUCT_VERSION=${major_version}
 
-WITH_HARRISON_LV2=1 ;
+WITH_HARRISON_LV2=1
+WITH_HARRISON_VBM=
 WITH_COMMERCIAL_X42_LV2=
 WITH_GRATIS_X42_LV2=
+WITH_GMSYNTH=1
+WITH_HARVID=1
+WITH_XJADEO=1
+X42PLUGINS="x42-autotune x42-midifilter x42-stereoroute setBfree x42-avldrums x42-limiter x42-tuner"
 
 # TODO: grep from build/config.log instead
 while [ $# -gt 0 ] ; do
@@ -46,18 +52,31 @@ while [ $# -gt 0 ] ; do
 			PROGRAM_NAME=Mixbus
 			PROGRAM_KEY=Mixbus
 			PRODUCT_NAME=Mixbus
-			MANUAL_NAME="mixbus-live-manual"
+			MANUAL_URL="https://rsrc.harrisonconsoles.com/mixbus/mixbus-live-manual/"
 			shift ;;
-		--mixbus32c)
-			MIXBUS=1
+		--livetrax)
+			LIVETRAX=1 ;
+			WITH_XJADEO=
+			WITH_HARRISON_LV2="" ;
+			WITH_GMSYNTH="" ;
+			PROGRAM_NAME=LiveTrax
+			PROGRAM_KEY=LiveTrax
+			PRODUCT_NAME=LiveTrax
+			MANUAL_URL="https://rsrc.harrisonconsoles.com/livetrax/livetrax-live-manual/"
+			shift ;;
+		--vbm)
+			VBM=1
 			WITH_HARRISON_LV2=1 ;
+			WITH_HARRISON_VBM=1 ;
 			WITH_COMMERCIAL_X42_LV2=1
 			WITH_GRATIS_X42_LV2=1
-			PRODUCT_NAME=Mixbus32C
-			PROGRAM_KEY=Mixbus32C
-			PROGRAM_NAME=Mixbus32C-${PROGRAM_VERSION}
+			WITH_GMSYNTH="" ;
+			PRODUCT_NAME=MixbusVBM
+			PROGRAM_KEY=MixbusVBM
+			PROGRAM_NAME=MixbusVBM-${PROGRAM_VERSION}
 			PROGRAM_VERSION=""
-			MANUAL_NAME="mixbus32c-live-manual"
+			MANUAL_NAME="mixbusvbm-${major_version}-live-manual"
+			X42PLUGINS="$X42PLUGINS x42-testsignal x42-nodelay"
 			shift ;;
 		--chanstrip) HARRISONCHANNELSTRIP=$2 ; shift; shift ;;
 	esac
@@ -91,7 +110,7 @@ fi
 export SRCCACHE
 
 if [ "$(id -u)" = "0" ]; then
-	apt-get -y install nsis curl wget
+	apt-get -y install nsis curl wget ca-certificates rsync zip unzip
 fi
 
 
@@ -134,15 +153,25 @@ mkdir -p $ALIBDIR/panners
 mkdir -p $ALIBDIR/vamp
 mkdir -p $ALIBDIR/suil
 
+# cp $PREFIX/lib/ardour*/*-*.dll $DESTDIR/bin/
 cp build/libs/gtkmm2ext/gtkmm2ext-*.dll $DESTDIR/bin/
 cp build/libs/midi++2/midipp-*.dll $DESTDIR/bin/
 cp build/libs/evoral/evoral-*.dll $DESTDIR/bin/
 cp build/libs/ardour/ardour-*.dll $DESTDIR/bin/
 cp build/libs/temporal/temporal-*.dll $DESTDIR/bin/
+cp build/libs/aaf/aaf-*.dll $DESTDIR/bin/
 cp build/libs/canvas/canvas-*.dll $DESTDIR/bin/
 cp build/libs/widgets/widgets-*.dll $DESTDIR/bin/
 cp build/libs/waveview/waveview-*.dll $DESTDIR/bin/
 cp build/libs/pbd/pbd-*.dll $DESTDIR/bin/
+cp build/libs/tk/ztk/ztk-*.dll $DESTDIR/bin/ || true
+cp build/libs/tk/ydk/ydk-*.dll $DESTDIR/bin/ || true
+cp build/libs/tk/ytk/ytk-*.dll $DESTDIR/bin/ || true
+cp build/libs/tk/ytkmm/ytkmm-*.dll $DESTDIR/bin/ || true
+cp build/libs/tk/ydkmm/ydkmm-*.dll $DESTDIR/bin/ || true
+cp build/libs/tk/ztkmm/ztkmm-*.dll $DESTDIR/bin/ || true
+cp build/libs/tk/ydk-pixbuf/ydk-pixbuf-*.dll $DESTDIR/bin/ || true
+cp build/libs/tk/suil/suil-*.dll $DESTDIR/bin/ || true
 cp build/libs/ctrl-interface/midi_surface/ardour*.dll $DESTDIR/bin/
 cp build/libs/ctrl-interface/control_protocol/ardour*.dll $DESTDIR/bin/
 cp build/libs/ptformat/ptformat-*.dll $DESTDIR/bin/
@@ -175,10 +204,15 @@ cp `find build/libs/surfaces/ -iname "*.dll"` $ALIBDIR/surfaces/
 cp `find build/libs/backends/ -iname "*.dll"` $ALIBDIR/backends/
 cp `find build/libs/panners/ -iname "*.dll"` $ALIBDIR/panners/
 
-cp -r build/libs/LV2 $ALIBDIR/
+cp -r build/libs/LV2 $ALIBDIR/ || true
 cp -r build/libs/vamp-plugins/*ardourvampplugins*.dll $ALIBDIR/vamp/libardourvampplugins.dll
 cp -r build/libs/vamp-pyin/*ardourvamppyin*.dll $ALIBDIR/vamp/libardourvamppyin.dll
-cp $PREFIX/lib/suil-*/*.dll $ALIBDIR/suil/ || true
+
+if test -d build/libs/tk/suil/; then
+	cp build/libs/tk/suil/suil_win_in_gtk2.dll $ALIBDIR/suil/
+else
+	cp $PREFIX/lib/suil-*/*.dll $ALIBDIR/suil/ || true
+fi
 
 # lv2 core, classifications
 for file in $PREFIX/lib/lv2/*.lv2; do
@@ -214,42 +248,41 @@ cp gtk2_ardour/icons/ArdourBug.ico $DESTDIR/share/
 # replace default cursor with square version (sans hotspot file)
 cp gtk2_ardour/icons/cursor_square/* $DESTDIR/share/${LOWERCASE_DIRNAME}/icons/
 
-# clean build-dir after depoyment
+# clean build-dir after deployment
 echo " === bundle completed, cleaning up"
 ./waf uninstall
-find $DESTDIR -name "*.dll.a" | xargs rm
+find $DESTDIR -name "*.dll.a" -print0 | xargs -0 -r rm
 echo " === complete"
 du -sh $DESTDIR
 
 ################################################################################
 ### get video tools
-if test -z "$NOVIDEOTOOLS"; then
-	echo " === Including video-tools"
-	HARVID_VERSION=$(curl -s -S http://ardour.org/files/video-tools/harvid_version.txt)
-	XJADEO_VERSION=$(curl -s -S http://ardour.org/files/video-tools/xjadeo_version.txt)
+
+if test -n "$WITH_HARVID"; then
+	echo " === Including harvid"
+	HARVID_VERSION=$(curl ${CURLOPT} http://ardour.org/files/video-tools/harvid_version.txt)
 
 	rsync -a -q --partial \
 		rsync://ardour.org/video-tools/harvid_${WARCH}-${HARVID_VERSION}.tar.xz \
 		"${SRCCACHE}/harvid_${WARCH}-${HARVID_VERSION}.tar.xz"
 
+	mkdir -p $DESTDIR/video
+	tar -xf "${SRCCACHE}/harvid_${WARCH}-${HARVID_VERSION}.tar.xz" -C "$DESTDIR/video/"
+fi
+
+if test -n "$WITH_XJADEO"; then
+	echo " === Including video-monitor"
+	XJADEO_VERSION=$(curl ${CURLOPT} http://ardour.org/files/video-tools/xjadeo_version.txt)
+
 	rsync -a -q --partial \
 		rsync://ardour.org/video-tools/xjadeo_${WARCH}-${XJADEO_VERSION}.tar.xz \
 		"${SRCCACHE}/xjadeo_${WARCH}-${XJADEO_VERSION}.tar.xz"
 
-	mkdir $DESTDIR/video
-	tar -xf "${SRCCACHE}/harvid_${WARCH}-${HARVID_VERSION}.tar.xz" -C "$DESTDIR/video/"
+	mkdir -p $DESTDIR/video
 	tar -xf "${SRCCACHE}/xjadeo_${WARCH}-${XJADEO_VERSION}.tar.xz" -C "$DESTDIR/video/"
-
-	echo " === unzipped"
-	du -sh $DESTDIR/video
-	du -sh $DESTDIR
 fi
 
 ################################################################################
-### include static gdb - re-zipped binaries from
-### http://sourceforge.net/projects/mingw/files/MinGW/Extension/gdb/gdb-7.6.1-1/gdb-7.6.1-1-mingw32-bin.tar.lzma
-### http://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win64/Personal%20Builds/mingw-builds/4.9.1/threads-win32/sjlj/x86_64-4.9.1-release-win32-sjlj-rt_v3-rev1.7z
-
 BUILDTYPE=""
 VERSIONINFO="Optimized Version."
 
@@ -271,28 +304,31 @@ fi
 OUTFILE="${TMPDIR}/${PRODUCT_NAME}-${ARDOURVERSION}${BUILDTYPE}-${WARCH}-Setup.exe"
 
 if test -n "$PACKAGE_GDB"; then
-	download gdb-static-win3264.tar.xz http://robin.linuxaudio.org/gdb-static-win3264.tar.xz
+	# re-packaged from https://packages.msys2.org/package/mingw-w64-x86_64-gdb
+	download gdb12-win64.tar.xz http://ardour.org/files/gdb/gdb12-win64.tar.xz
 	cd ${SRCCACHE}
-	tar xf gdb-static-win3264.tar.xz
+	tar xf gdb12-win64.tar.xz
 	cd - > /dev/null
 
 	echo " === Creating debug.bat"
-	cp -r ${SRCCACHE}/gdb_$WARCH $DESTDIR/gdb
+	cp -r ${SRCCACHE}/gdb12 $DESTDIR/gdb12
 	cat > $DESTDIR/debug.bat << EOF
+set PYTHONPATH=%~dp0\gdb12\python3.10
+set PATH=%~dp0\gdb12\;%PATH%
 cd bin
-START ..\\gdb\\bin\\gdb.exe -iex "set logging overwrite on" -iex "set height 0" -iex "set logging on %UserProfile%\\${PRODUCT_NAME}-debug.log" -iex "target exec ${PRODUCT_EXE}" -iex "run"
+..\\gdb12\\gdb.exe -ex "set logging overwrite on" -ex "set height 0" -ex "set logging file %UserProfile%\\${PRODUCT_NAME}-debug.log" -ex "set logging enabled on" -ex "target exec ${PRODUCT_EXE}" -ex "run"
 EOF
 fi
 
 ################################################################################
 ### Mixbus plugins, etc
-if true ; then
+if test x$WITH_GMSYNTH != x ; then
 	mkdir -p $ALIBDIR/LV2
 
 	echo "Adding General MIDI Synth LV2"
 
 	for proj in x42-gmsynth; do
-		X42_VERSION=$(curl -s -S http://x42-plugins.com/x42/win/${proj}.latest.txt)
+		X42_VERSION=$(curl ${CURLOPT} http://x42-plugins.com/x42/win/${proj}.latest.txt)
 		rsync -a -q --partial \
 			rsync://x42-plugins.com/x42/win/${proj}-lv2-${WARCH}-${X42_VERSION}.zip \
 			"${SRCCACHE}/${proj}-lv2-${WARCH}-${X42_VERSION}.zip"
@@ -306,7 +342,7 @@ if test x$WITH_COMMERCIAL_X42_LV2 != x ; then
 	echo "Adding commercial x42 Plugins"
 
 	for proj in x42-meters x42-eq x42-whirl; do
-		X42_VERSION=$(curl -s -S http://x42-plugins.com/x42/win/${proj}.latest.txt)
+		X42_VERSION=$(curl ${CURLOPT} http://x42-plugins.com/x42/win/${proj}.latest.txt)
 		rsync -a -q --partial \
 			rsync://x42-plugins.com/x42/win/${proj}-lv2-${WARCH}-${X42_VERSION}.zip \
 			"${SRCCACHE}/${proj}-lv2-${WARCH}-${X42_VERSION}.zip"
@@ -320,8 +356,18 @@ if test x$WITH_GRATIS_X42_LV2 != x ; then
 
 	echo "Adding gratis x42 Plugins"
 
-	for proj in x42-autotune x42-midifilter x42-stereoroute setBfree x42-avldrums x42-limiter x42-tuner; do
-		X42_VERSION=$(curl -s -S http://x42-plugins.com/x42/win/${proj}.latest.txt)
+	for proj in $X42PLUGINS; do
+
+		if test -n "$VBM"; then
+			if test "$proj" = "setBfree"; then
+				continue
+			fi
+			if test "$proj" = "x42-avldrums"; then
+				continue
+			fi
+		fi
+
+		X42_VERSION=$(curl ${CURLOPT} http://x42-plugins.com/x42/win/${proj}.latest.txt)
 		rsync -a -q --partial \
 			rsync://x42-plugins.com/x42/win/${proj}-lv2-${WARCH}-${X42_VERSION}.zip \
 			"${SRCCACHE}/${proj}-lv2-${WARCH}-${X42_VERSION}.zip"
@@ -334,18 +380,33 @@ if test x$WITH_HARRISON_LV2 != x ; then
 
 	echo "Including Harrison LV2s"
 
-	curl -s -S --fail -# \
+	curl ${CURLOPT} --fail -# \
 		-z "${SRCCACHE}/${HARRISONLV2}.${WARCH}.zip" \
 		-o "${SRCCACHE}/${HARRISONLV2}.${WARCH}.zip" \
 		"${HARRISONDSPURL}/${HARRISONLV2}.${WARCH}.zip"
 	unzip -q -d "$DESTDIR/LV2/" "${SRCCACHE}/${HARRISONLV2}.${WARCH}.zip"
 fi
 
+if test x$WITH_HARRISON_VBM != x ; then
+	mkdir -p $DESTDIR/LV2
+
+	echo "Including Harrison VBM Channelstrip LV2"
+
+	curl ${CURLOPT} --fail -# \
+		-z "${SRCCACHE}/harrison_vbm.${WARCH}.zip" \
+		-o "${SRCCACHE}/harrison_vbm.${WARCH}.zip" \
+		"${HARRISONDSPURL}/harrison_vbm.${WARCH}.zip"
+	unzip -q -d "$DESTDIR/LV2/" "${SRCCACHE}/harrison_vbm.${WARCH}.zip"
+
+	# use mingw-11 gcc-12's libstdc++-6.dll (channelstrip compat)
+	cp -v "${SRCCACHE}/libstdc++-6.dll" $DESTDIR/bin/
+fi
+
 if test -n "$MIXBUS"; then
 	echo "Deploying Harrison Mixbus Channelstrip"
 
 	mkdir -p $ALIBDIR/ladspa/strip
-	curl -s -S --fail -# \
+	curl ${CURLOPT} --fail -# \
 		-z "${SRCCACHE}/${HARRISONCHANNELSTRIP}.${WARCH}.dll" \
 		-o "${SRCCACHE}/${HARRISONCHANNELSTRIP}.${WARCH}.dll" \
 		"${HARRISONDSPURL}/${HARRISONCHANNELSTRIP}.${WARCH}.dll"
@@ -355,7 +416,7 @@ if test -n "$MIXBUS"; then
 
 	echo "Deploying Harrison Vamp Plugins"
 	mkdir -p $ALIBDIR/vamp
-	curl -s -S --fail -# \
+	curl ${CURLOPT} --fail -# \
 		-z "${SRCCACHE}/harrison_vamp.${WARCH}.dll" \
 		-o "${SRCCACHE}/harrison_vamp.${WARCH}.dll" \
 		"${HARRISONDSPURL}/harrison_vamp.${WARCH}.dll"
@@ -364,19 +425,19 @@ if test -n "$MIXBUS"; then
 		"$ALIBDIR/vamp/harrison_vamp.dll"
 
 	# Mixbus Bundled Media Content
-	curl -s -S --fail -#  \
+	curl ${CURLOPT} --fail -#  \
 		-z "${SRCCACHE}/MixbusBundledMedia.zip" \
 		-o "${SRCCACHE}/MixbusBundledMedia.zip" \
-		"http://builder.harrisonconsoles.com/pub/share/MixbusBundledMedia.zip"
+		"https://builder.harrisonconsoles.com/pub/share/MixbusBundledMedia.zip"
 
 	if test -f "${SRCCACHE}/MixbusBundledMedia.zip"; then
 		echo "Adding Mixbus Bundled Content"
 		rm -f $DESTDIR/share/${LOWERCASE_DIRNAME}/media/*.*
 		unzip -q -o -d "$DESTDIR/share/${LOWERCASE_DIRNAME}/media/" "${SRCCACHE}/MixbusBundledMedia.zip"
 	fi
-else
-        echo "Fetching Ardour bundled media"
-	curl -s -S --fail -#  \
+elif test -z "$LIVETRAX" -a -z "$VBM"; then
+	echo "Fetching Ardour bundled media"
+	curl ${CURLOPT} --fail -#  \
 		-z "${SRCCACHE}/ArdourBundledMedia.zip" \
 		-o "${SRCCACHE}/ArdourBundledMedia.zip" \
 		"http://stuff.ardour.org/loops/ArdourBundledMedia.zip"
@@ -392,9 +453,9 @@ fi
 
 if test x$DEMO_SESSION_URL != x ; then
 	mkdir -p $DESTDIR/share/${LOWERCASE_DIRNAME}/sessions
-	DEMO_SESSIONS=$(curl -s -S --fail $DEMO_SESSION_URL/index.txt)
+	DEMO_SESSIONS=$(curl ${CURLOPT} --fail $DEMO_SESSION_URL/index.txt)
 	for demo in $DEMO_SESSIONS; do
-		curl -s -S --fail -# -o $DESTDIR/share/${LOWERCASE_DIRNAME}/sessions/$demo $DEMO_SESSION_URL/$demo
+		curl ${CURLOPT} --fail -# -o $DESTDIR/share/${LOWERCASE_DIRNAME}/sessions/$demo $DEMO_SESSION_URL/$demo
 	done
 fi
 
@@ -419,6 +480,11 @@ if test -n "$QUICKZIP" ; then
 	cat > $NSISFILE << EOF
 SetCompressor zlib
 EOF
+elif test -n "$PACKAGE_GDB"; then
+	# debug version is > 2.2 GB and causes issues with SOLID lzma
+	cat > $NSISFILE << EOF
+SetCompressor lzma
+EOF
 else
 	cat > $NSISFILE << EOF
 SetCompressor /SOLID lzma
@@ -442,14 +508,14 @@ InstallDirRegKey HKLM "Software\\${PRODUCT_NAME}\\${PRODUCT_ID}\\$WARCH" "Instal
 
 EOF
 
-if test -n "$MIXBUS"; then
+if test -n "$MIXBUS" -o -n "$LIVETRAX" -o -n "$VBM"; then
 
 # TODO: proper welcome/finish text.
 	cat >> $NSISFILE << EOF
 !define MUI_FINISHPAGE_TITLE "Welcome to Harrison ${PROGRAM_NAME}"
 !define MUI_FINISHPAGE_TEXT "Thanks for your purchase of ${PROGRAM_NAME}!\$\\r\$\\nYou will find the ${PROGRAM_NAME} application in the Start Menu (or the All Apps panel for Windows 8) \$\\r\$\\nClick the link below to view the ${PROGRAM_NAME} manual, and learn ways to get involved with the Mixbus community."
 !define MUI_FINISHPAGE_LINK "${PROGRAM_NAME} Manual"
-!define MUI_FINISHPAGE_LINK_LOCATION "https://rsrc.harrisonconsoles.com/mixbus/${MANUAL_NAME}/"
+!define MUI_FINISHPAGE_LINK_LOCATION "${MANUAL_URL}"
 !define MUI_FINISHPAGE_NOREBOOTSUPPORT
 EOF
 
@@ -485,7 +551,7 @@ Section "${PROGRAM_NAME}${PROGRAM_VERSION} (required)" SecMainProg
   File /r lib
   File /r share
   File /nonfatal debug.bat
-  File /nonfatal /r gdb
+  File /nonfatal /r gdb12
   WriteRegStr HKLM "Software\\${PROGRAM_KEY}\\v${major_version}\\$WARCH" "Install_Dir" "\$INSTDIR"
   WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PRODUCT_ID}-${WARCH}" "DisplayName" "${PROGRAM_NAME}${PROGRAM_VERSION}"
   WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PRODUCT_ID}-${WARCH}" "UninstallString" '"\$INSTDIR\\uninstall.exe"'
@@ -497,10 +563,10 @@ Section "${PROGRAM_NAME}${PROGRAM_VERSION} (required)" SecMainProg
 SectionEnd
 EOF
 
-if test -z "$NOVIDEOTOOLS"; then
+if test -n "$WITH_HARVID$WITH_XJADEO"; then
 
 	cat >> $NSISFILE << EOF
-Section "Videotimeline Tools (required)" SecVideo
+Section "A/V Tools (required)" SecVideo
   WriteRegStr HKLM "Software\\${PROGRAM_KEY}\\v${major_version}\\video" "Install_Dir" "\$INSTDIR\\video"
   SectionIn RO
   SetOutPath \$INSTDIR
@@ -511,7 +577,7 @@ EOF
 fi
 
 if test x$WITH_HARRISON_LV2 != x ; then
-if test -n "$MIXBUS"; then
+if [ -n "$MIXBUS" ] || [ -n "$VBM" ]; then
 	cat >> $NSISFILE << EOF
 Section "Harrison XT plugins (required)" SecXT
   SectionIn RO
@@ -549,7 +615,7 @@ if test -f "$DESTDIR/debug.bat"; then
 EOF
 fi
 
-if test -z "$NOVIDEOTOOLS"; then
+if test -n "$WITH_XJADEO"; then
 	cat >> $NSISFILE << EOF
   IfFileExists "\$INSTDIR\\video\\xjadeo\\xjadeo.exe" 0 +2
   CreateShortCut "\$SMPROGRAMS\\${PRODUCT_ID}${SFX}\\Video Monitor.lnk" "\$INSTDIR\\video\\xjadeo\\xjadeo.exe" "" "\$INSTDIR\\video\\xjadeo\\xjadeo.exe" 0
@@ -563,11 +629,20 @@ LangString DESC_SecMainProg \${LANG_ENGLISH} "${PROGRAM_NAME} ${ARDOURVERSION}\$
 LangString DESC_SecWASAPI \${LANG_ENGLISH} "WASAPI Audio Driver\$\\r\$\\nOnly works on Vista or later. Windows 10 Users may currently also experience issues if this is installed."
 EOF
 
-if test -z "$NOVIDEOTOOLS"; then
+if test -n "$WITH_XJADEO" -a -n "$WITH_HARVID"; then
 	cat >> $NSISFILE << EOF
 LangString DESC_SecVideo \${LANG_ENGLISH} "Video Tools\$\\r\$\\nxjadeo-${XJADEO_VERSION}\$\\r\$\\nharvid-${HARVID_VERSION}"
 EOF
+elif test -n "$WITH_HAVID"; then
+	cat >> $NSISFILE << EOF
+LangString DESC_SecVideo \${LANG_ENGLISH} "Video Tools\$\\r\$\\nharvid-${HARVID_VERSION}"
+EOF
+elif test -n "$WITH_XJADEO"; then
+	cat >> $NSISFILE << EOF
+LangString DESC_SecVideo \${LANG_ENGLISH} "Video Tools\$\\r\$\\nxjadeo-${XJADEO_VERSION}"
+EOF
 fi
+
 if test x$WITH_HARRISON_LV2 != x ; then
 	cat >> $NSISFILE << EOF
 LangString DESC_SecXT \${LANG_ENGLISH} "These are proprietary additions, but the DSP is not license encumbered. XT-plugin GUIs are commercial, the additional a-*/ACE plugin GUIs are free."
@@ -581,7 +656,7 @@ LangString DESC_SecMenu \${LANG_ENGLISH} "Create Start-Menu Shortcuts (recommend
 !insertmacro MUI_DESCRIPTION_TEXT \${SecWASAPI} \$(DESC_SecWASAPI)
 EOF
 
-if test -z "$NOVIDEOTOOLS"; then
+if test -n "$WITH_XJADEO$WITH_HARVID"; then
 	cat >> $NSISFILE << EOF
 !insertmacro MUI_DESCRIPTION_TEXT \${SecVideo} \$(DESC_SecVideo)
 EOF
@@ -604,7 +679,7 @@ Section "Uninstall"
   RMDir /r "\$INSTDIR\\bin"
   RMDir /r "\$INSTDIR\\lib"
   RMDir /r "\$INSTDIR\\share"
-  RMDir /r "\$INSTDIR\\gdb"
+  RMDir /r "\$INSTDIR\\gdb12"
   RMDir /r "\$INSTDIR\\video"
   Delete "\$INSTDIR\\debug.bat"
   Delete "\$INSTDIR\\uninstall.exe"

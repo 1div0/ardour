@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_midi_track_h__
-#define __ardour_midi_track_h__
+#pragma once
 
 #include "ardour/midi_channel_filter.h"
 #include "ardour/midi_ring_buffer.h"
@@ -34,6 +33,7 @@ class MidiPlaylist;
 class RouteGroup;
 class SMFSource;
 class Session;
+class VelocityControl;
 
 class LIBARDOUR_API MidiTrack : public Track
 {
@@ -52,28 +52,24 @@ public:
 	void freeze_me (InterThreadInfo&);
 	void unfreeze ();
 
-	bool bounceable (std::shared_ptr<Processor>, bool) const { return false; }
-	std::shared_ptr<Region> bounce (InterThreadInfo&, std::string const&);
-	std::shared_ptr<Region> bounce_range (samplepos_t                  start,
-	                                        samplepos_t                  end,
-	                                        InterThreadInfo&             iti,
-	                                        std::shared_ptr<Processor> endpoint,
-	                                        bool                         include_endpoint,
-	                                        std::string const&           name);
+	bool bounceable (std::shared_ptr<Processor>, bool include_endpoint) const;
 
-	int export_stuff (BufferSet&                   bufs,
-	                  samplepos_t                  start_sample,
-	                  samplecnt_t                  end_sample,
-	                  std::shared_ptr<Processor> endpoint,
-	                  bool                         include_endpoint,
-	                  bool                         for_export,
-	                  bool                         for_freeze,
+	int export_stuff (BufferSet&                  bufs,
+	                  samplepos_t                 start_sample,
+	                  samplecnt_t                 end_sample,
+	                  std::shared_ptr<Processor>  endpoint,
+	                  bool                        include_endpoint,
+	                  bool                        for_export,
+	                  bool                        for_freeze,
 	                  MidiNoteTracker&            tracker);
 
 	int set_state (const XMLNode&, int version);
 
 	void midi_panic(void);
 	bool write_immediate_event (Evoral::EventType event_type, size_t size, const uint8_t* buf);
+	bool write_user_immediate_event (Evoral::EventType event_type, size_t size, const uint8_t* buf);
+
+	std::shared_ptr<VelocityControl> velocity_control() const { return _velocity_control; }
 
 	/** A control that will send "immediate" events to a MIDI track when twiddled */
 	struct MidiControl : public AutomationControl {
@@ -103,7 +99,7 @@ public:
 	void set_step_editing (bool yn);
 	MidiRingBuffer<samplepos_t>& step_edit_ring_buffer() { return _step_edit_ring_buffer; }
 
-	PBD::Signal1<void,bool> StepEditStatusChange;
+	PBD::Signal<void(bool)> StepEditStatusChange;
 
 	std::shared_ptr<SMFSource> write_source (uint32_t n = 0);
 
@@ -125,24 +121,28 @@ public:
 
 	std::shared_ptr<MidiPlaylist> midi_playlist ();
 
-	PBD::Signal1<void, std::weak_ptr<MidiSource> > DataRecorded;
+	PBD::Signal<void(std::weak_ptr<MidiSource> )> DataRecorded;
 	std::shared_ptr<MidiBuffer> get_gui_feed_buffer () const;
 
 	MonitorState monitoring_state () const;
 	MonitorState get_input_monitoring_state (bool recording, bool talkback) const;
 
 	MidiBuffer const& immediate_event_buffer () const { return _immediate_event_buffer; }
+	MidiBuffer const& user_immediate_event_buffer () const { return _user_immediate_event_buffer; }
 	MidiRingBuffer<samplepos_t>& immediate_events () { return _immediate_events; }
+	MidiRingBuffer<samplepos_t>& user_immediate_events () { return _user_immediate_events; }
 
 	void set_input_active (bool);
 	bool input_active () const;
-	PBD::Signal0<void> InputActiveChanged;
+	PBD::Signal<void()> InputActiveChanged;
 
 	void set_restore_pgm_on_load (bool yn);
 	bool restore_pgm_on_load () const;
 
 	void realtime_handle_transport_stopped ();
 	void region_edited (std::shared_ptr<Region>);
+
+	int last_seen_external_midi_note () const { return _last_seen_external_midi_note; }
 
 protected:
 
@@ -154,10 +154,14 @@ protected:
 	void snapshot_out_of_band_data (samplecnt_t nframes);
 	void write_out_of_band_data (BufferSet& bufs, samplecnt_t /* nframes */) const;
 
+	void input_change_handler (IOChange, void *src);
+
 
 private:
 	MidiRingBuffer<samplepos_t> _immediate_events;
+	MidiRingBuffer<samplepos_t> _user_immediate_events;
 	MidiBuffer                  _immediate_event_buffer;
+	MidiBuffer                  _user_immediate_event_buffer;
 	MidiRingBuffer<samplepos_t> _step_edit_ring_buffer;
 	NoteMode                    _note_mode;
 	bool                        _step_editing;
@@ -165,6 +169,9 @@ private:
 	bool                        _restore_pgm_on_load;
 	MidiChannelFilter           _playback_filter;
 	MidiChannelFilter           _capture_filter;
+	int                         _last_seen_external_midi_note;
+
+	std::shared_ptr<VelocityControl>  _velocity_control;
 
 	void set_state_part_two ();
 	void set_state_part_three ();
@@ -183,8 +190,9 @@ private:
 
 	void playlist_contents_changed ();
 	PBD::ScopedConnection playlist_content_change_connection;
+
+	PBD::ScopedConnectionList note_connections;
+	void note_on_handler (int);
 };
 
 } /* namespace ARDOUR*/
-
-#endif /* __ardour_midi_track_h__ */

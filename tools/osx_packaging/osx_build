@@ -14,18 +14,23 @@ fi
 mkdir -p "$CACHEDIR"
 
 MIXBUS=
-MIXBUS32C=
+VBM=
 WITH_HARVID=1
+WITH_XJADEO=1
 WITH_HARRISON_LV2=
+WITH_HARRISON_VBM=
 WITH_COMMERCIAL_X42_LV2=
 WITH_GRATIS_X42_LV2=
+WITH_GMSYNTH=
 STRIP=1
 PRINT_SYSDEPS=
 WITH_NLS=1
+X42PLUGINS="x42-autotune x42-midifilter x42-stereoroute setBfree x42-avldrums x42-limiter x42-tuner"
+CURLOPT="-s -S --retry-connrefused --retry 3"
 
 : ${HARRISONCHANNELSTRIP=harrison_channelstrip}
 : ${HARRISONLV2=harrison_lv2s-n}
-: ${HARRISONDSPURL=http://rsrc.harrisonconsoles.com/plugins/releases/public}
+: ${HARRISONDSPURL=https://builder.harrisonconsoles.com/pub/dsp}
 
 . ../define_versions.sh
 
@@ -41,27 +46,40 @@ while [ $# -gt 0 ] ; do
 		WITH_HARRISON_LV2=1 ;
 		WITH_COMMERCIAL_X42_LV2=1
 		WITH_GRATIS_X42_LV2=1
-		STRIP= ;
+		WITH_GMSYNTH=1
 		PRODUCT_PKG_DIR=Mixbus;
 		APPNAME=Mixbus ;
 		BUNDLENAME=Mixbus${major_version} ;
 		lower_case_appname=mixbus;
 		BUNDLE_ID_BASE=com.harrisonconsoles
 		shift ;;
-	--mixbus32c) MIXBUS=1;
-		MIXBUS32C=1;
+	--livetrax)
+		LIVETRAX=1 ;
+		WITH_XJADEO= ;
+		APPNAME=LiveTrax ;
+		PRODUCT_PKG_DIR=LiveTrax;
+		BUNDLENAME=LiveTrax${major_version} ;
+		lower_case_appname=livetrax;
+		BUNDLE_ID_BASE=com.harrisonconsoles
+		shift ;;
+	--vbm)
+		VBM=1
 		WITH_HARRISON_LV2=1 ;
+		WITH_HARRISON_VBM=1 ;
 		WITH_COMMERCIAL_X42_LV2=1
 		WITH_GRATIS_X42_LV2=1
+		WITH_XJADEO= ;
+		WITH_HARVID= ;
 		STRIP= ;
-		PRODUCT_PKG_DIR=Mixbus32C;
-		lower_case_appname=mixbus32c;
-		BUNDLE_ID_BASE=com.harrisonconsoles
-		APPNAME=Mixbus32C ;
-		BUNDLENAME=Mixbus32C-${major_version} ;
+		PRODUCT_PKG_DIR=MixbusVBM;
+		lower_case_appname=mixbusvbm;
+		APPNAME=MixbusVBM ;
+		BUNDLENAME=MixbusVBM${major_version} ;
+		X42PLUGINS="$X42PLUGINS x42-testsignal x42-nodelay"
 		shift ;;
 	--public)
 		WITH_HARRISON_LV2=1 ;
+		WITH_GMSYNTH=1
 		PRODUCT_PKG_DIR=Ardour;
 		APPNAME=Ardour ;
 		BUNDLENAME=Ardour${major_version} ;
@@ -73,7 +91,7 @@ while [ $# -gt 0 ] ; do
 	# specific build flags
 	#
 
-	--noharvid) WITH_HARVID= ; shift ;;
+	--noharvid) shift ;;
 	--nostrip) STRIP= ; shift ;;
 	--sysdeps) PRINT_SYSDEPS=1; shift ;;
 	--no-nls) WITH_NLS= ; shift ;;
@@ -171,9 +189,12 @@ mkdir -p $ExportFormats
 mkdir -p $Etc
 mkdir -p $MackieControl
 mkdir -p $OSC
-mkdir -p $PatchFiles
 mkdir -p $LuaScripts
 mkdir -p $Themes
+
+if test -z "$VBM"; then
+mkdir -p $PatchFiles
+fi
 
 EXECUTABLE=${BUNDLENAME}
 
@@ -230,10 +251,12 @@ MAIN_EXECUTABLE=$EXECUTABLE
 
 echo "Copying ardour executable ...."
 cp $BUILD_ROOT/gtk2_ardour/ardour-$release_version $APPROOT/MacOS/$MAIN_EXECUTABLE
-if test x$MIXBUS32C != x ; then
-	cp  Mixbus32C.icns $Resources/appIcon.icns
-elif test x$MIXBUS != x ; then
+if test x$MIXBUS != x ; then
 	cp  Mixbus.icns $Resources/appIcon.icns
+elif test x$LIVETRAX != x ; then
+	cp  LiveTrax.icns $Resources/appIcon.icns
+elif test x$VBM != x ; then
+	cp  MixbusVBM.icns $Resources/appIcon.icns
 else
 	cp  Ardour.icns $Resources/appIcon.icns
 fi
@@ -247,8 +270,8 @@ if test x$WITH_NLS != x ; then
 	echo "I hope you remembered to run waf i18n"
 	LINGUAS=
 
-	for pkg in gtk2_ardour libs/ardour libs/gtkmm2ext ; do
-		files=`find ../../$pkg -name "*.mo"`
+	for pkg in gtk2_ardour libs/ardour libs/gtkmm2ext lib/tk/ytk  ; do
+		files=`find ../../$pkg -not -path "*/appdata/*" -name "*.mo"`
 
 		#
 		# the package name is appended with a number so that
@@ -346,9 +369,11 @@ done
 
 # MIDNAM Patch Files
 # got to be careful with names here
-for x in $BUILD_ROOT/../share/patchfiles/*.midnam ; do
-	cp "$x" $PatchFiles
-done
+if test -z "$VBM"; then
+	for x in $BUILD_ROOT/../share/patchfiles/*.midnam ; do
+		cp "$x" $PatchFiles
+	done
+fi
 
 # Lua Script Files
 # got to be careful with names here
@@ -381,7 +406,7 @@ for x in $BUILD_ROOT/../share/osc/*.preset ; do
 done
 
 # Mixbus MixerSettings (if any)
-for x in $BUILD_ROOT/../mixer_settings/*.lua ; do
+for x in $BUILD_ROOT/../share/mixer_settings/*.lua ; do
 	mkdir -p $MixerSettings  # create on demand
 	cp "$x" $MixerSettings
 done
@@ -391,7 +416,9 @@ cp $BUILD_ROOT/libs/vamp-plugins/libardourvampplugins.dylib $Frameworks
 cp $BUILD_ROOT/libs/vamp-pyin/libardourvamppyin.dylib $Frameworks
 
 # Suil modules (new dir 'build-stack')
-if test -d $GTKSTACK_ROOT/lib/suil-0/ ; then
+if test -d $BUILD_ROOT/libs/tk/suil/ ; then
+	cp $BUILD_ROOT/libs/tk/suil/libsuil_cocoa_in_gtk2.dylib $Frameworks
+elif test -d $GTKSTACK_ROOT/lib/suil-0/ ; then
 	cp $GTKSTACK_ROOT/lib/suil-0/lib* $Frameworks
 fi
 
@@ -428,15 +455,17 @@ chmod +x $Frameworks/ardour-util.sh
 
 # session-utils
 HAVE_SESSION_UTILS=false
-for file in $BUILD_ROOT/session_utils/${lower_case_appname}${major_version}-*; do
-	BN=$(basename $file)
-	cp $file $Frameworks/
-	if test x$STRIP = xall ; then
-		strip -s $Frameworks/${BN}
-	fi
-	cp -R $Frameworks/ardour-util.sh ${APPROOT}/MacOS/${BN}
-	HAVE_SESSION_UTILS=true
-done
+if test -d $BUILD_ROOT/session_utils/; then
+	for file in $BUILD_ROOT/session_utils/${lower_case_appname}${major_version}-*; do
+		BN=$(basename $file)
+		cp $file $Frameworks/
+		if test x$STRIP = xall ; then
+			strip -s $Frameworks/${BN}
+		fi
+		cp -R $Frameworks/ardour-util.sh ${APPROOT}/MacOS/${BN}
+		HAVE_SESSION_UTILS=true
+	done
+fi
 
 if test -x $BUILD_ROOT/luasession/luasession; then
 	BN=${lower_case_appname}${major_version}-lua
@@ -461,6 +490,7 @@ else
 STDCPP=
 fi
 
+echo "Stripping symbols and architectures."
 while [ true ] ; do
 	missing=false
 	for file in $APPROOT/MacOS/* $Frameworks/* $Panners/*.dylib $Backends/*.dylib $Surfaces/*.dylib $GTK_ENGINE_DIR/*.dylib ; do
@@ -511,6 +541,10 @@ cp $BUILD_ROOT/gtk2_ardour/ardour.menus $Resources
 cp $BUILD_ROOT/gtk2_ardour/default_ui_config $Resources
 cp $BUILD_ROOT/gtk2_ardour/clearlooks.rc $Resources
 
+if test -n "$LIVETRAX"; then
+	cp $BUILD_ROOT/gtk2_ardour/livetrax.keys $Resources
+fi
+
 # Copied directly from source tree
 
 mkdir ${Resources}/icons
@@ -526,16 +560,11 @@ cp ../../gtk2_ardour/resources/${PRODUCT_PKG_DIR}-* ${Resources}/resources/
 # Themes: only install those named for this app
 cp ../../gtk2_ardour/themes/*-${lower_case_appname}.colors $Themes
 
-# go through and recursively remove any .svn dirs in the bundle
-for svndir in `find $APPDIR -name .svn -type dir`; do
-	rm -rf $svndir
-done
-
 # remove temp session utils start script
-rm $Frameworks/ardour-util.sh 
+rm $Frameworks/ardour-util.sh
 
 # install bundled LV2s to <app>/Contents/lib/LV2/
-cp -R $BUILD_ROOT/libs/LV2 $Frameworks/
+cp -R $BUILD_ROOT/libs/LV2 $Frameworks/ || true
 
 # lv2 core, classifications
 for file in $GTKSTACK_ROOT/lib/lv2/*.lv2; do
@@ -632,19 +661,12 @@ mkdir $PRODUCT_PKG_DIR
 DMGWINBOTTOM=440
 DMGBACKGROUND=dmgbg
 
-if [ x$MIXBUS != x ] ; then
-
-	# Mixbus packaging
-
-	echo "Creating Mixbus packaging directory"
-	mv $APPDIR $PRODUCT_PKG_DIR/
+if test -n "$MIXBUS" -o -n "$LIVETRAX" -o -n "$VBM" ; then
 	DMGBACKGROUND=dmgbgMB
-else
-
-	echo "Creating $APPNAME packaging directory"
-	mv $APPDIR $PRODUCT_PKG_DIR/
-
 fi
+
+echo "Creating $APPNAME packaging directory"
+mv $APPDIR $PRODUCT_PKG_DIR/
 
 ################################################################################
 # from here on $PRODUCT_PKG_DIR/ prefix is needed
@@ -655,34 +677,38 @@ if file ${PRODUCT_PKG_DIR}/$APPROOT/MacOS/$MAIN_EXECUTABLE | grep -q x86_64; the
 	OSX_X42URI=x42-plugins.com/x42/osx
 	OSX_X42ID=osx
 	OSX_BENSID=osx64
-	TXZ_ARCH="osx"   # harvid
-	DMG_ARCH=""      # Jadeo
+	HARVID_ARCH="osx"
+	XJADEO_ARCH=""
+	ARDOUR_ARCH="-x86_64"
 elif file ${PRODUCT_PKG_DIR}/$APPROOT/MacOS/$MAIN_EXECUTABLE | grep -q ppc; then
 	OSX_ARCH=ppc
 	OSX_X42URI=x42-plugins.com/x42/osx
 	OSX_X42ID=osx
 	OSX_BENSID=osxppc
-	TXZ_ARCH="osx"
-	DMG_ARCH=""
+	HARVID_ARCH="osx"
+	XJADEO_ARCH=""
+	ARDOUR_ARCH=""
 elif file ${PRODUCT_PKG_DIR}/$APPROOT/MacOS/$MAIN_EXECUTABLE | grep -q arm64; then
 	OSX_ARCH=arm64
 	OSX_X42URI=x42-plugins.com/x42/mac
 	OSX_X42ID="macOS"
 	OSX_BENSID=macarm64
-	TXZ_ARCH="macOS-arm64"
-	DMG_ARCH="-arm64"
+	HARVID_ARCH="macOS-arm64"
+	XJADEO_ARCH="-arm64"
+	ARDOUR_ARCH="-arm64"
 else
 	OSX_ARCH=i386
 	OSX_X42URI=x42-plugins.com/x42/osx
 	OSX_X42ID=osx
 	OSX_BENSID=osx32
-	TXZ_ARCH="osx"
-	DMG_ARCH=""
+	HARVID_ARCH="osx"
+	XJADEO_ARCH=""
+	ARDOUR_ARCH="-i386"
 fi
 
 if test x$WITH_HARRISON_LV2 != x ; then
 	echo "Bundling Harrison XT plugins"
-	curl -s -S --fail -#  \
+	curl ${CURLOPT} --fail -#  \
 		-z "${CACHEDIR}/${HARRISONLV2}.${OSX_BENSID}.zip" \
 		-o "${CACHEDIR}/${HARRISONLV2}.${OSX_BENSID}.zip" \
 		"${HARRISONDSPURL}/${HARRISONLV2}.${OSX_BENSID}.zip"
@@ -692,31 +718,39 @@ if test x$WITH_HARRISON_LV2 != x ; then
 		"${CACHEDIR}/${HARRISONLV2}.${OSX_BENSID}.zip"
 fi
 
+if test x$WITH_HARRISON_VBM != x ; then
+	curl ${CURLOPT} --fail -#  \
+		-z "${CACHEDIR}/harrison_vbm.${OSX_BENSID}.zip" \
+		-o "${CACHEDIR}/harrison_vbm.${OSX_BENSID}.zip" \
+		"${HARRISONDSPURL}/harrison_vbm.${OSX_BENSID}.zip"
+
+	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2"
+	bsdtar -C "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2/" -xf \
+		"${CACHEDIR}/harrison_vbm.${OSX_BENSID}.zip"
+fi
+
 if test x$WITH_HARVID != x ; then
-	echo "installing video tools.."
-	if test $OSX_ARCH = ppc; then
-		# EOL
-		HARVID_VERSION=v0.8.2
-		XJADEO_VERSION=v0.8.8
-	else
-		HARVID_VERSION=$(curl -s -S http://ardour.org/files/video-tools/harvid_version.txt)
-		XJADEO_VERSION=$(curl -s -S http://ardour.org/files/video-tools/xjadeo_version.txt)
-	fi
-	echo "copying harvid and xjadeo ..."
+	echo "installing harvid..."
+	HARVID_VERSION=$(curl ${CURLOPT} http://ardour.org/files/video-tools/harvid_version.txt)
 
 	rsync -Pa \
-		rsync://ardour.org/video-tools/harvid-${TXZ_ARCH}-${HARVID_VERSION}.tgz \
-		"$CACHEDIR/harvid-${TXZ_ARCH}-${HARVID_VERSION}.tgz"
-
-	rsync -Pa \
-		rsync://ardour.org/video-tools/jadeo${DMG_ARCH}-${XJADEO_VERSION:1}.dmg \
-		"$CACHEDIR/jadeo${DMG_ARCH}-${XJADEO_VERSION:1}.dmg"
+		rsync://ardour.org/video-tools/harvid-${HARVID_ARCH}-${HARVID_VERSION}.tgz \
+		"$CACHEDIR/harvid-${HARVID_ARCH}-${HARVID_VERSION}.tgz"
 
 	tar -x -z \
 		-C $PRODUCT_PKG_DIR/$APPROOT \
-		-f "$CACHEDIR/harvid-${TXZ_ARCH}-${HARVID_VERSION}.tgz" || exit 1
+		-f "$CACHEDIR/harvid-${HARVID_ARCH}-${HARVID_VERSION}.tgz" || exit 1
+fi
 
-	JADEO=$(hdiutil attach "$CACHEDIR/jadeo${DMG_ARCH}-${XJADEO_VERSION:1}.dmg" | grep Apple_HFS | grep dev/ | cut -f 3)
+if test x$WITH_XJADEO != x ; then
+	echo "installing video monitor.."
+	XJADEO_VERSION=$(curl ${CURLOPT} http://ardour.org/files/video-tools/xjadeo_version.txt)
+
+	rsync -Pa \
+		rsync://ardour.org/video-tools/jadeo${XJADEO_ARCH}-${XJADEO_VERSION:1}.dmg \
+		"$CACHEDIR/jadeo${XJADEO_ARCH}-${XJADEO_VERSION:1}.dmg"
+
+	JADEO=$(hdiutil attach "$CACHEDIR/jadeo${XJADEO_ARCH}-${XJADEO_VERSION:1}.dmg" | grep Apple_HFS | grep dev/ | cut -f 3)
 	cp -r "${JADEO}/Jadeo.app" "$PRODUCT_PKG_DIR/"
 	hdiutil detach "${JADEO}"
 
@@ -735,14 +769,16 @@ if test x$WITH_HARVID != x ; then
 	DMGBACKGROUND=${DMGBACKGROUND}xj
 fi
 
+echo "Using image '$DMGBACKGROUND' for the DMG."
+
 ################################################################################
 ### Mixbus plugins, etc
-if true; then
+if test x$WITH_GMSYNTH != x ; then
 	echo "Bundling General MIDI Synth LV2"
 	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2"
 
 	for proj in x42-gmsynth; do
-		X42_VERSION=$(curl -s -S http://${OSX_X42URI}/${proj}.latest.txt)
+		X42_VERSION=$(curl ${CURLOPT} http://${OSX_X42URI}/${proj}.latest.txt)
 		rsync -a -q --partial \
 			rsync://${OSX_X42URI}/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip \
 			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
@@ -756,7 +792,7 @@ if test x$WITH_COMMERCIAL_X42_LV2 != x ; then
 	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2"
 
 	for proj in x42-meters x42-eq x42-whirl; do
-		X42_VERSION=$(curl -s -S http://${OSX_X42URI}/${proj}.latest.txt)
+		X42_VERSION=$(curl ${CURLOPT} http://${OSX_X42URI}/${proj}.latest.txt)
 		rsync -a -q --partial \
 			rsync://${OSX_X42URI}/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip \
 			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
@@ -769,8 +805,18 @@ if test x$WITH_GRATIS_X42_LV2 != x ; then
 	echo "Adding gratis x42 plugins"
 	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2"
 
-	for proj in x42-autotune x42-midifilter x42-stereoroute setBfree x42-avldrums x42-limiter x42-tuner; do
-		X42_VERSION=$(curl -s -S http://${OSX_X42URI}/${proj}.latest.txt)
+	for proj in $X42PLUGINS; do
+
+		if test -n "$VBM"; then
+			if test "$proj" = "setBfree"; then
+				continue
+			fi
+			if test "$proj" = "x42-avldrums"; then
+				continue
+			fi
+		fi
+
+		X42_VERSION=$(curl ${CURLOPT} http://${OSX_X42URI}/${proj}.latest.txt)
 		rsync -a -q --partial \
 			rsync://${OSX_X42URI}/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip \
 			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
@@ -792,7 +838,7 @@ if test -n "$MIXBUS"; then
 
 	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/ladspa/strip"
 
-	curl -s -S --fail -#  \
+	curl ${CURLOPT} --fail -#  \
 		-z "${CACHEDIR}/${HARRISONCHANNELSTRIP}.${OSX_BENSID}.so" \
 		-o "${CACHEDIR}/${HARRISONCHANNELSTRIP}.${OSX_BENSID}.so" \
 		"${HARRISONDSPURL}/${HARRISONCHANNELSTRIP}.${OSX_BENSID}.so"
@@ -802,7 +848,7 @@ if test -n "$MIXBUS"; then
 
 	echo "deploying harrison vamp plugins for $OSX_BENSID"
 
-	curl -s -S --fail -#  \
+	curl ${CURLOPT} --fail -#  \
 		-z "${CACHEDIR}/harrison_vamp.${OSX_BENSID}.dylib" \
 		-o "${CACHEDIR}/harrison_vamp.${OSX_BENSID}.dylib" \
 		"${HARRISONDSPURL}/harrison_vamp.${OSX_BENSID}.dylib"
@@ -811,10 +857,10 @@ if test -n "$MIXBUS"; then
 		"${PRODUCT_PKG_DIR}/${APPROOT}/lib/harrison_vamp.dylib"
 
 	# Mixbus Bundled Media Content
-	curl -s -S --fail -#  \
+	curl ${CURLOPT} --fail -#  \
 		-z "${CACHEDIR}/MixbusBundledMedia.zip" \
 		-o "${CACHEDIR}/MixbusBundledMedia.zip" \
-		"http://builder.harrisonconsoles.com/pub/share/MixbusBundledMedia.zip"
+		"https://builder.harrisonconsoles.com/pub/share/MixbusBundledMedia.zip"
 
 	if test -f "${CACHEDIR}/MixbusBundledMedia.zip"; then
 		echo "Adding Mixbus Bundled Content"
@@ -822,9 +868,9 @@ if test -n "$MIXBUS"; then
 		bsdtar -C "${PRODUCT_PKG_DIR}/${MediaClips}" -xf \
 			"${CACHEDIR}/MixbusBundledMedia.zip"
 	fi
-else
+elif test -z "$LIVETRAX" -a -z "$VBM" ; then
 	echo "Fetching Ardour bundled content"
-	curl -s -S --fail -#  \
+	curl ${CURLOPT} --fail -#  \
 		-z "${CACHEDIR}/ArdourBundledMedia.zip" \
 		-o "${CACHEDIR}/ArdourBundledMedia.zip" \
 		"http://stuff.ardour.org/loops/ArdourBundledMedia.zip"
@@ -861,9 +907,9 @@ fi
 
 if test x$DEMO_SESSION_URL != x ; then
 	mkdir -p ${PRODUCT_PKG_DIR}/$Shared/sessions
-	DEMO_SESSIONS=$(curl -s -S --fail $DEMO_SESSION_URL/index.txt)
+	DEMO_SESSIONS=$(curl ${CURLOPT} --fail $DEMO_SESSION_URL/index.txt)
 	for demo in $DEMO_SESSIONS; do
-		curl -s -S --fail -# -o ${PRODUCT_PKG_DIR}/$Shared/sessions/$demo $DEMO_SESSION_URL/$demo
+		curl ${CURLOPT} --fail -# -o ${PRODUCT_PKG_DIR}/$Shared/sessions/$demo $DEMO_SESSION_URL/$demo
 	done
 fi
 
@@ -872,14 +918,6 @@ fi
 
 
 ##### App Signing ##############################################################
-
-checkForSuccess() {
-	xcrun altool \
-		--notarization-info $1 \
-		-u ${ALTOOL_USERNAME} \
-		--password "@keychain:ALTOOL_PASSWORD" \
-		2>&1 | grep -o "Status: success";
-}
 
 if test $(sw_vers -productVersion | cut -d '.' -f 1) -lt 11 -a $(sw_vers -productVersion | cut -d '.' -f 2) -lt 14 -a $(sw_vers -productVersion | cut -d '.' -f 2) -lt 7; then
 	#less than 10.13.6 does not support notariztion
@@ -891,19 +929,45 @@ fi
 echo "checking for signing credentials"
 
 if test -n "${APPLE_DEVELOPER_ID_FOR_APPLICATION}"; then
+
+	####################
+	## Env compatibility
+
+	if test -n "$ALTOOL_PASSWORD"; then
+		ALTOOL_PASS_ARG="--password $ALTOOL_PASSWORD"
+	elif test -n "$NOTARYTOOL_PROFILE"; then
+		# store profile in keychain:
+		# notarytool store-credentials $NOTARYTOOL_PROFILE --apple-id apple@example.com --team-id 1234567890
+		ALTOOL_PASS_ARG="-p $NOTARYTOOL_PROFILE"
+	else
+		echo "either ALTOOL_PASSWORD or NOTARYTOOL_PROFILE needs to be set"
+		exit 1;
+	fi
+
+	if test -n "$ALTOOL_USERNAME" -a -z "$APPLE_ID"; then
+		APPLE_ID=$ALTOOL_USERNAME
+	fi
+
+	if test -z "$APPLE_TEAM_ID"; then
+		APPLE_TEAM_ID="$(echo $APPLE_DEVELOPER_ID_FOR_APPLICATION | sed 's/.*(\(.*\))/\1/')"
+	fi
+
 	####################
 	## Sign the main APP
 
 	echo "signing the main app"
 
-	# Sign everything from inside level working out.
-	find ${PRODUCT_PKG_DIR}/${APPROOT}/Resources -type f -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
+	# Sign everything from inside level working out, but skip MIDI files includes (there are too many to reasonably sign)
+	find ${PRODUCT_PKG_DIR}/${APPROOT}/Resources -type f -not -name \*.mid -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
 	find ${PRODUCT_PKG_DIR}/${APPROOT}/lib -type f -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
 
 	find ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS -name "${lower_case_appname}${major_version}-*" -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
-	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/ffmpeg_harvid
-	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/ffprobe_harvid
-	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/harvid
+
+	if test x$WITH_HARVID != x ; then
+		codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/ffmpeg_harvid
+		codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/ffprobe_harvid
+		codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/harvid
+	fi
 
 	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/${MAIN_EXECUTABLE}
 
@@ -912,43 +976,25 @@ if test -n "${APPLE_DEVELOPER_ID_FOR_APPLICATION}"; then
 	# Notarize
 	if test -n "${HARDENED_OPTIONS}"; then
 		echo "Notarizing the main app"
-		OK=0
 
 		ZIP_PATH=${PRODUCT_PKG_DIR}/${BUNDLENAME}.zip
 		/usr/bin/ditto -c -k --keepParent ${PRODUCT_PKG_DIR}/${APPDIR} $ZIP_PATH
 
-		notarize_output=$(xcrun altool --notarize-app --primary-bundle-id "${BUNDLE_ID_BASE}.${lower_case_appname}${major_version}.zip" --username ${ALTOOL_USERNAME} --password "@keychain:ALTOOL_PASSWORD" --file $ZIP_PATH 2>&1 | grep -o "RequestUUID = .*")
+		xcrun notarytool submit $ZIP_PATH --apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} $ALTOOL_PASS_ARG --wait
 
 		if [ $? = 0 ]; then
-			REQUEST_ID=$(echo ${notarize_output} | awk '{print $3}')
-			echo "Main app waiting on RequestUUID=${REQUEST_ID}"
-
-			count=360
-			while [ "$count" != 0 -a "$OK" == 0 ]
-			do
-				echo -n .
-				sleep 60
-				count=$((count - 1))
-
-				if checkForSuccess ${REQUEST_ID}; then
-					OK=1;
-				fi
-			done
-
-			if [ "$OK" == 1 ]; then
-				echo "Main app notarize success"
-				xcrun stapler staple ${PRODUCT_PKG_DIR}/${APPDIR}
-			else
-				echo "ERROR: Main app notarize not approved after 6 hours"
-			fi
-
+			echo "Main app notarize success"
+			xcrun stapler staple ${PRODUCT_PKG_DIR}/${APPDIR}
 		else
 			echo "ERROR: Notarize upload failed"
 			exit 1;
 		fi
+
 		rm $ZIP_PATH
 	fi
+fi
 
+if test -n "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" -a -n "$WITH_XJADEO"; then
 	#############
 	## Sign Jadeo
 
@@ -968,40 +1014,20 @@ if test -n "${APPLE_DEVELOPER_ID_FOR_APPLICATION}"; then
 	# Notarize
 	if test -n "${HARDENED_OPTIONS}"; then
 		echo "notarizing Jadeo app"
-		OK=0
 
 		ZIP_PATH=${PRODUCT_PKG_DIR}/Jadeo.zip
 		/usr/bin/ditto -c -k --keepParent ${PRODUCT_PKG_DIR}/Jadeo.app $ZIP_PATH
 
-		notarize_output=$(xcrun altool --notarize-app --primary-bundle-id "${BUNDLE_ID_BASE}.jadeo.zip" --username ${ALTOOL_USERNAME} --password "@keychain:ALTOOL_PASSWORD" --file $ZIP_PATH 2>&1 | grep -o "RequestUUID = .*")
+		xcrun notarytool submit $ZIP_PATH --apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} $ALTOOL_PASS_ARG --wait
 
 		if [ $? = 0 ]; then
-			REQUEST_ID=$(echo ${notarize_output}  | awk '{print $3}')
-			echo "Jadeo waiting on RequestUUID=${REQUEST_ID}"
-
-			count=360
-			while [ "$count" != 0 -a "$OK" == 0 ]
-			do
-				echo -n .
-				sleep 60
-				count=$((count - 1))
-
-				if checkForSuccess ${REQUEST_ID}; then
-					OK=1;
-				fi
-			done
-
-			if [ "$OK" == 1 ]; then
-				echo "Jadeo notarize success"
-				xcrun stapler staple ${PRODUCT_PKG_DIR}/Jadeo.app
-			else
-				echo "ERROR: Jadeo notarize not approved after 6 hours"
-			fi
-
+			echo "Jadeo notarize success"
+			xcrun stapler staple ${PRODUCT_PKG_DIR}/Jadeo.app
 		else
 			echo "ERROR: Notarize upload failed"
 			exit 1;
 		fi
+
 		rm $ZIP_PATH
 	fi
 fi
@@ -1024,7 +1050,7 @@ if [ x$DEBUG$FREEBI = xTT ]; then
   BUILDTYPE="-demo-dbg"
 fi
 
-UC_DMG=$APPNAME-$release_version${BUILDTYPE}${DMG_ARCH}.dmg
+UC_DMG=$APPNAME-$release_version${BUILDTYPE}${ARDOUR_ARCH}.dmg
 
 VOLNAME=$APPNAME-$release_version
 
@@ -1065,6 +1091,7 @@ fi
 
 osascript << EOF
   tell application "Finder"
+    close every window
     activate
     tell disk "${DISKNAME}"
       open
@@ -1102,6 +1129,8 @@ osascript << EOF
 EOF
 
 chmod -Rf go-w "${MNTPATH}"
+sync
+sleep 1
 sync
 
 set -e
@@ -1146,37 +1175,17 @@ if test -n "${APPLE_DEVELOPER_ID_FOR_APPLICATION}"; then
 
 	if test -n "${HARDENED_OPTIONS}"; then
 		echo "dmg: notarizing"
-		OK=0
 
-		notarize_output=$(xcrun altool --notarize-app --primary-bundle-id "${BUNDLE_ID_BASE}.${lower_case_appname}${major_version}.dmg" --username ${ALTOOL_USERNAME} --password "@keychain:ALTOOL_PASSWORD" --file ${UC_DMG} 2>&1 | grep -o "RequestUUID = .*")
+		xcrun notarytool submit ${UC_DMG} --apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} $ALTOOL_PASS_ARG --wait
 
 		if [ $? = 0 ]; then
-			REQUEST_ID=$(echo ${notarize_output}  | awk '{print $3}')
-			echo "dmg: waiting on RequestUUID=${REQUEST_ID}"
-
-			count=360
-			while [ "$count" != 0 -a "$OK" == 0 ]
-			do
-				echo -n .
-				sleep 60
-				count=$((count - 1))
-
-				if checkForSuccess ${REQUEST_ID}; then
-					OK=1;
-				fi
-			done
-
-			if [ "$OK" == 1 ]; then
-				echo "dmg: notarize success"
-				xcrun stapler staple ${UC_DMG}
-			else
-				echo "ERROR: dmg notarize not approved after 6 hours"
-			fi
-
+			echo "dmg: notarize success"
+			xcrun stapler staple ${UC_DMG}
 		else
 			echo "ERROR: Notarize upload failed"
 			exit 1;
 		fi
+
 	fi
 fi
 

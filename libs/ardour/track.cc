@@ -64,7 +64,7 @@ using namespace PBD;
 
 Track::Track (Session& sess, string name, PresentationInfo::Flag flag, TrackMode mode, DataType default_type)
 	: Route (sess, name, flag, default_type)
-	, _saved_meter_point (_meter_point)
+	, _record_prepared (false)
 	, _mode (mode)
 	, _alignment_choice (Automatic)
 	, _pending_name_change (false)
@@ -75,6 +75,12 @@ Track::Track (Session& sess, string name, PresentationInfo::Flag flag, TrackMode
 Track::~Track ()
 {
 	DEBUG_TRACE (DEBUG::Destruction, string_compose ("track %1 destructor\n", _name));
+
+	for (auto const& p : _playlists) {
+		if (p) {
+			p->clear_time_domain_parent ();
+		}
+	}
 
 	if (_disk_reader) {
 		_disk_reader.reset ();
@@ -99,7 +105,7 @@ Track::init ()
 
 	DiskIOProcessor::Flag dflags = DiskIOProcessor::Recordable;
 
-	_disk_reader.reset (new DiskReader (_session, *this, name(), Config->get_default_automation_time_domain(), dflags));
+	_disk_reader.reset (new DiskReader (_session, *this, name(), Temporal::TimeDomainProvider (Config->get_default_automation_time_domain()), dflags));
 	_disk_reader->set_block_size (_session.get_block_size ());
 	_disk_reader->set_owner (this);
 
@@ -116,13 +122,13 @@ Track::init ()
 	std::shared_ptr<Route> rp (std::dynamic_pointer_cast<Route> (shared_from_this()));
 	std::shared_ptr<Track> rt = std::dynamic_pointer_cast<Track> (rp);
 
-	_record_enable_control.reset (new RecordEnableControl (_session, EventTypeMap::instance().to_symbol (RecEnableAutomation), *this, time_domain()));
+	_record_enable_control.reset (new RecordEnableControl (_session, EventTypeMap::instance().to_symbol (RecEnableAutomation), *this, *this));
 	add_control (_record_enable_control);
 
-	_record_safe_control.reset (new RecordSafeControl (_session, EventTypeMap::instance().to_symbol (RecSafeAutomation), *this, time_domain()));
+	_record_safe_control.reset (new RecordSafeControl (_session, EventTypeMap::instance().to_symbol (RecSafeAutomation), *this, *this));
 	add_control (_record_safe_control);
 
-	_monitoring_control.reset (new MonitorControl (_session, EventTypeMap::instance().to_symbol (MonitoringAutomation), *this, time_domain()));
+	_monitoring_control.reset (new MonitorControl (_session, EventTypeMap::instance().to_symbol (MonitoringAutomation), *this, *this));
 	add_control (_monitoring_control);
 
 	if (!name().empty()) {
@@ -135,15 +141,17 @@ Track::init ()
 		set_name (name ());
 	}
 
-	_session.config.ParameterChanged.connect_same_thread (*this, boost::bind (&Track::parameter_changed, this, _1));
+	_session.config.ParameterChanged.connect_same_thread (*this, std::bind (&Track::parameter_changed, this, _1));
+	_session.RecordStateChanged.connect_same_thread (*this, std::bind (&Track::update_input_meter, this));
+	_session.TransportStateChange.connect_same_thread (*this, std::bind (&Track::update_input_meter, this));
 
-	_monitoring_control->Changed.connect_same_thread (*this, boost::bind (&Track::monitoring_changed, this, _1, _2));
-	_record_safe_control->Changed.connect_same_thread (*this, boost::bind (&Track::record_safe_changed, this, _1, _2));
-	_record_enable_control->Changed.connect_same_thread (*this, boost::bind (&Track::record_enable_changed, this, _1, _2));
+	_monitoring_control->Changed.connect_same_thread (*this, std::bind (&Track::monitoring_changed, this, _1, _2));
+	_record_safe_control->Changed.connect_same_thread (*this, std::bind (&Track::record_safe_changed, this, _1, _2));
+	_record_enable_control->Changed.connect_same_thread (*this, std::bind (&Track::record_enable_changed, this, _1, _2));
 
-	_input->changed.connect_same_thread (*this, boost::bind (&Track::input_changed, this));
+	_input->changed.connect_same_thread (*this, std::bind (&Track::input_changed, this));
 
-	_disk_reader->ConfigurationChanged.connect_same_thread (*this, boost::bind (&Track::chan_count_changed, this));
+	_disk_reader->ConfigurationChanged.connect_same_thread (*this, std::bind (&Track::chan_count_changed, this));
 
 	return 0;
 }
@@ -163,6 +171,23 @@ Track::chan_count_changed ()
 }
 
 XMLNode&
+Track::playlist_state () const
+{
+	XMLNode* node = new XMLNode("Route");
+	node->set_property("version", CURRENT_SESSION_FILE_VERSION);
+
+	if (_playlists[DataType::AUDIO]) {
+		node->set_property (X_("audio-playlist"), _playlists[DataType::AUDIO]->id().to_s());
+	}
+
+	if (_playlists[DataType::MIDI]) {
+		node->set_property (X_("midi-playlist"), _playlists[DataType::MIDI]->id().to_s());
+	}
+
+	return *node;
+}
+
+XMLNode&
 Track::state (bool save_template) const
 {
 	XMLNode& root (Route::state (save_template));
@@ -179,7 +204,9 @@ Track::state (bool save_template) const
 	root.add_child_nocopy (_record_safe_control->get_state ());
 	root.add_child_nocopy (_record_enable_control->get_state ());
 
-	root.set_property (X_("saved-meter-point"), _saved_meter_point);
+	if (_saved_meter_point) {
+		root.set_property (X_("saved-meter-point"), _saved_meter_point.value ());
+	}
 	root.set_property (X_("alignment-choice"), _alignment_choice);
 
 	return root;
@@ -245,14 +272,19 @@ Track::set_state (const XMLNode& node, int version)
 				_record_safe_control->set_state (*child, version);
 			} else if (name == _monitoring_control->name()) {
 				_monitoring_control->set_state (*child, version);
+			} else if (name == "recenable" && version <= 3002) {
+				float value;
+				if (child->get_property ("value", value)) {
+					_record_enable_control->set_value (value, Controllable::NoGroup);
+				}
 			}
 		}
 	}
 
-	if (!node.get_property (X_("saved-meter-point"), _saved_meter_point)) {
-		_saved_meter_point = _meter_point;
+	MeterPoint mp;
+	if (node.get_property (X_("saved-meter-point"), mp)) {
+		_saved_meter_point = mp;
 	}
-
 
 	AlignChoice ac;
 
@@ -286,11 +318,12 @@ bool
 Track::can_record()
 {
 	bool will_record = true;
-	for (PortSet::iterator i = _input->ports().begin(); i != _input->ports().end() && will_record; ++i) {
-		if (!i->connected())
+	for (auto const& p : *_input->ports()) {
+		if (!p->connected()) {
 			will_record = false;
+			break;
+		}
 	}
-
 	return will_record;
 }
 
@@ -301,13 +334,8 @@ Track::prep_record_enabled (bool yn)
 		return -1;
 	}
 
-	if (!can_be_record_enabled()) {
+	if (yn && !can_be_record_enabled()) {
 		return -1;
-	}
-
-	/* keep track of the meter point as it was before we rec-enabled */
-	if (!_disk_writer->record_enabled()) {
-		_saved_meter_point = _meter_point;
 	}
 
 	bool will_follow;
@@ -318,23 +346,73 @@ Track::prep_record_enabled (bool yn)
 		will_follow = _disk_writer->prep_record_disable ();
 	}
 
-	if (will_follow) {
-		if (yn) {
-			if (_meter_point != MeterCustom) {
-				set_meter_point (MeterInput);
-			}
-		} else {
-			set_meter_point (_saved_meter_point);
-		}
+	if (!will_follow) {
+		return -1;
 	}
+
+	_record_prepared = yn;
+	update_input_meter ();
 
 	return 0;
 }
 
 void
+Track::update_input_meter ()
+{
+	if (_session.loading ()) {
+		return;
+	}
+	/* meter input if _record_prepared,
+	 * except if Rolling, but not recording (master-rec-enable is off) and auto-input is enabled
+	 */
+	bool monitor_input = false;
+
+	if (_record_prepared) {
+		/* actually rolling (no count-in, pre-roll) */
+		bool const rolling     = 0 != _session.transport_speed();
+		bool const recording   = _session.actively_recording ();
+		bool const auto_input  = _session.config.get_auto_input ();
+
+		if (!(rolling && !recording && auto_input)) {
+			monitor_input = true;
+		}
+	}
+
+	if (monitor_input) {
+		if (_saved_meter_point) {
+			/* already monitoring input */
+			return;
+		}
+		MeterPoint mp = meter_point ();
+		if (mp == MeterInput) {
+			/* user explicitly monitors input, do nothing */
+			return;
+		}
+
+		/* keep track of the meter point as it was before we rec-enabled */
+		_saved_meter_point = mp;
+
+		if (mp != MeterCustom) {
+			set_meter_point (MeterInput);
+		}
+
+	} else {
+		if (!_saved_meter_point) {
+			return;
+		}
+		if (_saved_meter_point != MeterCustom) {
+			set_meter_point (_saved_meter_point.value ());
+		}
+		_saved_meter_point.reset ();
+	}
+}
+
+void
 Track::record_enable_changed (bool, Controllable::GroupControlDisposition)
 {
-	_disk_writer->set_record_enabled (_record_enable_control->get_value());
+	bool yn = _record_enable_control->get_value();
+
+	_disk_writer->set_record_enabled (yn);
 }
 
 void
@@ -352,7 +430,7 @@ Track::can_be_record_safe ()
 bool
 Track::can_be_record_enabled ()
 {
-	return !_record_safe_control->get_value() && _disk_writer && !_disk_writer->record_safe() && _session.writable() && (_freeze_record.state != Frozen);
+	return !_record_safe_control->get_value() && _disk_writer && !_disk_writer->record_safe() && _session.writable() && (_freeze_record.state != Frozen) && (!_triggerbox || !_triggerbox->record_enabled());
 }
 
 void
@@ -368,6 +446,8 @@ Track::parameter_changed (string const & p)
 		if (_session.config.get_track_name_take()) {
 			resync_take_name ();
 		}
+	} else if (p == "auto-input") {
+		update_input_meter ();
 	}
 }
 
@@ -412,11 +492,22 @@ Track::resync_take_name (std::string n)
 bool
 Track::set_name (const string& str)
 {
+	if (_record_enable_control->get_value()) {
+		/* cannot rename rec-armed track - see also Track::resync_take_name */
+		return false;
+	}
+
 	if (str.empty ()) {
 		return false;
 	}
 
-	switch (resync_take_name (str)) {
+	string newname = Route::ensure_track_or_route_name (str);
+
+	if (newname == name()) {
+		return true;
+	}
+
+	switch (resync_take_name (newname)) {
 		case -1:
 			return false;
 		case 1:
@@ -427,8 +518,8 @@ Track::set_name (const string& str)
 
 	std::shared_ptr<Track> me = std::dynamic_pointer_cast<Track> (shared_from_this ());
 
-	_disk_reader->set_name (str);
-	_disk_writer->set_name (str);
+	_disk_reader->set_name (newname);
+	_disk_writer->set_name (newname);
 
 
 	/* When creating a track during session-load, do not change playlist's name.
@@ -439,7 +530,7 @@ Track::set_name (const string& str)
 	 * (new track name -> new playlist name  != old playlist)
 	 */
 	if (_session.loading ()) {
-		return Route::set_name (str);
+		return Route::set_name (newname);
 	}
 
 	for (uint32_t n = 0; n < DataType::num_types; ++n) {
@@ -458,11 +549,11 @@ Track::set_name (const string& str)
 			 * If (b) is not followed, we rename the current playlist and not
 			 * the other ones, which is a bit confusing (see mantis #4977).
 			 */
-			_playlists[n]->set_name (str);
+			_playlists[n]->set_name (newname);
 		}
 	}
 
-	return Route::set_name (str);
+	return Route::set_name (newname);
 }
 
 std::shared_ptr<Playlist>
@@ -474,16 +565,16 @@ Track::playlist ()
 void
 Track::request_input_monitoring (bool m)
 {
-	for (PortSet::iterator i = _input->ports().begin(); i != _input->ports().end(); ++i) {
-		AudioEngine::instance()->request_input_monitoring ((*i)->name(), m);
+	for (auto const& p : *_input->ports()) {
+		AudioEngine::instance()->request_input_monitoring (p->name(), m);
 	}
 }
 
 void
 Track::ensure_input_monitoring (bool m)
 {
-	for (PortSet::iterator i = _input->ports().begin(); i != _input->ports().end(); ++i) {
-		AudioEngine::instance()->ensure_input_monitoring ((*i)->name(), m);
+	for (auto const& p : *_input->ports()) {
+		AudioEngine::instance()->ensure_input_monitoring (p->name(), m);
 	}
 }
 
@@ -493,6 +584,12 @@ Track::last_capture_sources ()
 	return _disk_writer->last_capture_sources ();
 }
 
+void
+Track::reset_last_capture_sources ()
+{
+	_disk_writer->reset_last_capture_sources ();
+}
+
 std::string
 Track::steal_write_source_name()
 {
@@ -500,9 +597,9 @@ Track::steal_write_source_name()
 }
 
 void
-Track::reset_write_sources (bool r, bool force)
+Track::reset_write_sources (bool mark_write_complete)
 {
-	_disk_writer->reset_write_sources (r, force);
+	_disk_writer->reset_write_sources (mark_write_complete);
 }
 
 float
@@ -695,11 +792,31 @@ Track::use_playlist (DataType dt, std::shared_ptr<Playlist> p, bool set_orig)
 		if (rl->size () > 0) {
 			Region::RegionsPropertyChanged (rl, Properties::hidden);
 		}
+		/* we don't know for certain that we controlled the old
+		 * playlist's time domain, but it's a pretty good guess. If it
+		 * has an actual parent, revert to using its parent's domain
+		 */
+		if (old->time_domain_parent()) {
+			old->clear_time_domain_parent ();
+		}
 	}
+
 	if (p) {
 		std::shared_ptr<RegionList> rl (new RegionList (p->region_list_property ().rlist ()));
 		if (rl->size () > 0) {
 			Region::RegionsPropertyChanged (rl, Properties::hidden);
+		}
+
+		/* If the playlist has no time domain parent or its parent is
+		 * the session, reset to the explicit time domain of this
+		 * track.
+		 */
+
+		if (!p->time_domain_parent() || p->time_domain_parent() == &_session) {
+			/* XXX DANGER : track could go away leaving playlist
+			 * with dead parent time domain provider
+			 */
+			p->set_time_domain_parent (*this);
 		}
 	}
 
@@ -868,8 +985,6 @@ Track::set_processor_state (XMLNode const& node, int version, XMLProperty const*
 		return true;
 	}
 
-	cerr << name() << " looking for state for track procs, DR = " << _disk_reader << endl;
-
 	if (prop->value() == "diskreader") {
 		if (_disk_reader) {
 			_disk_reader->set_state (node, version);
@@ -886,6 +1001,32 @@ Track::set_processor_state (XMLNode const& node, int version, XMLProperty const*
 
 	error << string_compose(_("unknown Processor type \"%1\"; ignored"), prop->value()) << endmsg;
 	return false;
+}
+
+std::shared_ptr<Region>
+Track::bounce (InterThreadInfo& itt, std::string const& name)
+{
+	return bounce_range (_session.current_start_sample(), _session.current_end_sample(), itt, main_outs(), false, name);
+}
+
+std::shared_ptr<Region>
+Track::bounce_range (samplepos_t start,
+                          samplepos_t end,
+                          InterThreadInfo& itt,
+                          std::shared_ptr<Processor> endpoint,
+                          bool include_endpoint,
+                          std::string const& nm, bool prefix_track_name)
+{
+	std::string source_name;
+
+	if (prefix_track_name && nm.length() > 0) {
+		source_name = string_compose ("%1 - %2", name(), nm);
+	} else {
+		source_name = nm;
+	}
+
+	vector<std::shared_ptr<Source> > srcs;
+	return _session.write_one_track (*this, start, end, false, srcs, itt, endpoint, include_endpoint, false, false, source_name, nm);
 }
 
 void
@@ -963,8 +1104,12 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 
 		std::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
 
+		const timepos_t np (capture_info.front()->start);
+		rx->set_tempo (Temporal::TempoMap::use()->tempo_at (np));
+		rx->set_meter (Temporal::TempoMap::use()->meter_at (np));
+
 		midi_region = std::dynamic_pointer_cast<MidiRegion> (rx);
-		midi_region->special_set_position (timepos_t (capture_info.front()->start));
+		midi_region->special_set_position (np);
 	}
 
 	catch (failed_constructor& err) {
@@ -984,7 +1129,8 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 	const samplepos_t preroll_off = _session.preroll_record_trim_len ();
 	const timepos_t cstart (timepos_t (capture_info.front()->start).beats());
 
-	for (ci = capture_info.begin(); ci != capture_info.end(); ++ci) {
+	int cnt = 0;
+	for (ci = capture_info.begin(); ci != capture_info.end(); ++ci, ++cnt) {
 
 		string region_name;
 
@@ -1007,7 +1153,20 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 			if (time_domain() == Temporal::BeatTime) {
 
 				const timepos_t ss (start_off);
-				const timecnt_t ll ((*ci)->samples, ss);
+				/* 2nd argument is the timeline position of the
+				 * start of the region in samples. We have to
+				 * get this right so that the conversion of
+				 * the capture duration (samples) to beats is
+				 * using the actual position where the region
+				 * will end up, rather than using its
+				 * source-relative start offset as a timeline position.
+				 *
+				 * This matters if the region ought to cover
+				 * part of the timeline where the tempo is
+				 * different from the value at the natural
+				 * position of the source.
+				 */
+				const timecnt_t ll ((*ci)->samples, timepos_t (initial_capture + start_off));
 
 				s = timepos_t (ss.beats());
 				l = timecnt_t (ll.beats(), s);
@@ -1022,12 +1181,14 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 			plist.add (Properties::length, l);
 			plist.add (Properties::opaque, rmode != RecSoundOnSound);
 			plist.add (Properties::name, region_name);
+			plist.add (Properties::reg_group, Region::get_retained_group_id (cnt));
 
 			std::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
 			midi_region = std::dynamic_pointer_cast<MidiRegion> (rx);
 			if (preroll_off > 0) {
 				midi_region->trim_front (timepos_t ((*ci)->start - initial_capture + preroll_off));
 			}
+
 		}
 
 		catch (failed_constructor& err) {
@@ -1037,9 +1198,14 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 
 		if (time_domain() == Temporal::BeatTime) {
 			const timepos_t b ((*ci)->start + preroll_off);
+			midi_region->set_tempo (Temporal::TempoMap::use()->tempo_at (b.beats()));
+			midi_region->set_meter (Temporal::TempoMap::use()->meter_at (b.beats()));
 			pl->add_region (midi_region, timepos_t (b.beats()), 1, rmode == RecNonLayered);
 		} else {
-			pl->add_region (midi_region, timepos_t ((*ci)->start + preroll_off), 1, rmode == RecNonLayered);
+			const timepos_t p ((*ci)->start + preroll_off);
+			midi_region->set_tempo (Temporal::TempoMap::use()->tempo_at (p));
+			midi_region->set_meter (Temporal::TempoMap::use()->meter_at (p));
+			pl->add_region (midi_region, p, 1, rmode == RecNonLayered);
 		}
 	}
 
@@ -1084,8 +1250,12 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 		rx->set_automatic (true);
 		rx->set_whole_file (true);
 
+		const timepos_t np (afs->natural_position());
+		rx->set_tempo (Temporal::TempoMap::use()->tempo_at (np));
+		rx->set_meter (Temporal::TempoMap::use()->meter_at (np));
+
 		region = std::dynamic_pointer_cast<AudioRegion> (rx);
-		region->special_set_position (timepos_t (afs->natural_position()));
+		region->special_set_position (np);
 	}
 
 
@@ -1109,7 +1279,8 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 	samplecnt_t buffer_position = afs->last_capture_start_sample ();
 	CaptureInfos::const_iterator ci;
 
-	for (ci = capture_info.begin(); ci != capture_info.end(); ++ci) {
+	int cnt = 0;
+	for (ci = capture_info.begin(); ci != capture_info.end(); ++ci, ++cnt) {
 
 		string region_name;
 
@@ -1126,6 +1297,7 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 			plist.add (Properties::length, timecnt_t ((*ci)->samples, timepos_t::zero (false)));
 			plist.add (Properties::name, region_name);
 			plist.add (Properties::opaque, rmode != RecSoundOnSound);
+			plist.add (Properties::reg_group, Region::get_retained_group_id (cnt));
 
 			std::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
 			region = std::dynamic_pointer_cast<AudioRegion> (rx);
@@ -1139,7 +1311,10 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 			continue; /* XXX is this OK? */
 		}
 
-		pl->add_region (region, timepos_t ((*ci)->start + preroll_off), 1, RecNonLayered == rmode);
+		const timepos_t p ((*ci)->start + preroll_off);
+		region->set_tempo (Temporal::TempoMap::use()->tempo_at (p));
+		region->set_meter (Temporal::TempoMap::use()->meter_at (p));
+		pl->add_region (region, p, 1, RecNonLayered == rmode);
 		pl->set_layer (region, DBL_MAX);
 
 		buffer_position += (*ci)->samples;
@@ -1148,4 +1323,23 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 	pl->thaw ();
 	pl->set_capture_insertion_in_progress (false);
 	_session.add_command (new StatefulDiffCommand (pl));
+}
+
+void
+Track::time_domain_changed ()
+{
+	Route::time_domain_changed ();
+
+	std::shared_ptr<Playlist> pl = _playlists[DataType::AUDIO];
+	if (pl) {
+		if (pl->time_domain_parent() == this) {
+			pl->time_domain_changed ();
+		}
+	}
+	pl = _playlists[DataType::MIDI];
+	if (pl) {
+		if (pl->time_domain_parent() == this) {
+			pl->time_domain_changed ();
+		}
+	}
 }

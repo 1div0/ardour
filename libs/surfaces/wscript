@@ -11,14 +11,6 @@ LIBSURFACES_VERSION = '4.1.0'
 # micro increment <=> no interface changes
 LIBSURFACES_LIB_VERSION = '4.1.0'
 
-# Variables for 'waf dist'
-APPNAME = 'libsurfaces'
-VERSION = LIBSURFACES_VERSION
-
-# Mandatory variables
-top = '.'
-out = 'build'
-
 children = [
     'faderport',
     'faderport8',
@@ -28,27 +20,23 @@ children = [
     'us2400',
     'launch_control_xl',
     'osc',
+    'console1'
 ]
 
 def options(opt):
-    autowaf.set_options(opt)
-
-def sub_config_and_use(conf, name, has_objects = True):
-    conf.recurse(name)
-    autowaf.set_local_lib(conf, name, has_objects)
+    pass
 
 def configure(conf):
     global children
 
     autowaf.set_recursive()
 
-    autowaf.check_pkg(conf, 'libusb-1.0', uselib_store='USB', mandatory=False)
-    #if Options.options.tranzport and conf.is_defined('HAVE_USB'):
-    #    conf.define('BUILD_TRANZPORT', 1)
-
     if conf.is_defined('HAVE_USB'):
         children += [ 'push2' ]
         children += [ 'contourdesign' ]
+        children += [ 'launchpad_pro' ]
+        children += [ 'launchpad_x' ]
+        children += [ 'launchkey_4' ]
 
     else:
         print ('You are missing the libusb-1.0 development package needed to compile Push2 and ContourDesign support')
@@ -77,7 +65,7 @@ def configure(conf):
         children += [ 'websockets' ]
 
     for i in children:
-        sub_config_and_use(conf, i)
+        conf.recurse(i)
 
 def build(bld):
     bld.recurse('generic_midi')
@@ -88,11 +76,13 @@ def build(bld):
     bld.recurse('us2400')
     bld.recurse('launch_control_xl')
     bld.recurse('osc')
+    bld.recurse('console1')
+    bld.recurse('launchpad_pro')
+    bld.recurse('launchpad_x')
+    bld.recurse('launchkey_4')
 
     if bld.is_defined('BUILD_WIIMOTE'):
         bld.recurse('wiimote')
-    if bld.is_defined('BUILD_TRANZPORT'):
-        bld.recurse('tranzport')
     if bld.is_defined('HAVE_USB'):
         bld.recurse('push2')
         bld.recurse('contourdesign')
@@ -100,6 +90,3 @@ def build(bld):
         bld.recurse('maschine2')
     if bld.is_defined ('HAVE_WEBSOCKETS'):
         bld.recurse('websockets')
-
-def shutdown():
-    autowaf.shutdown()

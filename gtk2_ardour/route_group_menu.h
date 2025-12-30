@@ -17,11 +17,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_gtk_route_group_menu_h__
-#define __ardour_gtk_route_group_menu_h__
+#pragma once
 
 #include "ardour/route_group.h"
 #include "ardour/session_handle.h"
+
+#include <ytkmm/menu.h>
+#include <ytkmm/radiomenuitem.h>
 
 class RouteGroupDialog;
 
@@ -36,10 +38,10 @@ public:
 	void detach ();
 
   private:
-	void add_item (ARDOUR::RouteGroup *, std::set<ARDOUR::RouteGroup*> const &, Gtk::RadioMenuItem::Group*);
+	void add_item (std::shared_ptr<ARDOUR::RouteGroup>, std::set<std::shared_ptr<ARDOUR::RouteGroup>> const &, Gtk::RadioMenuItem::Group*);
 	void new_group ();
-	void edit_group (ARDOUR::RouteGroup *);
-	void set_group (Gtk::RadioMenuItem*, ARDOUR::RouteGroup *);
+	void edit_group (std::weak_ptr<ARDOUR::RouteGroup>);
+	void set_group (Gtk::RadioMenuItem*, std::shared_ptr<ARDOUR::RouteGroup>);
 	void new_group_dialog_finished (int, RouteGroupDialog*);
 
 	Gtk::Menu* _menu;
@@ -49,4 +51,3 @@ public:
 	ARDOUR::WeakRouteList _subject;
 };
 
-#endif /* __ardour_gtk_route_group_menu_h__ */

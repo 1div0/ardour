@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_redirect_h__
-#define __ardour_redirect_h__
+#pragma once
 
 #include <memory>
 #include <string>
@@ -49,7 +48,7 @@ public:
 	             ARDOUR::DataType default_type = DataType::AUDIO, bool sendish=false);
 
 	IOProcessor (Session&, std::shared_ptr<IO> input, std::shared_ptr<IO> output,
-	             const std::string& proc_name, Temporal::TimeDomain, bool sendish=false);
+	             const std::string& proc_name, Temporal::TimeDomainProvider const &, bool sendish=false);
 
 	virtual ~IOProcessor ();
 
@@ -73,8 +72,8 @@ public:
 
 	virtual bool feeds (std::shared_ptr<Route> other) const;
 
-	PBD::Signal2<void,IOProcessor*,bool>     AutomationPlaybackChanged;
-	PBD::Signal2<void,IOProcessor*,uint32_t> AutomationChanged;
+	PBD::Signal<void(IOProcessor*,bool)>     AutomationPlaybackChanged;
+	PBD::Signal<void(IOProcessor*,uint32_t)> AutomationChanged;
 
 	XMLNode& state () const;
 	int set_state (const XMLNode&, int version);
@@ -104,4 +103,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_redirect_h__ */

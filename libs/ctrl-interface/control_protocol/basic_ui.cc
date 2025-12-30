@@ -41,7 +41,7 @@
 using namespace ARDOUR;
 using namespace Temporal;
 
-PBD::Signal2<void,std::string,std::string> BasicUI::AccessAction;
+PBD::Signal<void(std::string,std::string)> BasicUI::AccessAction;
 
 BasicUI::BasicUI (Session& s)
 	: session (&s),
@@ -369,7 +369,7 @@ void
 BasicUI::rec_enable_toggle ()
 {
 	switch (session->record_status()) {
-	case Session::Disabled:
+	case Disabled:
 		if (session->ntracks() == 0) {
 			// string txt = _("Please create 1 or more track\nbefore trying to record.\nCheck the Session menu.");
 			// MessageDialog msg (*editor, txt);
@@ -378,8 +378,8 @@ BasicUI::rec_enable_toggle ()
 		}
 		session->maybe_enable_record ();
 		break;
-	case Session::Recording:
-	case Session::Enabled:
+	case Recording:
+	case Enabled:
 		session->disable_record (false, true);
 	}
 }
@@ -710,6 +710,8 @@ BasicUI::toggle_roll (bool with_abort, bool roll_out_of_bounded_mode)
 			} else if (session->get_play_range ()) {
 
 				session->request_cancel_play_range ();
+			} else {
+				session->request_stop (with_abort, true);
 			}
 
 		} else {
@@ -758,8 +760,8 @@ void BasicUI::zoom_1_min() { access_action("Editor/zoom_1_min"); }
 void BasicUI::zoom_5_min() { access_action("Editor/zoom_5_min"); }
 void BasicUI::zoom_10_min() { access_action("Editor/zoom_10_min"); }
 void BasicUI::zoom_to_session() { access_action("Editor/zoom-to-session"); }
-void BasicUI::temporal_zoom_in() { access_action("Editor/temporal-zoom-in"); }
-void BasicUI::temporal_zoom_out() { access_action("Editor/temporal-zoom-out"); }
+void BasicUI::temporal_zoom_in() { access_action("Editing/temporal-zoom-in"); }
+void BasicUI::temporal_zoom_out() { access_action("Editing/temporal-zoom-out"); }
 
 void BasicUI::scroll_up_1_track() { access_action("Editor/step-tracks-up"); }
 void BasicUI::scroll_dn_1_track() { access_action("Editor/step-tracks-down"); }
@@ -887,7 +889,7 @@ BasicUI::trigger_display_at (int x, int y)
 		ARDOUR::TriggerPtr current = tb->currently_playing ();
 		TriggerPtr tp = tb->trigger (_tbank_start_row + y);
 		if (tp) {
-			if (!tp->region()) {
+			if (!tp->playable()) {
 				disp.state = -1;
 			} else if (tp == current) {
 				disp.state = 1;

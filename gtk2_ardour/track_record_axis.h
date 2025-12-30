@@ -22,12 +22,13 @@
 #include <cmath>
 #include <vector>
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/box.h>
-#include <gtkmm/drawingarea.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/separator.h>
-#include <gtkmm/sizegroup.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/drawingarea.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/separator.h>
+#include <ytkmm/sizegroup.h>
 
 #include "pbd/stateful.h"
 
@@ -78,8 +79,8 @@ public:
 	int  summary_xpos () const;
 	int  summary_width () const;
 
-	static PBD::Signal1<void, TrackRecordAxis*> CatchDeletion;
-	static PBD::Signal2<void, TrackRecordAxis*, bool> EditNextName;
+	static PBD::Signal<void(TrackRecordAxis*)> CatchDeletion;
+	static PBD::Signal<void(TrackRecordAxis*, bool)> EditNextName;
 
 protected:
 	void self_delete ();
@@ -105,7 +106,7 @@ private:
 
 	void reset_peak_display ();
 	void reset_route_peak_display (ARDOUR::Route*);
-	void reset_group_peak_display (ARDOUR::RouteGroup*);
+	void reset_group_peak_display (std::shared_ptr<ARDOUR::RouteGroup>);
 	bool namebox_button_press (GdkEventButton*);
 
 	bool playlist_click (GdkEventButton*);

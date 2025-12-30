@@ -26,7 +26,7 @@
 
 #include <glibmm.h>
 
-#include <gtkmm/liststore.h>
+#include <ytkmm/liststore.h>
 
 #include "ardour/filename_extensions.h"
 #include "ardour/session.h"
@@ -84,6 +84,10 @@ EditorSnapshots::button_press (GdkEventButton* ev)
 		int cx;
 		int cy;
 		_snapshot_display.get_path_at_pos ((int) ev->x, (int) ev->y, path, col, cx, cy);
+		if (!path) {
+			return false;
+		}
+		_snapshot_display.get_selection()->select (path);
 		Gtk::TreeModel::iterator iter = _snapshot_model->get_iter (path);
 		if (iter) {
 			Gtk::TreeModel::Row row = *iter;
@@ -97,6 +101,9 @@ EditorSnapshots::button_press (GdkEventButton* ev)
 		int cy;
 		string snap_name;
 		_snapshot_display.get_path_at_pos ((int) ev->x, (int) ev->y, path, col, cx, cy);
+		if (!path) {
+			return false;
+		}
 		Gtk::TreeModel::iterator iter = _snapshot_model->get_iter (path);
 		if (iter) {
 			Gtk::TreeModel::Row row = *iter;
@@ -202,16 +209,11 @@ EditorSnapshots::redisplay ()
 		return;
 	}
 
-	vector<std::string> state_file_paths;
+	vector<string> state_file_names = _session->possible_states ();
 
-	get_state_files_in_directory (_session->session_directory().root_path(),
-	                              state_file_paths);
-
-	if (state_file_paths.empty()) {
+	if (state_file_names.empty()) {
 		return;
 	}
-
-	vector<string> state_file_names (get_file_names_no_extension(state_file_paths));
 
 	_snapshot_model->clear ();
 

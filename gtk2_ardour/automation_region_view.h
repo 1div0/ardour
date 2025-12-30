@@ -18,15 +18,15 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtk_ardour_automation_region_view_h__
-#define __gtk_ardour_automation_region_view_h__
+#pragma once
 
 #include "ardour/types.h"
 
 #include "region_view.h"
 #include "automation_time_axis.h"
-#include "automation_line.h"
+#include "editor_automation_line.h"
 #include "enums.h"
+#include "line_merger.h"
 
 namespace ARDOUR {
 	class AutomationList;
@@ -35,7 +35,7 @@ namespace ARDOUR {
 
 class TimeAxisView;
 
-class AutomationRegionView : public RegionView
+class AutomationRegionView : public RegionView, public LineMerger
 {
 public:
 	AutomationRegionView(ArdourCanvas::Container*,
@@ -50,6 +50,8 @@ public:
 
 	void init (bool wfd);
 
+	void set_selected (bool yn);
+
 	bool paste (Temporal::timepos_t const &                     pos,
 	            unsigned                                        paste_count,
 	            float                                           times,
@@ -58,7 +60,7 @@ public:
 	inline AutomationTimeAxisView* automation_view() const
 		{ return dynamic_cast<AutomationTimeAxisView*>(&trackview); }
 
-	std::shared_ptr<AutomationLine> line() { return _line; }
+	std::shared_ptr<EditorAutomationLine> line() { return _line; }
 
 	// We are a ghost.  Meta ghosts?  Crazy talk.
 	virtual GhostRegion* add_ghost(TimeAxisView&) { return 0; }
@@ -70,21 +72,25 @@ public:
 
 	void tempo_map_changed ();
 
+	MergeableLine* make_merger ();
+
+	void add_automation_event (GdkEvent* event);
+	Temporal::timepos_t drawn_time_filter (Temporal::timepos_t const &);
+
 protected:
 	void create_line(std::shared_ptr<ARDOUR::AutomationList> list);
 	bool set_position(Temporal::timepos_t const & pos, void* src, double* ignored);
 	void region_resized (const PBD::PropertyChange&);
 	bool canvas_group_event(GdkEvent* ev);
-	void add_automation_event (GdkEvent* event, Temporal::timepos_t const & when, double y, bool with_guard_points);
+	void add_automation_event (Temporal::timepos_t const & when, double y, bool with_guard_points);
 	void mouse_mode_changed ();
 	void entered();
 	void exited();
-	void _redisplay (bool) {}
+	void redisplay (bool) {}
 
 private:
 	Evoral::Parameter                   _parameter;
-	std::shared_ptr<AutomationLine>   _line;
+	std::shared_ptr<EditorAutomationLine>   _line;
 	PBD::ScopedConnection               _mouse_mode_connection;
 };
 
-#endif /* __gtk_ardour_automation_region_view_h__ */

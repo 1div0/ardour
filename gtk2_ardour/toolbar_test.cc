@@ -1,9 +1,9 @@
 #include <fstream>
 
 #include <glibmm.h>
-#include <gtkmm/main.h>
-#include <gtkmm/box.h>
-#include <gtkmm/window.h>
+#include <ytkmm/main.h>
+#include <ytkmm/box.h>
+#include <ytkmm/window.h>
 
 #include "pbd/debug.h"
 #include "pbd/enumwriter.h"
@@ -270,10 +270,6 @@ int main (int argc, char **argv)
 	if (!ARDOUR::init (true, localedir)) {
 		cerr << "Ardour failed to initialize\n" << endl;
 		::exit (EXIT_FAILURE);
-	}
-
-	if (!Glib::thread_supported()) {
-		Glib::thread_init();
 	}
 
 	pthread_setcanceltype (PTHREAD_CANCEL_ASYNCHRONOUS, 0);

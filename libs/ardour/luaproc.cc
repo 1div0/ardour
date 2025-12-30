@@ -51,7 +51,7 @@ LuaProc::LuaProc (AudioEngine& engine,
 #ifdef USE_TLSF
 	, lua (lua_newstate (&PBD::TLSF::lalloc, &_mempool))
 #elif defined USE_MALLOC
-	, lua ()
+	, lua (true, true)
 #else
 	, lua (lua_newstate (&PBD::ReallocPool::lalloc, &_mempool))
 #endif
@@ -60,7 +60,9 @@ LuaProc::LuaProc (AudioEngine& engine,
 	, _script (script)
 	, _lua_does_channelmapping (false)
 	, _lua_has_inline_display (false)
+	, _requires_fixed_sized_buffers (false)
 	, _connect_all_audio_outputs (false)
+	, _set_time_info (false)
 	, _designated_bypass_port (UINT32_MAX)
 	, _signal_latency (0)
 	, _control_data (0)
@@ -85,7 +87,7 @@ LuaProc::LuaProc (const LuaProc &other)
 #ifdef USE_TLSF
 	, lua (lua_newstate (&PBD::TLSF::lalloc, &_mempool))
 #elif defined USE_MALLOC
-	, lua ()
+	, lua (true, true)
 #else
 	, lua (lua_newstate (&PBD::ReallocPool::lalloc, &_mempool))
 #endif
@@ -174,8 +176,6 @@ LuaProc::init ()
 	luabridge::push <LuaProc *> (L, this);
 	lua_setglobal (L, "self");
 
-	// sandbox
-	lua.sandbox (true);
 #if 0
 	lua.do_command ("for n in pairs(_G) do print(n) end print ('----')"); // print global env
 #endif
@@ -286,11 +286,34 @@ LuaProc::load_script ()
 		}
 	}
 
+	/* parse options */
+	luabridge::LuaRef options = luabridge::getGlobal (L, "dsp_options");
+	if (options.isFunction ()) {
+		try {
+			luabridge::LuaRef opts = options ();
+			if (opts.isTable ()) {
+				for (luabridge::Iterator i (opts); !i.isNil (); ++i) {
+					if (!i.key().isString()) {
+						continue;
+					}
+					if (i.key().cast<std::string> () == "time_info" && i.value().isBoolean ()) {
+						_set_time_info = i.value().cast<bool> ();
+					}
+					if (i.key().cast<std::string> () == "regular_block_length" && i.value().isBoolean ()) {
+						_requires_fixed_sized_buffers = i.value().cast<bool> ();
+					}
+				}
+			}
+		} catch (...) {
+			return true;
+		}
+	}
+
 	// initialize the DSP if needed
 	luabridge::LuaRef lua_dsp_init = luabridge::getGlobal (L, "dsp_init");
 	if (lua_dsp_init.type () == LUA_TFUNCTION) {
 		try {
-			lua_dsp_init (_session.nominal_sample_rate ());
+			lua_dsp_init (_session.sample_rate ());
 		} catch (luabridge::LuaException const& e) {
 #ifndef NDEBUG
 			std::cerr << "LuaException:" << e.what () << std::endl;
@@ -308,6 +331,8 @@ LuaProc::load_script ()
 	if (lua_render.isFunction ()) {
 		_lua_has_inline_display = true;
 	}
+
+	std::map<std::string, uint32_t> param_map;
 
 	luabridge::LuaRef lua_params = luabridge::getGlobal (L, "dsp_params");
 	if (lua_params.isFunction ()) {
@@ -355,6 +380,7 @@ LuaProc::load_script ()
 				_param_desc[pn].logarithmic  = lr["logarithmic"].isBoolean () && (lr["logarithmic"]).cast<bool> ();
 				_param_desc[pn].integer_step = lr["integer"].isBoolean () && (lr["integer"]).cast<bool> ();
 				_param_desc[pn].sr_dependent = lr["ratemult"].isBoolean () && (lr["ratemult"]).cast<bool> ();
+				_param_desc[pn].inline_ctrl  = lr["inline"].isBoolean () && (lr["inline"]).cast<bool> ();
 				_param_desc[pn].enumeration  = lr["enum"].isBoolean () && (lr["enum"]).cast<bool> ();
 
 				if (lr["bypass"].isBoolean () && (lr["bypass"]).cast<bool> ()) {
@@ -369,6 +395,10 @@ LuaProc::load_script ()
 				}
 				_param_desc[pn].label        = (lr["name"]).cast<std::string> ();
 				_param_desc[pn].scale_points = parse_scale_points (&lr);
+
+				if (type == "input") {
+					param_map[_param_desc[pn].label] = pn - 1;
+				}
 
 				luabridge::LuaRef doc = lr["doc"];
 				if (doc.isString ()) {
@@ -387,6 +417,52 @@ LuaProc::load_script ()
 	for (uint32_t i = 0; i < parameter_count (); ++i) {
 		if (parameter_is_input (i)) {
 			_control_data[i] = _shadow_data[i] = default_value (i);
+		}
+	}
+
+	/* parse factory presets */
+	luabridge::LuaRef lua_presets = luabridge::getGlobal (L, "presets");
+	if (lua_presets.isFunction ()) {
+		luabridge::LuaRef preset_tbl = lua_presets ();
+		if (preset_tbl.isTable () && parameter_count () > 0) {
+			std::vector<ARDOUR::Plugin::PresetRecord> psets;
+			try {
+				for (luabridge::Iterator p (preset_tbl); !p.isNil (); ++p) {
+					if (!p.value ().isTable ()) { continue; }
+					if (!p.value ()["name"].isString ()) { continue; }
+					if (!p.value ()["params"].isTable ()) { continue; }
+
+					FactoryPreset pset;
+					pset.name = p.value ()["name"].cast<std::string> ();
+
+					luabridge::LuaRef params = p.value ()["params"];
+					for (luabridge::Iterator i (params); !i.isNil (); ++i) {
+						if (!i.value ().isNumber ()) { continue; }
+						uint32_t param_index = 0;
+						if (i.key ().isString ()) {
+							std::string key = i.key ().cast<std::string> ();
+							if (param_map.find (key) == param_map.end ()) {
+								continue;
+							}
+							param_index = param_map[key];
+						} else if (i.key ().isNumber ()) {
+							param_index = i.key ().cast<int> ();
+						} else {
+							continue;
+						}
+						pset.param[param_index] = i.value().cast<float> ();
+					}
+
+					_factory_presets.insert (make_pair (preset_name_to_uri (pset.name), pset));
+				}
+			} catch (...) {
+			}
+
+			std::vector<Plugin::PresetRecord> fps;
+			for (auto const& p : _factory_presets) {
+				fps.push_back (PresetRecord (p.first, p.second.name, false));
+			}
+			lpi->set_factory_presets (fps);
 		}
 	}
 
@@ -678,6 +754,45 @@ LuaProc::connect_and_run (BufferSet& bufs,
 #endif
 
 	try {
+		lua_State* L = lua.getState ();
+
+		if (_set_time_info) {
+			using namespace Temporal;
+			TempoMap::SharedPtr tmap (TempoMap::use ());
+			const TempoMetric&  metric (tmap->metric_at (timepos_t (start)));
+			const TempoMetric&  metric_end (tmap->metric_at (timepos_t (end)));
+
+			luabridge::LuaRef lua_time (luabridge::newTable (L));
+
+			lua_time["sample"]     = start;
+			lua_time["sample_end"] = end;
+
+			lua_time["tempo"]     = metric.tempo ().quarter_notes_per_minute ();
+			lua_time["tempo_end"] = metric_end.tempo ().quarter_notes_per_minute ();
+			lua_time["beat"]      = DoubleableBeats (metric.tempo ().quarters_at_sample (start)).to_double ();
+			lua_time["beat_end"]  = DoubleableBeats (metric_end.tempo ().quarters_at_sample (end)).to_double ();
+
+			lua_time["ts_numerator"]   = metric.meter ().divisions_per_bar ();
+			lua_time["ts_denominator"] = metric.meter ().note_value ();
+
+			lua_time["tc_fps"]       = _session.timecode_frames_per_second ();
+			lua_time["tc_dropframe"] = _session.timecode_drop_frames ();
+
+			if (_session.get_play_loop ()) {
+				Location* looploc = _session.locations ()->auto_loop_location ();
+				lua_time["looping"]         = true;
+				lua_time["loop_start"]      = looploc->start ().samples ();
+				lua_time["loop_end"]        = looploc->end ().samples ();
+				lua_time["loop_beat_start"] = DoubleableBeats (tmap->quarters_at (looploc->start ())).to_double ();
+				lua_time["loop_beat_end"]   = DoubleableBeats (tmap->quarters_at (looploc->end ())).to_double ();
+			} else {
+				lua_time["looping"] = false;
+			}
+
+			luabridge::push (L, lua_time);
+			lua_setglobal (L, "time");
+		}
+
 		if (_lua_does_channelmapping) {
 			// run the DSP function
 			(*_lua_dsp)(&bufs, &in, &out, nframes, offset);
@@ -686,7 +801,6 @@ LuaProc::connect_and_run (BufferSet& bufs,
 			BufferSet& silent_bufs  = _session.get_silent_buffers (ChanCount (DataType::AUDIO, 1));
 			BufferSet& scratch_bufs = _session.get_scratch_buffers (ChanCount (DataType::AUDIO, 1));
 
-			lua_State* L = lua.getState ();
 			luabridge::LuaRef in_map (luabridge::newTable (L));
 			luabridge::LuaRef out_map (luabridge::newTable (L));
 
@@ -700,7 +814,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 				if (valid) {
 					in_map[ap + 1] = bufs.get_audio (buf_index).data (offset);
 				} else {
-					in_map[ap + 1] = silent_bufs.get_audio (0).data (offset);
+					in_map[ap + 1] = silent_bufs.get_audio (0).data (0);
 				}
 			}
 			for (uint32_t ap = 0; ap < audio_out; ++ap) {
@@ -709,7 +823,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 				if (valid) {
 					out_map[ap + 1] = bufs.get_audio (buf_index).data (offset);
 				} else {
-					out_map[ap + 1] = scratch_bufs.get_audio (0).data (offset);
+					out_map[ap + 1] = scratch_bufs.get_audio (0).data (0);
 				}
 			}
 
@@ -721,6 +835,9 @@ LuaProc::connect_and_run (BufferSet& bufs,
 				if (valid) {
 					for (MidiBuffer::iterator m = bufs.get_midi(idx).begin();
 							m != bufs.get_midi(idx).end(); ++m, ++e) {
+						if ((*m).time() < offset || (*m).time() >= offset + nframes) {
+							continue;
+						}
 						const Evoral::Event<samplepos_t> ev(*m, false);
 						luabridge::LuaRef lua_midi_data (luabridge::newTable (L));
 						const uint8_t* data = ev.buffer();
@@ -728,7 +845,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 							lua_midi_data [i + 1] = data[i];
 						}
 						luabridge::LuaRef lua_midi_event (luabridge::newTable (L));
-						lua_midi_event["time"] = 1 + (*m).time();
+						lua_midi_event["time"] = 1 + (*m).time() - offset;
 						lua_midi_event["data"] = lua_midi_data;
 						lua_midi_event["bytes"] = data;
 						lua_midi_event["size"] = ev.size();
@@ -758,7 +875,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 				const uint32_t idx = out.get(DataType::MIDI, 0, &valid);
 				if (valid && bufs.count().n_midi() > idx) {
 					MidiBuffer& mbuf = bufs.get_midi(idx);
-					mbuf.silence(0, 0);
+					mbuf.silence (nframes, offset);
 					for (luabridge::Iterator i (lua_midi_sink_tbl); !i.isNil (); ++i) {
 						if (!i.key ().isNumber ()) { continue; }
 						if (!i.value ()["time"].isNumber ()) { continue; }
@@ -772,7 +889,14 @@ LuaProc::connect_and_run (BufferSet& bufs,
 							data[size] = di.value ();
 						}
 						if (size > 0 && size < 64) {
-							mbuf.push_back(tme - 1, Evoral::MIDI_EVENT, size, data);
+							if (tme >= 1 && tme < nframes + 1) {
+								Evoral::Event<samplepos_t> ev;
+								ev.set (data, size, tme - 1 + offset);
+								ev.set_event_type (Evoral::MIDI_EVENT);
+								mbuf.insert_event (ev);
+							} else {
+								std::cerr << string_compose ("LuaException: MIDI Event timestamp %1 is out of bounds (0, %2)\n", tme, nframes + 1);
+							}
 						}
 					}
 
@@ -971,6 +1095,7 @@ LuaProc::get_parameter_descriptor (uint32_t port, ParameterDescriptor& desc) con
 	desc.integer_step = d.integer_step;
 	desc.sr_dependent = d.sr_dependent;
 	desc.enumeration  = d.enumeration;
+	desc.inline_ctrl  = d.inline_ctrl;
 	desc.unit         = d.unit;
 	desc.label        = d.label;
 	desc.scale_points = d.scale_points;
@@ -1040,7 +1165,6 @@ LuaProc::parse_scale_points (luabridge::LuaRef* lr)
 		return std::shared_ptr<ScalePoints> ();
 	}
 
-	int cnt = 0;
 	std::shared_ptr<ScalePoints> rv = std::shared_ptr<ScalePoints>(new ScalePoints());
 	luabridge::LuaRef scalepoints ((*lr)["scalepoints"]);
 
@@ -1049,7 +1173,6 @@ LuaProc::parse_scale_points (luabridge::LuaRef* lr)
 		if (!i.value ().isNumber ())  { continue; }
 		rv->insert(make_pair(i.key ().cast<std::string> (),
 					i.value ().cast<float> ()));
-		++cnt;
 	}
 
 	if (rv->size() > 0) {
@@ -1148,6 +1271,33 @@ LuaProc::presets_tree () const
 bool
 LuaProc::load_preset (PresetRecord r)
 {
+	if (!r.user) {
+		return load_factory_preset (r);
+	} else {
+		return load_user_preset (r);
+	}
+}
+
+bool
+LuaProc::load_factory_preset (PresetRecord const& r)
+{
+	auto const i = _factory_presets.find (r.uri);
+	if (i == _factory_presets.end ()) {
+		return false;
+	}
+
+	FactoryPreset const& fp = i->second;
+	for (auto const& pv : fp.param) {
+		set_parameter (pv.first, pv.second, 0);
+		PresetPortSetValue (pv.first, pv.second); /* EMIT SIGNAL */
+	}
+
+	return Plugin::load_preset(r);
+}
+
+bool
+LuaProc::load_user_preset (PresetRecord const& r)
+{
 	std::shared_ptr<XMLTree> t (presets_tree ());
 	if (t == 0) {
 		return false;
@@ -1231,6 +1381,11 @@ LuaProc::do_remove_preset (std::string name)
 void
 LuaProc::find_presets ()
 {
+	for (auto const& p : _factory_presets) {
+		PresetRecord r (p.first, p.second.name, false);
+		_presets.insert (make_pair (r.uri, r));
+	}
+
 	std::shared_ptr<XMLTree> t (presets_tree ());
 	if (t) {
 		XMLNode* root = t->root ();
@@ -1299,9 +1454,14 @@ LuaPluginInfo::load (Session& session)
 }
 
 std::vector<Plugin::PresetRecord>
-LuaPluginInfo::get_presets (bool /*user_only*/) const
+LuaPluginInfo::get_presets (bool user_only) const
 {
 	std::vector<Plugin::PresetRecord> p;
+
+	if (!user_only) {
+		p.insert (p.end (), _factory_presets.begin (), _factory_presets.end ());
+	}
+
 	XMLTree* t = new XMLTree;
 	std::string pf = Glib::build_filename (ARDOUR::user_config_directory (), "presets", string_compose ("lua-%1", unique_id));
 	if (Glib::file_test (pf, Glib::FILE_TEST_EXISTS)) {

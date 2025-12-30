@@ -296,7 +296,9 @@ class Push2 : public MIDISurface
 	Push2 (ARDOUR::Session&);
 	~Push2 ();
 
-	static bool probe ();
+	static bool available ();
+	static bool match_usb (uint16_t, uint16_t);
+	static bool probe (std::string&, std::string&);
 
 	std::string input_port_name () const;
 	std::string output_port_name () const;
@@ -310,7 +312,7 @@ class Push2 : public MIDISurface
 	int set_state (const XMLNode & node, int version);
 
 	int pad_note (int row, int col) const;
-	PBD::Signal0<void> PadChange;
+	PBD::Signal<void()> PadChange;
 
 	void update_selection_color ();
 
@@ -358,6 +360,8 @@ class Push2 : public MIDISurface
 	 *
 	 * @param mode The active musical mode (scale).
 	 *
+	 * @param origin The note assigned to the bottom left pad
+	 *
 	 * @param ideal_vertical_semitones The ideal interval between rows in
 	 * semitones.  This is an "ideal" because it may not be possible to use
 	 * exactly this interval for every row depending on the scale.  It may be
@@ -383,6 +387,8 @@ class Push2 : public MIDISurface
 	 *
 	 * @param mode The active musical mode (scale).
 	 *
+	 * @param origin The note assigned to the bottom left pad
+	 *
 	 * @param vertical_semitones The interval between rows in semitones.  This
 	 * mode guarantees that the vertical interval for all rows is always
 	 * exactly this.
@@ -400,7 +406,7 @@ class Push2 : public MIDISurface
 	                    RowInterval       row_interval,
 	                    bool              inkey);
 
-	PBD::Signal0<void> ScaleChange;
+	PBD::Signal<void()> ScaleChange;
 
 	MusicalMode::Type mode() const { return  _mode; }
 	NoteGridOrigin note_grid_origin() { return _note_grid_origin; }
@@ -432,7 +438,7 @@ class Push2 : public MIDISurface
 
 	PressureMode pressure_mode () const { return _pressure_mode; }
 	void set_pressure_mode (PressureMode);
-	PBD::Signal1<void,PressureMode> PressureModeChange;
+	PBD::Signal<void(PressureMode)> PressureModeChange;
 
 	libusb_device_handle* usb_handle() const { return _handle; }
 
@@ -470,7 +476,7 @@ class Push2 : public MIDISurface
 	void start_press_timeout (std::shared_ptr<Button>, ButtonID);
 
 	void init_buttons (bool startup);
-	void init_touch_strip ();
+	void init_touch_strip (bool with_shift);
 
 	/* map of Pads by note number (the "fixed" note number sent by the
 	 * hardware, not the note number generated if the pad is touched)

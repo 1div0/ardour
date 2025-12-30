@@ -19,13 +19,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/stock.h>
-#include <gtkmm/button.h>
-#include <gtkmm/label.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/table.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/alignment.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/button.h>
+#include <ytkmm/label.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/table.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/alignment.h>
 
 #include "ardour/session.h"
 #include "ardour/user_bundle.h"
@@ -84,7 +84,7 @@ BundleEditorMatrix::set_state (BundleChannel c[2], bool s)
 PortMatrixNode::State
 BundleEditorMatrix::get_state (BundleChannel c[2]) const
 {
-	if (c[0].bundle->nchannels() == ChanCount::ZERO || c[1].bundle->nchannels() == ChanCount::ZERO) {
+	if (c[0].nchannels() == ChanCount::ZERO || c[1].nchannels() == ChanCount::ZERO) {
 		return PortMatrixNode::NOT_ASSOCIATED;
 	}
 
@@ -283,9 +283,9 @@ BundleManager::BundleManager (Session* session)
 	_tree_view.append_column (_("Name"), _list_model_columns.name);
 	_tree_view.set_headers_visible (false);
 
-	std::shared_ptr<BundleList> bundles = _session->bundles ();
-	for (BundleList::iterator i = bundles->begin(); i != bundles->end(); ++i) {
-		add_bundle (*i);
+	std::shared_ptr<BundleList const> bundles = _session->bundles ();
+	for (auto const& i : *bundles) {
+		add_bundle (i);
 	}
 
 	/* New / Edit / Delete buttons */
@@ -385,7 +385,7 @@ BundleManager::add_bundle (std::shared_ptr<Bundle> b)
 	(*i)[_list_model_columns.name] = u->name ();
 	(*i)[_list_model_columns.bundle] = u;
 
-	u->Changed.connect (bundle_connections, invalidator (*this), boost::bind (&BundleManager::bundle_changed, this, _1, std::weak_ptr<UserBundle> (u)), gui_context());
+	u->Changed.connect (bundle_connections, invalidator (*this), std::bind (&BundleManager::bundle_changed, this, _1, std::weak_ptr<UserBundle> (u)), gui_context());
 }
 
 void

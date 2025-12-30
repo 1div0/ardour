@@ -23,7 +23,7 @@
 #include <set>
 #include <vector>
 
-#include <boost/optional.hpp>
+#include <optional>
 #include <glibmm/threads.h>
 
 #include "pbd/search_path.h"
@@ -100,10 +100,7 @@ public:
 	IPlugView* view ();
 	void       close_view ();
 	void       update_contoller_param ();
-#if SMTG_OS_LINUX
-	void set_runloop (Linux::IRunLoop*);
-#endif
-	PBD::Signal2<void, int, int> OnResizeView;
+	PBD::Signal<void(int, int)> OnResizeView;
 
 	tresult PLUGIN_API queryInterface (const TUID _iid, void** obj) SMTG_OVERRIDE;
 	uint32  PLUGIN_API addRef () SMTG_OVERRIDE { return 1; }
@@ -164,12 +161,14 @@ public:
 
 	/* API for Ardour -- Parameters */
 	bool         try_set_parameter_by_id (Vst::ParamID id, float value);
-	void         set_parameter (uint32_t p, float value, int32 sample_off, bool to_list = true);
+	void         set_parameter (uint32_t p, float value, int32 sample_off, bool to_list = true, bool force = false);
 	float        get_parameter (uint32_t p) const;
 	std::string  format_parameter (uint32_t p) const;
 	Vst::ParamID index_to_id (uint32_t) const;
 
 	Glib::Threads::Mutex& process_lock () { return _process_lock; }
+	bool& component_is_synced () { return _restart_component_is_synced; }
+
 
 	enum ParameterChange { BeginGesture,
 	                       EndGesture,
@@ -179,10 +178,12 @@ public:
 	                       ParamValueChanged
 	                     };
 
-	PBD::Signal3<void, ParameterChange, uint32_t, float> OnParameterChange;
+	PBD::Signal<void(ParameterChange, uint32_t, float)> OnParameterChange;
+	PBD::Signal<void(ARDOUR::RouteProcessorChange)>     OnProcessorChange;
 
 	/* API for Ardour -- Setup/Processing */
 	uint32_t plugin_latency ();
+	uint32_t plugin_tailtime ();
 	bool     set_block_size (int32_t);
 	bool     activate ();
 	bool     deactivate ();
@@ -199,8 +200,10 @@ public:
 	}
 
 	void set_owner (ARDOUR::SessionObject* o);
+	void set_non_realtime (bool);
 
-	void enable_io (std::vector<bool> const&, std::vector<bool> const&);
+	void request_bus_layout (uint32_t main_in, uint32_t aux_in, uint32_t main_out);
+	void enable_io (std::vector<bool> const&, std::vector<bool> const&, bool force = false);
 
 	void process (float** ins, float** outs, uint32_t n_samples);
 
@@ -211,6 +214,22 @@ public:
 	}
 	bool add_slave (Vst::IEditController*, bool);
 	bool remove_slave (Vst::IEditController*);
+
+	class RouteProcessorChangeBlock
+	{
+		public:
+			RouteProcessorChangeBlock (VST3PI* p) : _impl (p)
+		{
+			_impl->block_notifications ();
+		}
+
+		~RouteProcessorChangeBlock ()
+		{
+			_impl->resume_notifications ();
+		}
+		private:
+			VST3PI* _impl;
+	};
 
 private:
 	/* prevent copy construction */
@@ -224,7 +243,9 @@ private:
 	bool disconnect_components ();
 
 	bool  update_processor ();
+	void  query_io_config ();
 	int32 count_channels (Vst::MediaType, Vst::BusDirection, Vst::BusType);
+
 
 	bool evoral_to_vst3 (Vst::Event&, Evoral::Event<samplepos_t> const&, int32_t);
 
@@ -232,7 +253,7 @@ private:
 	bool synchronize_states ();
 
 	void set_parameter_by_id (Vst::ParamID id, float value, int32 sample_off);
-	void set_parameter_internal (Vst::ParamID id, float& value, int32 sample_off, bool normalized);
+	void set_parameter_internal (Vst::ParamID id, float value, int32 sample_off);
 
 	void set_event_bus_state (bool enabled);
 
@@ -246,6 +267,10 @@ private:
 	void psl_subscribe_to (std::shared_ptr<ARDOUR::AutomationControl>, FIDString);
 	void psl_stripable_property_changed (PBD::PropertyChange const&);
 
+	void block_notifications ();
+	void resume_notifications ();
+	void send_processors_changed (ARDOUR::RouteProcessorChange const&);
+
 	void forward_signal (Presonus::IContextInfoHandler2*, FIDString) const;
 
 	std::shared_ptr<ARDOUR::VST3PluginModule> _module;
@@ -257,10 +282,6 @@ private:
 	Vst::IComponent*      _component;
 	Vst::IEditController* _controller;
 	IPlugView*            _view;
-
-#if SMTG_OS_LINUX
-	Linux::IRunLoop* _run_loop;
-#endif
 
 	IPtr<Vst::IAudioProcessor> _processor;
 	Vst::ProcessContext        _context;
@@ -277,6 +298,7 @@ private:
 	bool    _is_loading_state;
 	bool    _is_processing;
 	int32_t _block_size;
+	bool    _process_offline;
 
 	/* ports */
 	struct Param {
@@ -310,7 +332,8 @@ private:
 	std::set<Evoral::Parameter> _ac_subscriptions;
 	bool                        _add_to_selection;
 
-	boost::optional<uint32_t> _plugin_latency;
+	std::optional<uint32_t> _plugin_latency;
+	std::optional<uint32_t> _plugin_tail;
 
 	int _n_bus_in;
 	int _n_bus_out;
@@ -332,6 +355,18 @@ private:
 	int _n_midi_inputs;
 	int _n_midi_outputs;
 	int _n_factory_presets;
+
+	mutable std::atomic<int>     _block_rpc;
+	ARDOUR::RouteProcessorChange _rpc_queue;
+
+	/* work around UADx plugin crash */
+	bool _no_kMono;
+	/* work around yabridge threading */
+	bool _restart_component_is_synced;
+	/* work around PSL calls during set_owner,
+	 * while the route holds a processor lock
+	 */
+	std::atomic<bool> _in_set_owner;
 };
 
 } // namespace Steinberg
@@ -371,6 +406,12 @@ public:
 	IOPortDescription           describe_io_port (DataType dt, bool input, uint32_t id) const;
 	PluginOutputConfiguration   possible_output () const;
 
+	void request_bus_layout (ChanCount const& /*in*/, ChanCount const& /*aux_in*/, ChanCount const& /*out*/);
+	bool reconfigure_io (ChanCount /*in*/, ChanCount /*aux_in*/, ChanCount /*out*/);
+
+	ChanCount output_streams () const;
+	ChanCount input_streams () const;
+
 	void set_automation_control (uint32_t, std::shared_ptr<ARDOUR::AutomationControl>);
 
 	std::string state_node_name () const
@@ -398,6 +439,7 @@ public:
 	int set_block_size (pframes_t);
 
 	void set_owner (ARDOUR::SessionObject* o);
+	void set_non_realtime (bool);
 
 	void add_slave (std::shared_ptr<Plugin>, bool);
 	void remove_slave (std::shared_ptr<Plugin>);
@@ -411,14 +453,12 @@ public:
 	Steinberg::IPlugView* view ();
 	void                  close_view ();
 	void                  update_contoller_param ();
-#if SMTG_OS_LINUX
-	void set_runloop (Steinberg::Linux::IRunLoop*);
-#endif
 
-	PBD::Signal2<void, int, int> OnResizeView;
+	PBD::Signal<void(int, int)> OnResizeView;
 
 private:
 	samplecnt_t plugin_latency () const;
+	samplecnt_t plugin_tailtime () const;
 	void        init ();
 	void        find_presets ();
 	void        forward_resize_view (int w, int h);
@@ -445,7 +485,7 @@ private:
 
 /* ****************************************************************************/
 
-class LIBARDOUR_API VST3PluginInfo : public PluginInfo
+class LIBARDOUR_API VST3PluginInfo : public PluginInfo, public std::enable_shared_from_this<ARDOUR::VST3PluginInfo>
 {
 public:
 	VST3PluginInfo ();
@@ -455,6 +495,10 @@ public:
 	std::vector<Plugin::PresetRecord> get_presets (bool user_only) const;
 	bool                              is_instrument () const;
 	PBD::Searchpath                   preset_search_path () const;
+
+	bool variable_bus_layout () const { return true; }
+
+	std::optional<bool>             has_editor;
 
 	std::shared_ptr<VST3PluginModule> m;
 };

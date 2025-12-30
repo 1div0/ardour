@@ -24,7 +24,6 @@
  */
 
 #include <algorithm>
-#include <unistd.h>
 #include <sys/types.h>
 #include <cstdio>
 #include <ctime>
@@ -140,6 +139,7 @@ static const char* authors[] = {
 	N_("Sakari Bergen"),
 	N_("Christian Borss"),
 	N_("Thomas Brand"),
+	N_("Franke Burgarino"),
 	N_("Chris Cannam"),
 	N_("Jeremy Carter"),
 	N_("Enrico Castella"),
@@ -186,6 +186,7 @@ static const char* authors[] = {
 	N_("Nick Mainsbridge"),
 	N_("Tim Mayberry"),
 	N_("Doug Mclain"),
+	N_("Alexander Mitchell"),
 	N_("Johannes Mueller"),
 	N_("Edward Tomasz Napierała"),
 	N_("Todd Naugle"),
@@ -250,12 +251,15 @@ static const char* translators[] = {
 \n\tRobin Gloster <robin@loc-com.de>\n"),
 	N_("Italian:\n\tVincenzo Reale <smart2128@baslug.org>\
 \n\tFilippo Pappalardo <filippo@email.it>\
-\n\tRaffaele Morelli <raffaele.morelli@gmail.com>\n"),
+\n\tRaffaele Morelli <raffaele.morelli@gmail.com>\
+\n\tGuido Pietrella\
+\n\tDaniele Tombolini\n"),
 	N_("Portuguese:\n\tRui Nuno Capela <rncbc@rncbc.org>\n"),
 	N_("Brazilian Portuguese:\n\tAlexander da Franca Fernandes <alexander@nautae.eti.br>\
 \n\tChris Ross <chris@tebibyte.org>\n"),
 	N_("Spanish:\n\t Alex Krohn <alexkrohn@fastmail.fm>\
-\n\tPablo Fernández <pablo.fbus@gmail.com>\n"),
+\n\tPablo Fernández <pablo.fbus@gmail.com>\
+\n\tJuan Cruz Vardy Sabaté <juanvardy@zohomail.com>\n"),
 	N_("Russian:\n\t Igor Blinov <pitstop@nm.ru>\
 \n\tAleksandr Koltsov <ag1455@mail.ru>\
 \n\tPetr Semiletov <tea@list.ru>\
@@ -263,7 +267,7 @@ static const char* translators[] = {
 	N_("Greek:\n\t Klearchos Gourgourinis <muadib@in.gr>\n"),
 	N_("Swedish:\n\t Petter Sundlöf <petter.sundlof@gmail.com>\n"),
 	N_("Polish:\n\t Piotr Zaryk <pzaryk@gmail.com>\n"),
-	N_("Czech:\n\t Pavel Fric <pavelfric@seznam.cz>\n"),
+	N_("Czech:\n\t Pavel Fric <pavelfric@seznam.cz>\n\t Martin Vlk <martin@vlkk.cz>\n"),
 	N_("Norwegian:\n\t Eivind Ødegård\n"),
 	N_("Chinese:\n\t Rui-huai Zhang <zrhzrh@mail.ustc.edu.cn>\n"),
 	N_("Japanese:\n\t Hiroki Inagaki <hiroki.ingk@gmail.com>\n"),
@@ -640,7 +644,7 @@ About::About ()
 #endif
 
 	set_translator_credits (t);
-	set_copyright (_("Copyright (C) 1999-2023 Paul Davis\n"));
+	set_copyright (_("Copyright (C) 1999-2025 Paul Davis\n"));
 	set_license (gpl);
 	set_name (X_("Ardour"));
 	set_website (X_("https://ardour.org/"));

@@ -43,7 +43,7 @@ using namespace Glib;
 
 MidiControlUI* MidiControlUI::_instance = 0;
 
-#include "pbd/abstract_ui.cc"  /* instantiate the template */
+#include "pbd/abstract_ui.inc.cc" /* instantiate the template */
 
 MidiControlUI::MidiControlUI (Session& s)
 	: AbstractUI<MidiUIRequest> (X_("midiUI"))
@@ -60,17 +60,6 @@ MidiControlUI::~MidiControlUI ()
 	clear_ports ();
 	/* we no longer exist */
 	_instance = 0;
-}
-
-void*
-MidiControlUI::request_factory (uint32_t num_requests)
-{
-	/* AbstractUI<T>::request_buffer_factory() is a template method only
-	   instantiated in this source module. To provide something visible for
-	   use when registering the factory, we have this static method that is
-	   template-free.
-	*/
-	return request_buffer_factory (num_requests);
 }
 
 void

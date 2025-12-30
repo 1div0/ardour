@@ -16,9 +16,9 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/box.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/messagedialog.h>
+#include <ytkmm/box.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/messagedialog.h>
 
 #include "gtkmm2ext/gui_thread.h"
 #include "gtkmm2ext/utils.h"
@@ -197,7 +197,7 @@ LuaScriptManager::set_session (ARDOUR::Session *s)
 		return;
 	}
 
-	_session->LuaScriptsChanged.connect (_session_script_connection,  invalidator (*this), boost::bind (&LuaScriptManager::setup_session_scripts, this), gui_context());
+	_session->LuaScriptsChanged.connect (_session_script_connection,  invalidator (*this), std::bind (&LuaScriptManager::setup_session_scripts, this), gui_context());
 	setup_session_scripts ();
 }
 
@@ -256,7 +256,7 @@ LuaScriptManager::set_action_btn_clicked ()
 	TreeModel::Row row = *(_a_view.get_selection()->get_selected());
 	assert (row);
 	LuaInstance *li = LuaInstance::instance();
-	li->interactive_add (LuaScriptInfo::EditorAction, row[_a_model.id]);
+	li->interactive_add (*this, LuaScriptInfo::EditorAction, row[_a_model.id]);
 }
 
 void
@@ -347,7 +347,7 @@ void
 LuaScriptManager::add_callback_btn_clicked ()
 {
 	LuaInstance *li = LuaInstance::instance();
-	li->interactive_add (LuaScriptInfo::EditorHook, -1);
+	li->interactive_add (*this, LuaScriptInfo::EditorHook, -1);
 }
 
 void
@@ -431,7 +431,7 @@ LuaScriptManager::add_sess_btn_clicked ()
 		return;
 	}
 	LuaInstance *li = LuaInstance::instance();
-	li->interactive_add (LuaScriptInfo::Session, -1);
+	li->interactive_add (*this, LuaScriptInfo::Session, -1);
 }
 
 void

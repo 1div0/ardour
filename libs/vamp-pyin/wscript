@@ -8,16 +8,8 @@ import os
 # micro increment <=> no interface changes
 VAMP_PYIN_LIB_VERSION = '0.0.0'
 
-# Variables for 'waf dist'
-APPNAME = 'libardourvamppyin'
-VERSION = '1.1'
-
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     pass
@@ -48,6 +40,3 @@ def build(bld):
     autowaf.ensure_visible_symbols (obj, True)
     obj.vnum         = VAMP_PYIN_LIB_VERSION
     obj.install_path = os.path.join(bld.env['LIBDIR'], 'vamp')
-
-def shutdown():
-    autowaf.shutdown()

@@ -21,7 +21,7 @@
 #define _PIANO_KEYBOARD_H_
 
 #include <map>
-#include <gtkmm/drawingarea.h>
+#include <ytkmm/drawingarea.h>
 
 #include "piano_key_bindings.h"
 
@@ -38,6 +38,7 @@ public:
 	sigc::signal<void>            Rest;
 	sigc::signal<void,bool>       SustainChanged;
 	sigc::signal<void, int, bool> PitchBend;
+	sigc::signal<void, int>       SetVelocity;
 	sigc::signal<void, bool>      SwitchOctave;
 
 	void sustain_press ();

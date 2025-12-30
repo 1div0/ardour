@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_filesource_h__
-#define __ardour_filesource_h__
+#pragma once
 
 #include <list>
 #include <string>
@@ -57,6 +56,7 @@ public:
         void mark_immutable ();
         void mark_immutable_except_write();
 	void mark_nonremovable ();
+	void mark_removable ();
 
 	bool                 within_session () const { return _within_session; }
 	uint16_t             channel()         const { return _channel; }
@@ -77,9 +77,8 @@ public:
 	                     bool must_exist, bool& is_new, uint16_t& chan,
 	                     std::string& found_path);
 
-	void inc_use_count ();
 	bool removable () const;
-        bool is_stub () const;
+	bool is_stub () const;
 
 	const std::string& origin() const { return _origin; }
 	void set_origin (std::string const& o) { _origin = o; }
@@ -87,7 +86,7 @@ public:
 	virtual void set_path (const std::string&);
 	void replace_file (const std::string&);
 
-	static PBD::Signal2<int,std::string,std::vector<std::string> > AmbiguousFileName;
+	static PBD::Signal<int(std::string,std::vector<std::string> )> AmbiguousFileName;
 
 	void existence_check ();
 	virtual void prevent_deletion ();
@@ -120,5 +119,4 @@ public:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_filesource_h__ */
 

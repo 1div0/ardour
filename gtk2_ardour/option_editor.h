@@ -22,24 +22,21 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtk_ardour_option_editor_h__
-#define __gtk_ardour_option_editor_h__
+#pragma once
 
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/filechooserbutton.h>
-#include <gtkmm/label.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/scale.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treestore.h>
-#include <gtkmm/treeview.h>
-#include <gtkmm/window.h>
+#include <ytkmm/checkbutton.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/filechooserbutton.h>
+#include <ytkmm/label.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/scale.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
+#include <ytkmm/treestore.h>
+#include <ytkmm/treeview.h>
+#include <ytkmm/window.h>
 
 #include "pbd/configuration.h"
-
-#include "widgets/slider_controller.h"
 
 #include "actions.h"
 #include "ardour_window.h"
@@ -64,6 +61,7 @@
 
 namespace ArdourWidgets {
 	class Frame;
+	class HSliderController;
 }
 
 class OptionEditorPage;
@@ -436,7 +434,7 @@ protected:
 	sigc::slot<bool, float> _set;
 	Gtk::Adjustment _adj;
 	Gtk::HScale _hscale;
-	Gtk::Label _label;
+	Gtk::Label* _label;
 	double _mult;
 	bool _log;
 };
@@ -601,7 +599,7 @@ public:
 	void set_state_from_config ();
 	void add_to_page (OptionEditorPage *);
 
-	Gtk::Widget& tip_widget() { return *_db_slider; }
+	Gtk::Widget& tip_widget();
 
 private:
 	void db_changed ();
@@ -611,7 +609,7 @@ private:
 	Gtk::Adjustment _db_adjustment;
 	ArdourWidgets::HSliderController* _db_slider;
 	Gtk::Entry _db_display;
-	Gtk::Label _label;
+	Gtk::Label* _label;
 	Gtk::HBox _box;
 	Gtk::VBox _fader_centering_box;
 	sigc::slot<ARDOUR::gain_t> _get;
@@ -646,7 +644,7 @@ public:
 
 private:
 	void save_clock_time ();
-	Gtk::Label _label;
+	Gtk::Label* _label;
 	AudioClock _clock;
 	sigc::slot<std::string> _get;
 	sigc::slot<bool, std::string> _set;
@@ -805,4 +803,3 @@ protected:
 	Gtk::HBox hpacker;
 };
 
-#endif /* __gtk_ardour_option_editor_h__ */

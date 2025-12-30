@@ -126,7 +126,7 @@ timecnt_t::end (TimeDomain return_domain) const
 
 		} else if (_position.time_domain() == AudioTime) {
 
-			const Beats b = TempoMap::use()->quarters_at_superclock (_position.superclocks() + magnitude());
+			const Beats b = TempoMap::use()->quarters_at_superclock (_position.superclocks()) + Beats::ticks (magnitude());
 
 			if (return_domain == BeatTime) {
 				return timepos_t (b);
@@ -664,7 +664,7 @@ timepos_t::earlier (Temporal::BBT_Offset const & offset) const
 	TempoMap::SharedPtr tm (TempoMap::use());
 
 	if (is_superclock()) {
-		return timepos_t (tm->superclock_at (BBT_Argument (*this, tm->bbt_walk (BBT_Argument (*this, tm->bbt_at (*this)), -offset))));
+		return timepos_t::from_superclock (tm->superclock_at (tm->bbt_walk (BBT_Argument (this->superclocks(), tm->bbt_at (*this)), -offset)));
 	}
 
 	return timepos_t (tm->bbtwalk_to_quarters (beats(), -offset));
@@ -763,7 +763,7 @@ timepos_t::shift_earlier (Temporal::BBT_Offset const & offset)
 	TempoMap::SharedPtr tm (TempoMap::use());
 
 	if (is_superclock()) {
-		v = build (false, (tm->superclock_at (tm->bbt_walk (BBT_Argument (*this, tm->bbt_at (*this)), -offset))));
+		v = build (false, (tm->superclock_at (tm->bbt_walk (BBT_Argument (this->superclocks(), tm->bbt_at (*this)), -offset))));
 	} else {
 		v = build (true, tm->bbtwalk_to_quarters (beats(), -offset).to_ticks());
 	}
@@ -778,9 +778,10 @@ timepos_t::operator+= (Temporal::BBT_Offset const & offset)
 {
 	TempoMap::SharedPtr tm (TempoMap::use());
 	if (is_beats()) {
-		v = build (true, tm->bbtwalk_to_quarters (beats(), offset).to_ticks());
+		Temporal::Beats r = tm->quarters_at (tm->bbt_walk (tm->bbt_at (beats()), offset));
+		v = build (true, r.to_ticks());
 	} else {
-		v = build (false, tm->superclock_at (tm->bbt_walk (BBT_Argument (*this, tm->bbt_at (*this)), offset)));
+		v = build (false, tm->superclock_at (tm->bbt_walk (BBT_Argument (this->superclocks(), tm->bbt_at (*this)), offset)));
 	}
 
 	return *this;

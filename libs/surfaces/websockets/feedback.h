@@ -21,7 +21,6 @@
 
 #include <memory>
 
-#include <boost/unordered_map.hpp>
 #include <glibmm/threads.h>
 
 #include "pbd/abstract_ui.h"
@@ -36,11 +35,10 @@ class FeedbackHelperUI : public AbstractUI<BaseUI::BaseRequestObject>
 {
 public:
 	FeedbackHelperUI ();
-	~FeedbackHelperUI () {};
+	~FeedbackHelperUI ();
 
 protected:
 	virtual void do_request (BaseUI::BaseRequestObject*);
-
 };
 
 class ArdourFeedback : public SurfaceComponent

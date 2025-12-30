@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libardour_midi_operator_h__
-#define __libardour_midi_operator_h__
+#pragma once
 
 #include <vector>
 #include <string>
@@ -26,7 +25,11 @@
 #include "temporal/beats.h"
 #include "evoral/Sequence.h"
 
+#include "ardour/libardour_visibility.h"
+
+namespace PBD {
 class Command;
+}
 
 namespace ARDOUR {
 
@@ -37,12 +40,11 @@ class LIBARDOUR_API MidiOperator {
 	MidiOperator () {}
 	virtual ~MidiOperator() {}
 
-	virtual Command* operator() (std::shared_ptr<ARDOUR::MidiModel>,
-	                             Temporal::Beats,
-	                             std::vector<Evoral::Sequence<Temporal::Beats>::Notes>&) = 0;
+	virtual PBD::Command* operator() (std::shared_ptr<ARDOUR::MidiModel>,
+	                                  Temporal::Beats,
+	                                  std::vector<Evoral::Sequence<Temporal::Beats>::Notes>&) = 0;
 	virtual std::string name() const = 0;
 };
 
 } /* namespace */
 
-#endif /* __libardour_midi_operator_h__ */

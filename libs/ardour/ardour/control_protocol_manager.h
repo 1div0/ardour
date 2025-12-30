@@ -48,12 +48,15 @@ class LIBARDOUR_API ControlProtocolInfo {
 		std::string name;
 		std::string path;
 		bool requested;
-		bool mandatory;
-		bool supports_feedback;
+		bool automatic;
 		XMLNode* state;
 
-		ControlProtocolInfo() : descriptor (0), protocol (0), requested(false),
-		mandatory(false), supports_feedback(false), state (0)
+		ControlProtocolInfo()
+			: descriptor (0)
+			, protocol (0)
+			, requested (false)
+			, automatic (false)
+			, state (0)
 	{}
 		~ControlProtocolInfo();
 
@@ -68,11 +71,11 @@ class LIBARDOUR_API ControlProtocolManager : public PBD::Stateful, public ARDOUR
 
 	void set_session (Session*);
 	void discover_control_protocols ();
-	void foreach_known_protocol (boost::function<void(const ControlProtocolInfo*)>);
-	void load_mandatory_protocols ();
-	void midi_connectivity_established ();
+	void foreach_known_protocol (std::function<void(const ControlProtocolInfo*)>);
+	void midi_connectivity_established (bool);
 	void drop_protocols ();
-	void register_request_buffer_factories ();
+	void probe_midi_control_protocols ();
+	void probe_usb_control_protocols (bool, uint16_t, uint16_t);
 
 	int activate (ControlProtocolInfo&);
         int deactivate (ControlProtocolInfo&);
@@ -84,10 +87,10 @@ class LIBARDOUR_API ControlProtocolManager : public PBD::Stateful, public ARDOUR
 	int set_state (const XMLNode&, int version);
 	XMLNode& get_state () const;
 
-        PBD::Signal1<void,ControlProtocolInfo*> ProtocolStatusChange;
+        PBD::Signal<void(ControlProtocolInfo*)> ProtocolStatusChange;
 
         void stripable_selection_changed (ARDOUR::StripableNotificationListPtr);
-        static PBD::Signal1<void,ARDOUR::StripableNotificationListPtr> StripableSelectionChanged;
+        static PBD::Signal<void(ARDOUR::StripableNotificationListPtr)> StripableSelectionChanged;
 
   private:
 	ControlProtocolManager ();

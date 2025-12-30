@@ -24,7 +24,7 @@
 #include <inttypes.h>
 
 #include <glibmm/threads.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/stock.h>
 
 #include "ardour/audioengine.h"
 #include "ardour/audio_track.h"
@@ -145,12 +145,11 @@ RouteParams_UI::~RouteParams_UI ()
 }
 
 void
-RouteParams_UI::add_routes (RouteList& routes)
+RouteParams_UI::add_routes (RouteList const& routes)
 {
-	ENSURE_GUI_THREAD (*this, &RouteParams_UI::add_routes, routes)
+	ENSURE_GUI_THREAD (*this, &RouteParams_UI::add_routes, routes);
 
-	for (RouteList::iterator x = routes.begin(); x != routes.end(); ++x) {
-		std::shared_ptr<Route> route = (*x);
+	for (auto const& route : routes) {
 
 		if (route->is_auditioner()) {
 			return;
@@ -162,8 +161,8 @@ RouteParams_UI::add_routes (RouteList& routes)
 
 		//route_select_list.rows().back().select ();
 
-		route->PropertyChanged.connect (*this, invalidator (*this), boost::bind (&RouteParams_UI::route_property_changed, this, _1, std::weak_ptr<Route>(route)), gui_context());
-		route->DropReferences.connect (*this, invalidator (*this), boost::bind (&RouteParams_UI::route_removed, this, std::weak_ptr<Route>(route)), gui_context());
+		route->PropertyChanged.connect (*this, invalidator (*this), std::bind (&RouteParams_UI::route_property_changed, this, _1, std::weak_ptr<Route>(route)), gui_context());
+		route->DropReferences.connect (*this, invalidator (*this), std::bind (&RouteParams_UI::route_removed, this, std::weak_ptr<Route>(route)), gui_context());
 	}
 }
 
@@ -237,12 +236,12 @@ RouteParams_UI::setup_processor_boxes()
 		cleanup_processor_boxes();
 
 		// construct new redirect boxes
-		insert_box = new ProcessorBox (_session, boost::bind (&RouteParams_UI::plugin_selector, this), _p_selection, 0);
+		insert_box = new ProcessorBox (_session, std::bind (&RouteParams_UI::plugin_selector, this), _p_selection, 0);
 		insert_box->set_route (_route);
 
 		std::shared_ptr<AudioTrack> at = std::dynamic_pointer_cast<AudioTrack>(_route);
 		if (at) {
-			at->FreezeChange.connect (route_connections, invalidator (*this), boost::bind (&RouteParams_UI::map_frozen, this), gui_context());
+			at->FreezeChange.connect (route_connections, invalidator (*this), std::bind (&RouteParams_UI::map_frozen, this), gui_context());
 		}
 		redir_hpane.add (*insert_box);
 
@@ -359,9 +358,9 @@ RouteParams_UI::set_session (Session *sess)
 	route_display_model->clear();
 
 	if (_session) {
-		std::shared_ptr<RouteList> r = _session->get_routes();
+		std::shared_ptr<RouteList const> r = _session->get_routes();
 		add_routes (*r);
-		_session->RouteAdded.connect (_session_connections, invalidator (*this), boost::bind (&RouteParams_UI::add_routes, this, _1), gui_context());
+		_session->RouteAdded.connect (_session_connections, invalidator (*this), std::bind (&RouteParams_UI::add_routes, this, _1), gui_context());
 	}
 }
 
@@ -413,7 +412,7 @@ RouteParams_UI::route_selected()
 		setup_io_selector();
 		setup_processor_boxes();
 
-		route->processors_changed.connect (_route_processors_connection, invalidator (*this), boost::bind (&RouteParams_UI::processors_changed, this, _1), gui_context());
+		route->processors_changed.connect (_route_processors_connection, invalidator (*this), std::bind (&RouteParams_UI::processors_changed, this, _1), gui_context());
 
 		track_input_label.set_text (_route->name());
 
@@ -457,7 +456,7 @@ RouteParams_UI::show_track_menu()
 		track_menu->set_name ("ArdourContextMenu");
 		track_menu->items().push_back (MenuElem (_("Add Track or Bus"), sigc::mem_fun (*(ARDOUR_UI::instance()), &ARDOUR_UI::add_route)));
 	}
-	track_menu->popup (1, gtk_get_current_event_time());
+	track_menu->popup (1, gtk_get_current_event_time()); // show by "clicked" signal, btn1
 }
 
 void
@@ -478,7 +477,7 @@ RouteParams_UI::redirect_selected (std::shared_ptr<ARDOUR::Processor> proc)
 		SendUI *send_ui = new SendUI (this, _session, send);
 
 		cleanup_view();
-		send->DropReferences.connect (_processor_going_away_connection, invalidator (*this), boost::bind (&RouteParams_UI::processor_going_away, this, std::weak_ptr<Processor>(proc)), gui_context());
+		send->DropReferences.connect (_processor_going_away_connection, invalidator (*this), std::bind (&RouteParams_UI::processor_going_away, this, std::weak_ptr<Processor>(proc)), gui_context());
 		_active_view = send_ui;
 
 		redir_hpane.add (*_active_view);
@@ -489,7 +488,7 @@ RouteParams_UI::redirect_selected (std::shared_ptr<ARDOUR::Processor> proc)
 		ReturnUI *return_ui = new ReturnUI (this, retrn, _session);
 
 		cleanup_view();
-		retrn->DropReferences.connect (_processor_going_away_connection, invalidator (*this), boost::bind (&RouteParams_UI::processor_going_away, this, std::weak_ptr<Processor>(proc)), gui_context());
+		retrn->DropReferences.connect (_processor_going_away_connection, invalidator (*this), std::bind (&RouteParams_UI::processor_going_away, this, std::weak_ptr<Processor>(proc)), gui_context());
 		_active_view = return_ui;
 
 		redir_hpane.add (*_active_view);
@@ -500,7 +499,7 @@ RouteParams_UI::redirect_selected (std::shared_ptr<ARDOUR::Processor> proc)
 		GenericPluginUI *plugin_ui = new GenericPluginUI (plugin_insert, true);
 
 		cleanup_view();
-		plugin_insert->plugin()->DropReferences.connect (_processor_going_away_connection, invalidator (*this), boost::bind (&RouteParams_UI::plugin_going_away, this, PreFader), gui_context());
+		plugin_insert->plugin()->DropReferences.connect (_processor_going_away_connection, invalidator (*this), std::bind (&RouteParams_UI::plugin_going_away, this, PreFader), gui_context());
 		plugin_ui->start_updating (0);
 		_active_view = plugin_ui;
 
@@ -512,7 +511,7 @@ RouteParams_UI::redirect_selected (std::shared_ptr<ARDOUR::Processor> proc)
 		PortInsertUI *portinsert_ui = new PortInsertUI (this, _session, port_insert);
 
 		cleanup_view();
-		port_insert->DropReferences.connect (_processor_going_away_connection, invalidator (*this), boost::bind (&RouteParams_UI::processor_going_away, this, std::weak_ptr<Processor> (proc)), gui_context());
+		port_insert->DropReferences.connect (_processor_going_away_connection, invalidator (*this), std::bind (&RouteParams_UI::processor_going_away, this, std::weak_ptr<Processor> (proc)), gui_context());
 		_active_view = portinsert_ui;
 
 		redir_hpane.add (*_active_view);

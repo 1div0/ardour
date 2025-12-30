@@ -5,14 +5,8 @@ import os
 import sys
 import re
 
-# Mandatory variables
-top = '.'
-out = 'build'
-
-path_prefix = 'libs/ardouralsautil/'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     if re.search ("linux", sys.platform) != None and Options.options.dist_target != 'mingw':
@@ -48,7 +42,7 @@ def build(bld):
             obj.uselib   = [ 'DBUS' ]
             obj.install_path = os.path.join(bld.env['LIBDIR'])
             obj.defines = [
-                    '_POSIX_SOURCE',
+                    '_DEFAULT_SOURCE',
                     '_XOPEN_SOURCE=500',
                     'ARD_PROG_NAME="ardour-request-device"',
                     'ARD_APPL_NAME="Ardour ALSA Backend"',

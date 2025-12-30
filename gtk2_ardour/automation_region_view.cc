@@ -38,6 +38,7 @@
 #include "editor.h"
 #include "editor_drag.h"
 #include "gui_thread.h"
+#include "mergeable_line.h"
 #include "midi_automation_line.h"
 #include "public_editor.h"
 #include "ui_config.h"
@@ -66,7 +67,7 @@ AutomationRegionView::AutomationRegionView (ArdourCanvas::Container*            
 	group->raise_to_top();
 
 	trackview.editor().MouseModeChanged.connect(_mouse_mode_connection, invalidator (*this),
-	                                            boost::bind (&AutomationRegionView::mouse_mode_changed, this),
+	                                            std::bind (&AutomationRegionView::mouse_mode_changed, this),
 	                                            gui_context ());
 }
 
@@ -88,19 +89,21 @@ AutomationRegionView::init (bool /*wfd*/)
 	set_height (trackview.current_height());
 
 	set_colors ();
+
+	get_canvas_frame()->set_data ("linemerger", (LineMerger*) this);
 }
 
 void
 AutomationRegionView::create_line (std::shared_ptr<ARDOUR::AutomationList> list)
 {
-	_line = std::shared_ptr<AutomationLine> (new MidiAutomationLine(
+	_line = std::shared_ptr<EditorAutomationLine> (new MidiAutomationLine(
 				ARDOUR::EventTypeMap::instance().to_symbol(list->parameter()),
 				trackview, *get_canvas_group(), list,
 				std::dynamic_pointer_cast<ARDOUR::MidiRegion> (_region),
 				_parameter));
 	_line->set_colors();
 	_line->set_height ((uint32_t)rint(trackview.current_height() - 2.5 - NAME_HIGHLIGHT_SIZE));
-	_line->set_visibility (AutomationLine::VisibleAspects (AutomationLine::Line|AutomationLine::ControlPoints));
+	_line->set_visibility (EditorAutomationLine::VisibleAspects (EditorAutomationLine::Line|EditorAutomationLine::ControlPoints));
 	_line->set_maximum_time (timepos_t (_region->length()));
 	_line->set_offset (_region->start ());
 }
@@ -132,44 +135,37 @@ AutomationRegionView::canvas_group_event (GdkEvent* ev)
 		return false;
 	}
 
+	return RegionView::canvas_group_event (ev);
+}
+
+void
+AutomationRegionView::add_automation_event (GdkEvent* ev)
+{
+	double x = ev->button.x;
+	double y = ev->button.y;
+
+	/* convert to item coordinates in the time axis view */
+	automation_view()->canvas_display()->canvas_to_item (x, y);
+
+	/* clamp y */
+	y = std::max (y, 0.0);
+	y = std::min (y, _height - NAME_HIGHLIGHT_SIZE);
+
+	/* the time domain doesn't matter here, because the automation
+	 * list will force the position to its own time domain when
+	 * adding the point.
+	 */
+
 	PublicEditor& e = trackview.editor ();
 
-	if (trackview.editor().internal_editing() &&
-	    ev->type == GDK_BUTTON_RELEASE &&
-	    ev->button.button == 1 &&
-	    e.current_mouse_mode() == Editing::MouseDraw &&
-	    !e.drags()->active()) {
-
-		double x = ev->button.x;
-		double y = ev->button.y;
-
-		/* convert to item coordinates in the time axis view */
-		automation_view()->canvas_display()->canvas_to_item (x, y);
-
-		/* clamp y */
-		y = std::max (y, 0.0);
-		y = std::min (y, _height - NAME_HIGHLIGHT_SIZE);
-
-		/* guard points only if primary modifier is used */
-		bool with_guard_points = Gtkmm2ext::Keyboard::modifier_state_equals (ev->button.state, Gtkmm2ext::Keyboard::PrimaryModifier);
-
-		/* the time domain doesn't matter here, because the automation
-		 * list will force the position to its own time domain when
-		 * adding the point.
-		 */
-
-		add_automation_event (ev, timepos_t (e.pixel_to_sample (x)), y, with_guard_points);
-		return true;
-	}
-
-	return RegionView::canvas_group_event (ev);
+	add_automation_event (timepos_t (e.pixel_to_sample (x)), y, false);
 }
 
 /** @param when Position is global time position
  *  @param y y position, relative to our TimeAxisView.
  */
 void
-AutomationRegionView::add_automation_event (GdkEvent *, timepos_t const & w, double y, bool with_guard_points)
+AutomationRegionView::add_automation_event (timepos_t const & w, double y, bool with_guard_points)
 {
 	std::shared_ptr<Evoral::Control> c = _region->control(_parameter, true);
 	std::shared_ptr<ARDOUR::AutomationControl> ac = std::dynamic_pointer_cast<ARDOUR::AutomationControl>(c);
@@ -188,7 +184,7 @@ AutomationRegionView::add_automation_event (GdkEvent *, timepos_t const & w, dou
 
 	/* snap time */
 
-	when = snap_region_time_to_region_time (_region->source_position().distance (when), false);
+	when = view->editor().snap_relative_time_to_relative_time (_region->position(), _region->source_position().distance (when), false);
 
 	/* map using line */
 
@@ -334,11 +330,36 @@ AutomationRegionView::entered ()
 	}
 }
 
-
 void
 AutomationRegionView::exited ()
 {
 	if (_line) {
 		_line->track_exited();
 	}
+}
+
+void
+AutomationRegionView::set_selected (bool yn)
+{
+	/* don't call RegionView::set_selected() because for automation
+	 * regionviews, we don't use visual "clues" to indicate selection.
+	 */
+
+	if (yn && _parameter.type() == ARDOUR::MidiCCAutomation) {
+		group->raise_to_top ();
+	}
+}
+
+timepos_t
+AutomationRegionView::drawn_time_filter (timepos_t const & t)
+{
+	return timepos_t (_region->absolute_time_to_source_beats (t));
+}
+
+MergeableLine*
+AutomationRegionView::make_merger()
+{
+	std::shared_ptr<Evoral::Control> c = _region->control(_parameter, true);
+	std::shared_ptr<ARDOUR::AutomationControl> ac = std::dynamic_pointer_cast<ARDOUR::AutomationControl>(c);
+	return new MergeableLine (_line, ac, std::bind (&AutomationRegionView::drawn_time_filter, this, _1), nullptr, nullptr);
 }

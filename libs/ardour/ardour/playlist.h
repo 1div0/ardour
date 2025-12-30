@@ -24,8 +24,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_playlist_h__
-#define __ardour_playlist_h__
+#pragma once
 
 #include <atomic>
 #include <list>
@@ -36,8 +35,7 @@
 
 #include <sys/stat.h>
 
-#include <boost/optional.hpp>
-#include <boost/utility.hpp>
+#include <optional>
 
 #include <glib.h>
 
@@ -88,7 +86,7 @@ private:
 	Playlist& _playlist;
 };
 
-class LIBARDOUR_API Playlist : public SessionObject, public std::enable_shared_from_this<Playlist>
+class LIBARDOUR_API Playlist : public SessionObject, public Temporal::TimeDomainProvider, public std::enable_shared_from_this<Playlist>
 {
 public:
 	static void make_property_quarks ();
@@ -102,7 +100,7 @@ public:
 
 	void update (const RegionListProperty::ChangeRecord&);
 	void clear_owned_changes ();
-	void rdiff (std::vector<Command*>&) const;
+	void rdiff (std::vector<PBD::Command*>&) const;
 
 	void rdiff_and_add_command (Session*);
 
@@ -112,8 +110,6 @@ public:
 
 	bool set_name (const std::string& str);
 	void set_region_ownership ();
-
-	Temporal::TimeDomain time_domain() const;
 
 	/*playlist group IDs (pgroup_id) is a group identifier that is implicitly
 	 * or explicitly assigned to playlists so they can be associated with each other.
@@ -143,7 +139,7 @@ public:
 	void release ();
 
 	bool            empty () const;
-	bool            used () const          { return _refcnt != 0; }
+	bool            used () const          { return _refcnt.load () != 0; }
 	int             sort_id () const       { return _sort_id; }
 	bool            frozen () const        { return _frozen; }
 	const DataType& data_type () const     { return _type; }
@@ -179,7 +175,7 @@ public:
 	void replace_region (std::shared_ptr<Region> old, std::shared_ptr<Region> newr, timepos_t const & pos);
 	void split_region (std::shared_ptr<Region>, timepos_t const & position);
 	void split (timepos_t const & at);
-	void shift (timepos_t const & at, timecnt_t const & distance, bool move_intersected, bool ignore_music_glue);
+	void shift (timepos_t const & at, timecnt_t const & distance, bool move_intersected);
 	void partition (timepos_t const & start, timepos_t const & end, bool cut = false);
 	void duplicate (std::shared_ptr<Region>, timepos_t & position, float times);
 	void duplicate (std::shared_ptr<Region>, timepos_t & position, timecnt_t const & gap, float times);
@@ -190,7 +186,7 @@ public:
 	virtual std::shared_ptr<Region> combine (const RegionList&, std::shared_ptr<Track>);
 	virtual void uncombine (std::shared_ptr<Region>);
 	void fade_range (std::list<TimelineRange>&);
-	void remove_gaps (timecnt_t const & gap_threshold, timecnt_t const & leave_gap, boost::function<void (timepos_t, timecnt_t)> gap_callback);
+	void remove_gaps (timecnt_t const & gap_threshold, timecnt_t const & leave_gap, std::function<void (timepos_t, timecnt_t)> gap_callback);
 
 	void shuffle (std::shared_ptr<Region>, int dir);
 
@@ -205,9 +201,9 @@ public:
 
 	void update_after_tempo_map_change ();
 
-	std::shared_ptr<Playlist> cut  (std::list<TimelineRange>&, bool result_is_hidden = true);
-	std::shared_ptr<Playlist> copy (std::list<TimelineRange>&, bool result_is_hidden = true);
-	int                         paste (std::shared_ptr<Playlist>, timepos_t const & position, float times);
+	std::shared_ptr<Playlist> cut  (std::list<TimelineRange>&);
+	std::shared_ptr<Playlist> copy (std::list<TimelineRange>&);
+	int                       paste (std::shared_ptr<Playlist>, timepos_t const & position, float times);
 
 	const RegionListProperty& region_list_property () const
 	{
@@ -244,26 +240,26 @@ public:
 
 	samplepos_t find_next_transient (timepos_t const & position, int dir);
 
-	void foreach_region (boost::function<void(std::shared_ptr<Region>)>);
+	void foreach_region (std::function<void(std::shared_ptr<Region>)>);
 
 	XMLNode&    get_state () const;
 	virtual int set_state (const XMLNode&, int version);
 	XMLNode&    get_template ();
 
-	PBD::Signal1<void, bool>                     InUse;
-	PBD::Signal0<void>                           ContentsChanged;
-	PBD::Signal1<void, std::weak_ptr<Region> > RegionAdded;
-	PBD::Signal1<void, std::weak_ptr<Region> > RegionRemoved;
-	PBD::Signal0<void>                           NameChanged;
-	PBD::Signal0<void>                           LayeringChanged;
+	PBD::Signal<void(bool)>                     InUse;
+	PBD::Signal<void()>                           ContentsChanged;
+	PBD::Signal<void(std::weak_ptr<Region> )> RegionAdded;
+	PBD::Signal<void(std::weak_ptr<Region> )> RegionRemoved;
+	PBD::Signal<void()>                           NameChanged;
+	PBD::Signal<void()>                           LayeringChanged;
 
 	/** Emitted when regions have moved (not when regions have only been trimmed) */
-	PBD::Signal2<void,std::list< Temporal::RangeMove> const &, bool> RangesMoved;
+	PBD::Signal<void(std::list< Temporal::RangeMove> const &, bool)> RangesMoved;
 
 	/** Emitted when regions are extended; the ranges passed are the new extra time ranges
 	    that these regions now occupy.
 	*/
-	PBD::Signal1<void,std::list< Temporal::Range> const &> RegionsExtended;
+	PBD::Signal<void(std::list< Temporal::Range> const &)> RegionsExtended;
 
 	static std::string bump_name (std::string old_name, Session&);
 
@@ -302,7 +298,9 @@ public:
 
 	void set_capture_insertion_in_progress (bool yn);
 
-	void globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to);
+	void time_domain_changed ();
+	void start_domain_bounce (Temporal::DomainBounceInfo&);
+	void finish_domain_bounce (Temporal::DomainBounceInfo&);
 
 protected:
 	friend class Session;
@@ -351,10 +349,9 @@ protected:
 	PBD::ScopedConnectionList            region_drop_references_connections;
 	DataType                             _type;
 	uint32_t                             _sort_id;
-	mutable std::atomic<int>            block_notifications;
-	mutable std::atomic<int>            ignore_state_changes;
-	std::set<std::shared_ptr<Region> > pending_adds;
-	std::set<std::shared_ptr<Region> > pending_removes;
+	mutable std::atomic<int>             block_notifications;
+	std::set<std::shared_ptr<Region> >   pending_adds;
+	std::set<std::shared_ptr<Region> >   pending_removes;
 	RegionList                           pending_bounds;
 	bool                                 pending_contents_change;
 	bool                                 pending_layering;
@@ -378,7 +375,7 @@ protected:
 	bool               _rippling;
 	bool               _shuffling;
 	bool               _nudging;
-	uint32_t           _refcnt;
+	std::atomic<int>   _refcnt;
 	bool               in_flush;
 	bool               in_partition;
 	bool               _frozen;
@@ -393,8 +390,7 @@ protected:
 
 	bool holding_state () const
 	{
-		return block_notifications.load () != 0 ||
-		       ignore_state_changes.load () != 0;
+		return block_notifications.load () != 0;
 	}
 
 	void         delay_notifications ();
@@ -404,7 +400,7 @@ protected:
 
 	void _set_sort_id ();
 
-	std::shared_ptr<RegionList> regions_touched_locked (timepos_t const & start, timepos_t const & end);
+	std::shared_ptr<RegionList> regions_touched_locked (timepos_t const & start, timepos_t const & end, bool with_tail);
 
 	void notify_region_removed (std::shared_ptr<Region>);
 	void notify_region_added (std::shared_ptr<Region>);
@@ -428,8 +424,7 @@ protected:
 	void ripple_locked (timepos_t const & at, timecnt_t const & distance, RegionList *exclude);
 	void ripple_unlocked (timepos_t const & at, timecnt_t const & distance, RegionList *exclude, ThawList& thawlist, bool notify = true);
 
-	virtual void remove_dependents (std::shared_ptr<Region> /*region*/) {}
-	virtual void region_going_away (std::weak_ptr<Region> /*region*/) {}
+	virtual void region_going_away (std::weak_ptr<Region> /*region*/);
 
 	virtual XMLNode& state (bool) const;
 
@@ -438,14 +433,14 @@ protected:
 	int  remove_region_internal (std::shared_ptr<Region>, ThawList& thawlist);
 	void copy_regions (RegionList&) const;
 
-	void partition_internal (timepos_t const & start, timepos_t const & end, bool cutting, ThawList& thawlist);
+	void partition_internal (timepos_t start, timepos_t end, bool cutting, ThawList& thawlist);
 
 	std::pair<timepos_t, timepos_t> _get_extent() const;
 
-	std::shared_ptr<Playlist> cut_copy (std::shared_ptr<Playlist> (Playlist::*pmf)(timepos_t const &, timecnt_t const &, bool),
-	                                      std::list<TimelineRange>& ranges, bool result_is_hidden);
-	std::shared_ptr<Playlist> cut (timepos_t const & start, timecnt_t const & cnt, bool result_is_hidden);
-	std::shared_ptr<Playlist> copy (timepos_t const & start, timecnt_t const & cnt, bool result_is_hidden);
+	std::shared_ptr<Playlist> cut_copy (std::shared_ptr<Playlist> (Playlist::*pmf)(timepos_t const &, timecnt_t const &),
+	                                      std::list<TimelineRange>& ranges);
+	std::shared_ptr<Playlist> cut (timepos_t const & start, timecnt_t const & cnt);
+	std::shared_ptr<Playlist> copy (timepos_t const & start, timecnt_t const & cnt);
 
 	void relayer ();
 
@@ -472,12 +467,11 @@ private:
 	mutable Glib::Threads::RWLock region_lock;
 
 private:
-	void freeze_locked ();
 	void setup_layering_indices (RegionList const &);
 	void coalesce_and_check_crossfades (std::list<Temporal::TimeRange>);
 	std::shared_ptr<RegionList> find_regions_at (timepos_t const &);
 
-	mutable boost::optional<std::pair<timepos_t, timepos_t> > _cached_extent;
+	mutable std::optional<std::pair<timepos_t, timepos_t> > _cached_extent;
 	timepos_t _end_space;  //this is used when we are pasting a range with extra space at the end
 	bool _playlist_shift_active;
 
@@ -486,5 +480,4 @@ private:
 
 } /* namespace ARDOUR */
 
-#endif /* __ardour_playlist_h__ */
 

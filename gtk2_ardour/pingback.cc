@@ -97,16 +97,12 @@ build_query_string (ArdourCurl::HttpGet const & h)
 static void*
 _pingback (void *arg)
 {
-	pthread_set_name ("Pingback");
 	ArdourCurl::HttpGet h;
 
 	//initialize curl
 
 #ifdef MIXBUS
 	curl_easy_setopt (h.curl (), CURLOPT_FOLLOWLOCATION, 1);
-	/* do not check cert */
-	curl_easy_setopt (h.curl (), CURLOPT_SSL_VERIFYPEER, 0);
-	curl_easy_setopt (h.curl (), CURLOPT_SSL_VERIFYHOST, 0);
 #endif
 
 	ping_call* cm = static_cast<ping_call*> (arg);
@@ -177,7 +173,7 @@ void pingback (const string& version, const string& announce_path)
 	ping_call* cm = new ping_call (version, announce_path);
 	pthread_t thread;
 
-	pthread_create_and_store ("pingback", &thread, _pingback, cm);
+	pthread_create_and_store ("Pingback", &thread, _pingback, cm);
 }
 
 }

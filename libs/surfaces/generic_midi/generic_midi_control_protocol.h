@@ -69,7 +69,6 @@ public:
 	void thread_init ();
 
 	int set_active (bool yn);
-	static bool probe() { return true; }
 
 	void stripable_selection_changed () {}
 
@@ -83,7 +82,7 @@ public:
 	int set_feedback (bool yn);
 	bool get_feedback () const;
 
-	std::shared_ptr<PBD::Controllable> lookup_controllable (std::string const &) const;
+	std::shared_ptr<PBD::Controllable> lookup_controllable (std::string const &, MIDIControllable&) const;
 
 	void maybe_start_touch (std::shared_ptr<PBD::Controllable>);
 
@@ -131,7 +130,7 @@ public:
 	void toggle_rid_selection (int rid);
 	void remove_rid_from_selection (int rid);
 
-	PBD::Signal0<void> ConnectionChange;
+	PBD::Signal<void()> ConnectionChange;
 
 	CONTROL_PROTOCOL_THREADS_NEED_TEMPO_MAP_DECL();
 

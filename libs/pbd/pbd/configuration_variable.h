@@ -16,8 +16,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libpbd_configuration_variable_h__
-#define __libpbd_configuration_variable_h__
+#pragma once
 
 #include <string>
 
@@ -35,6 +34,7 @@ class LIBPBD_API ConfigVariableBase {
 
 	std::string name () const { return _name; }
 	void add_to_node (XMLNode&) const;
+	void add_to_node_if_modified (XMLNode&, std::string const&) const;
 	bool set_from_node (XMLNode const &);
 
 	virtual std::string get_as_string () const = 0;
@@ -170,4 +170,3 @@ class /*LIBPBD_API*/ ConfigVariableWithMutation<std::string> : public ConfigVari
 
 }
 
-#endif /* __libpbd_configuration_variable_h__ */

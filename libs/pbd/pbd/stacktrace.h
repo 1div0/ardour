@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libpbd_stacktrace_h__
-#define __libpbd_stacktrace_h__
+#pragma once
 
 #ifdef HAVE_WAFBUILD
 #include "libpbd-config.h"
@@ -31,13 +30,15 @@
 #include <glibmm/threads.h>
 #include <list>
 
-#ifdef HAVE_EXECINFO
+#ifdef HAVE_EXECINFO_H
 #include <execinfo.h>
 #include <cstdlib>
 #endif
 
 #include "pbd/libpbd_visibility.h"
 
+
+extern "C" { void libpbd_c_stacktrace (int levels); }
 
 namespace PBD {
 
@@ -50,7 +51,7 @@ class /*LIBPBD_API*/ thing_with_backtrace
 public:
 	thing_with_backtrace () {
 		trace_twb();
-#ifdef HAVE_EXECINFO
+#ifdef HAVE_EXECINFO_H
 		allocation_backtrace = new void*[50];
 		allocation_backtrace_size = backtrace (allocation_backtrace, 50);
 #else
@@ -62,7 +63,7 @@ public:
 
 	thing_with_backtrace (const thing_with_backtrace<T>& other) {
 		trace_twb();
-#ifdef HAVE_EXECINFO
+#ifdef HAVE_EXECINFO_H
 		allocation_backtrace = new void*[50];
 		allocation_backtrace_size = backtrace (allocation_backtrace, 50);
 #else
@@ -86,7 +87,7 @@ public:
 	}
 
 	static void peek_a_boo (std::ostream& stream) {
-#ifdef HAVE_EXECINFO
+#ifdef HAVE_EXECINFO_H
 		typename std::list<thing_with_backtrace<T>*>::iterator x;
 		for (x = all.begin(); x != all.end(); ++x) {
 			char **strings;
@@ -119,4 +120,3 @@ template<typename T> /*LIBPBD_API*/ Glib::Threads::Mutex PBD::thing_with_backtra
 
 } // namespace PBD
 
-#endif /* __libpbd_stacktrace_h__ */

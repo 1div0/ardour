@@ -48,8 +48,6 @@ class MIDISurface : public ARDOUR::ControlProtocol
 	MIDISurface (ARDOUR::Session&, std::string const & name, std::string const & port_name_prefix, bool use_pad_filter);
 	~MIDISurface ();
 
-	static void* request_factory (uint32_t num_requests);
-
 	std::shared_ptr<ARDOUR::Port> input_port();
 	std::shared_ptr<ARDOUR::Port> output_port();
 
@@ -60,6 +58,17 @@ class MIDISurface : public ARDOUR::ControlProtocol
 
 	ARDOUR::Session & get_session() { return *session; }
 
+	/* These two names are used in a port registration handler to try to
+	   automatically connect the device when it is discovered.
+
+	   If the value returned by these methods begins with a colon, they
+	   will be assumed to be regular expressions, and passed (without the
+	   leading colon) into the constructor of a std::regex using
+	   std::regex::extended syntax.
+
+	   Otherwise, they are assumed to be unique string identifiers, and are
+	   merely searched for in port names with std::string::find().
+	*/
 	virtual std::string input_port_name () const = 0;
 	virtual std::string output_port_name () const = 0;
 
@@ -71,13 +80,17 @@ class MIDISurface : public ARDOUR::ControlProtocol
 
 	std::list<std::shared_ptr<ARDOUR::Bundle> > bundles ();
 
-	PBD::Signal0<void> ConnectionChange;
+	PBD::Signal<void()> ConnectionChange;
 
 	CONTROL_PROTOCOL_THREADS_NEED_TEMPO_MAP_DECL();
+
+	virtual bool midi_input_handler (Glib::IOCondition ioc, MIDI::Port* port);
+	void midi_connectivity_established (bool);
 
   protected:
 	bool with_pad_filter;
 	bool _in_use;
+	bool _data_required;
 	std::string port_name_prefix;
 	MIDI::Port* _input_port;
 	MIDI::Port* _output_port;
@@ -88,6 +101,7 @@ class MIDISurface : public ARDOUR::ControlProtocol
 	void do_request (MidiSurfaceRequest*);
 
 	virtual void connect_to_parser ();
+	virtual void connect_to_port_parser (MIDI::Port&);
 	virtual void handle_midi_pitchbend_message (MIDI::Parser&, MIDI::pitchbend_t) {}
 	virtual void handle_midi_polypressure_message (MIDI::Parser&, MIDI::EventTwoBytes*) {}
 	virtual void handle_midi_controller_message (MIDI::Parser&, MIDI::EventTwoBytes*) {}
@@ -95,7 +109,6 @@ class MIDISurface : public ARDOUR::ControlProtocol
 	virtual void handle_midi_note_off_message (MIDI::Parser&, MIDI::EventTwoBytes*) {}
 	virtual void handle_midi_sysex (MIDI::Parser&, MIDI::byte *, size_t) {}
 
-	virtual bool midi_input_handler (Glib::IOCondition ioc, MIDI::Port* port);
 
 	virtual void thread_init ();
 
@@ -118,7 +131,6 @@ class MIDISurface : public ARDOUR::ControlProtocol
 
 	int _connection_state;
 
-	virtual bool connection_handler (std::weak_ptr<ARDOUR::Port>, std::string name1, std::weak_ptr<ARDOUR::Port>, std::string name2, bool yn);
 	PBD::ScopedConnectionList port_connections;
 
 	virtual int ports_acquire ();
@@ -131,4 +143,7 @@ class MIDISurface : public ARDOUR::ControlProtocol
 
 	void drop ();
 	void port_setup ();
+
+  private:
+	bool connection_handler (std::weak_ptr<ARDOUR::Port>, std::string name1, std::weak_ptr<ARDOUR::Port>, std::string name2, bool yn);
 };

@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_analysis_graph_h__
-#define __ardour_analysis_graph_h__
+#pragma once
 
 #include <map>
 #include <memory>
@@ -37,15 +36,18 @@ namespace AudioGrapher {
 	template <typename T> class Interleaver;
 }
 
-namespace ARDOUR {
+namespace PBD {
 	class Progress;
+}
+
+namespace ARDOUR {
 
 class LIBARDOUR_API AnalysisGraph {
 	public:
 		AnalysisGraph (ARDOUR::Session*);
 		~AnalysisGraph ();
 
-		void analyze_region (ARDOUR::AudioRegion const*, bool raw = false, ARDOUR::Progress* = 0);
+		void analyze_region (ARDOUR::AudioRegion const*, bool raw = false, PBD::Progress* = 0);
 		void analyze_region (std::shared_ptr<ARDOUR::AudioRegion>, bool raw = false);
 
 		void analyze_range (std::shared_ptr<ARDOUR::Route>, std::shared_ptr<ARDOUR::AudioPlaylist>, const std::list<TimelineRange>&);
@@ -56,7 +58,7 @@ class LIBARDOUR_API AnalysisGraph {
 		bool canceled () const { return _canceled; }
 
 		void set_total_samples (samplecnt_t p) { _samples_end = p; }
-		PBD::Signal2<void, samplecnt_t, samplecnt_t> Progress;
+		PBD::Signal<void(samplecnt_t, samplecnt_t)> Progress;
 
 	private:
 		ARDOUR::Session* _session;
@@ -79,4 +81,3 @@ class LIBARDOUR_API AnalysisGraph {
 		AnalysisPtr     analyser;
 };
 } // namespace ARDOUR
-#endif

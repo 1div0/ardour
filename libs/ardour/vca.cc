@@ -79,8 +79,8 @@ VCA::VCA (Session& s, int32_t num, const string& name)
 int
 VCA::init ()
 {
-	_solo_control.reset (new SoloControl (_session, X_("solo"), *this, *this, time_domain()));
-	_mute_control.reset (new MuteControl (_session, X_("mute"), *this, time_domain()));
+	_solo_control.reset (new SoloControl (_session, X_("solo"), *this, *this, *this));
+	_mute_control.reset (new MuteControl (_session, X_("mute"), *this, *this));
 
 	add_control (_gain_control);
 	add_control (_solo_control);
@@ -128,7 +128,10 @@ VCA::get_state () const
 	node->add_child_nocopy (_gain_control->get_state());
 	node->add_child_nocopy (_solo_control->get_state());
 	node->add_child_nocopy (_mute_control->get_state());
-	node->add_child_nocopy (get_automation_xml_state());
+
+	if (!skip_saving_automation) {
+		node->add_child_nocopy (get_automation_xml_state());
+	}
 
 	node->add_child_nocopy (Slavable::get_state());
 
@@ -220,10 +223,10 @@ VCA::assign (std::shared_ptr<VCA> v)
 	Slavable::assign (v);
 }
 
-SlavableControlList
+SlavableAutomationControlList
 VCA::slavables () const
 {
-	SlavableControlList rv;
+	SlavableAutomationControlList rv;
 	rv.push_back (_gain_control);
 	rv.push_back (_mute_control);
 	rv.push_back (_solo_control);

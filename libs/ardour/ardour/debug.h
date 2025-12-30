@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_debug_h__
-#define __ardour_debug_h__
+#pragma once
 
 #include <stdint.h>
 
@@ -34,6 +33,7 @@ namespace PBD {
 	namespace DEBUG {
 		LIBARDOUR_API extern DebugBits AudioEngine;
 		LIBARDOUR_API extern DebugBits AudioPlayback;
+		LIBARDOUR_API extern DebugBits AudioCacheRefill;
 		LIBARDOUR_API extern DebugBits AudioUnitConfig;
 		LIBARDOUR_API extern DebugBits AudioUnitGUI;
 		LIBARDOUR_API extern DebugBits AudioUnitProcess;
@@ -48,6 +48,7 @@ namespace PBD {
 		LIBARDOUR_API extern DebugBits CC121;
 		LIBARDOUR_API extern DebugBits CaptureAlignment;
 		LIBARDOUR_API extern DebugBits ChanMapping;
+		LIBARDOUR_API extern DebugBits Console1;
 		LIBARDOUR_API extern DebugBits ContourDesignControl;
 		LIBARDOUR_API extern DebugBits ControlProtocols;
 		LIBARDOUR_API extern DebugBits CycleTimers;
@@ -57,15 +58,21 @@ namespace PBD {
 		LIBARDOUR_API extern DebugBits FaderPort;
 		LIBARDOUR_API extern DebugBits GenericMidi;
 		LIBARDOUR_API extern DebugBits Graph;
+		LIBARDOUR_API extern DebugBits IOTaskList;
 		LIBARDOUR_API extern DebugBits LTC;
 		LIBARDOUR_API extern DebugBits LV2;
+		LIBARDOUR_API extern DebugBits LV2AtomToUI;
+		LIBARDOUR_API extern DebugBits LV2AtomFromUI;
 		LIBARDOUR_API extern DebugBits LV2Automate;
 		LIBARDOUR_API extern DebugBits LatencyCompensation;
 		LIBARDOUR_API extern DebugBits LatencyDelayLine;
 		LIBARDOUR_API extern DebugBits LatencyIO;
 		LIBARDOUR_API extern DebugBits LatencyRoute;
 		LIBARDOUR_API extern DebugBits LaunchControlXL;
+		LIBARDOUR_API extern DebugBits Launchpad;
+		LIBARDOUR_API extern DebugBits Launchkey;
 		LIBARDOUR_API extern DebugBits Layering;
+		LIBARDOUR_API extern DebugBits MIDISurface;
 		LIBARDOUR_API extern DebugBits MTC;
 		LIBARDOUR_API extern DebugBits MackieControl;
 		LIBARDOUR_API extern DebugBits MidiClock;
@@ -79,6 +86,7 @@ namespace PBD {
 		LIBARDOUR_API extern DebugBits Monitor;
 		LIBARDOUR_API extern DebugBits OrderKeys;
 		LIBARDOUR_API extern DebugBits Panning;
+		LIBARDOUR_API extern DebugBits PTImport;
 		LIBARDOUR_API extern DebugBits Peaks;
 		LIBARDOUR_API extern DebugBits PluginManager;
 		LIBARDOUR_API extern DebugBits PortConnectAuto;
@@ -87,7 +95,7 @@ namespace PBD {
 		LIBARDOUR_API extern DebugBits ProcessThreads;
 		LIBARDOUR_API extern DebugBits Processors;
 		LIBARDOUR_API extern DebugBits Push2;
-		LIBARDOUR_API extern DebugBits MIDISurface;
+		LIBARDOUR_API extern DebugBits RegionFx;
 		LIBARDOUR_API extern DebugBits Selection;
 		LIBARDOUR_API extern DebugBits SessionEvents;
 		LIBARDOUR_API extern DebugBits Slave;
@@ -110,8 +118,9 @@ namespace PBD {
 		LIBARDOUR_API extern DebugBits VSTCallbacks;
 		LIBARDOUR_API extern DebugBits WiimoteControl;
 		LIBARDOUR_API extern DebugBits Freesound;
+		LIBARDOUR_API extern DebugBits ClipRecording;
+		LIBARDOUR_API extern DebugBits TempoEstimation;
 
 	}
 }
 
-#endif /* __ardour_debug_h__ */

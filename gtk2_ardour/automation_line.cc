@@ -54,10 +54,15 @@
 
 #include "evoral/Curve.h"
 
+#include "canvas/canvas.h"
 #include "canvas/debug.h"
 
+#include "gtkmm2ext/doi.h"
+
 #include "automation_line.h"
+#include "automation_text_entry.h"
 #include "control_point.h"
+#include "editing_context.h"
 #include "gui_thread.h"
 #include "rgb_macros.h"
 #include "public_editor.h"
@@ -82,16 +87,18 @@ using namespace Temporal;
 #define SAMPLES_TO_TIME(x) (get_origin().distance (x))
 
 /** @param converter A TimeConverter whose origin_b is the start time of the AutomationList in session samples.
- *  This will not be deleted by AutomationLine.
+ *  This will not be deleted by EditorAutomationLine.
  */
-AutomationLine::AutomationLine (const string&                              name,
-                                TimeAxisView&                              tv,
-                                ArdourCanvas::Item&                        parent,
-                                std::shared_ptr<AutomationList>          al,
-                                const ParameterDescriptor&                 desc)
-	: trackview (tv)
-	, _name (name)
+AutomationLine::AutomationLine (const string&                   name,
+                                EditingContext&                 ec,
+                                ArdourCanvas::Item&             parent,
+                                ArdourCanvas::Rectangle*        drag_base,
+                                std::shared_ptr<AutomationList> al,
+                                const ParameterDescriptor&      desc)
+	:_name (name)
 	, _height (0)
+	, _line_color_name ("automation line")
+	, _insensitive_line_color (0x0)
 	, _view_index_offset (0)
 	, alist (al)
 	, _visible (Line)
@@ -100,24 +107,32 @@ AutomationLine::AutomationLine (const string&                              name,
 	, have_reset_timeout (false)
 	, no_draw (false)
 	, _is_boolean (false)
+	, _editing_context (ec)
 	, _parent_group (parent)
+	, _drag_base (drag_base)
 	, _offset (0)
 	, _maximum_time (timepos_t::max (al->time_domain()))
 	, _fill (false)
 	, _desc (desc)
+	, _control_points_inherit_color (true)
+	, _sensitive (true)
+	, atv (nullptr)
+	, entry_required_post_add (false)
+	, automation_entry (nullptr)
 {
 	group = new ArdourCanvas::Container (&parent, ArdourCanvas::Duple(0, 1.5));
-	CANVAS_DEBUG_NAME (group, "region gain envelope group");
+	CANVAS_DEBUG_NAME (group, "automation line group");
 
 	line = new ArdourCanvas::PolyLine (group);
-	CANVAS_DEBUG_NAME (line, "region gain envelope line");
+	CANVAS_DEBUG_NAME (line, "automation line");
 	line->set_data ("line", this);
+	line->set_data ("drag-base", _drag_base);
 	line->set_outline_width (2.0);
 	line->set_covers_threshold (4.0);
 
 	line->Event.connect (sigc::mem_fun (*this, &AutomationLine::event_handler));
 
-	trackview.session()->register_with_memento_command_factory(alist->id(), this);
+	_editing_context.session()->register_with_memento_command_factory(alist->id(), this);
 
 	interpolation_changed (alist->interpolation ());
 
@@ -128,33 +143,42 @@ AutomationLine::~AutomationLine ()
 {
 	delete group; // deletes child items
 
-	for (std::vector<ControlPoint *>::iterator i = control_points.begin(); i != control_points.end(); i++) {
-		(*i)->unset_item ();
-		delete *i;
+	for (auto & cp :control_points) {
+		cp->unset_item ();
+		delete cp;
 	}
 	control_points.clear ();
+}
+
+void
+AutomationLine::set_sensitive (bool yn)
+{
+	_sensitive = yn;
+
+	set_line_color (_line_color_name, _line_color_mod);
+
+	for (auto & cp : control_points) {
+		if (yn) {
+			cp->show();
+		} else {
+			cp->hide ();
+		}
+	}
 }
 
 timepos_t
 AutomationLine::get_origin() const
 {
-	/* this is the default for all non-derived AutomationLine classes: the
+	/* this is the default for all non-derived EditorAutomationLine classes: the
 	   origin is zero, in whatever time domain the list we represent uses.
 	*/
 	return timepos_t (the_list()->time_domain());
 }
 
 bool
-AutomationLine::event_handler (GdkEvent* event)
-{
-	return PublicEditor::instance().canvas_line_event (event, line, this);
-}
-
-bool
 AutomationLine::is_stepped() const
 {
-	return (_desc.toggled ||
-	        (alist && alist->interpolation() == AutomationList::Discrete));
+	return (_desc.toggled || (alist && alist->interpolation() == AutomationList::Discrete));
 }
 
 void
@@ -172,30 +196,30 @@ AutomationLine::update_visibility ()
 		}
 
 		if (_visible & ControlPoints) {
-			for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
-				(*i)->show ();
+			for (auto & cp : control_points) {
+				cp->show ();
 			}
 		} else if (_visible & SelectedControlPoints) {
-			for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
-				if ((*i)->selected()) {
-					(*i)->show ();
+			for (auto & cp : control_points) {
+				if (cp->selected()) {
+					cp->show ();
 				} else {
-					(*i)->hide ();
+					cp->hide ();
 				}
 			}
 		} else {
-			for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
-				(*i)->hide ();
+			for (auto & cp : control_points) {
+				cp->hide ();
 			}
 		}
 
 	} else {
 		line->hide ();
-		for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
+		for (auto & cp : control_points) {
 			if (_visible & ControlPoints) {
-				(*i)->show ();
+				cp->show ();
 			} else {
-				(*i)->hide ();
+				cp->hide ();
 			}
 		}
 	}
@@ -209,6 +233,7 @@ AutomationLine::get_uses_gain_mapping () const
 		case BusSendLevel:
 		case EnvelopeAutomation:
 		case TrimAutomation:
+		case SurroundSendLevel:
 		case InsertReturnLevel:
 			return true;
 		default:
@@ -226,6 +251,19 @@ AutomationLine::hide ()
 	set_visibility (AutomationLine::VisibleAspects (_visible & ~Line));
 }
 
+void
+AutomationLine::hide_all ()
+{
+	set_visibility (AutomationLine::VisibleAspects (0));
+}
+
+void
+AutomationLine::show ()
+{
+	/* hide everything */
+	set_visibility (AutomationLine::VisibleAspects (~0));
+}
+
 double
 AutomationLine::control_point_box_size ()
 {
@@ -233,11 +271,11 @@ AutomationLine::control_point_box_size ()
 	uiscale = std::max<float> (1.f, powf (uiscale, 1.71));
 
 	if (_height > TimeAxisView::preset_height (HeightLarger)) {
-		return rint (8.0 * uiscale);
+		return rint (10.0 * uiscale);
 	} else if (_height > (guint32) TimeAxisView::preset_height (HeightNormal)) {
-		return rint (6.0 * uiscale);
+		return rint (8.0 * uiscale);
 	}
-	return rint (4.0 * uiscale);
+	return rint (6.0 * uiscale);
 }
 
 void
@@ -248,8 +286,8 @@ AutomationLine::set_height (guint32 h)
 
 		double bsz = control_point_box_size();
 
-		for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
-			(*i)->set_size (bsz);
+		for (auto & cp : control_points) {
+			cp->set_size (bsz);
 		}
 
 		if (_fill) {
@@ -262,14 +300,79 @@ AutomationLine::set_height (guint32 h)
 }
 
 void
-AutomationLine::set_line_color (uint32_t color)
+AutomationLine::set_line_color (string const & color_name, string color_mod)
 {
-	_line_color = color;
-	line->set_outline_color (color);
+	_line_color_name = color_name;
+	_line_color_mod = color_mod;
 
-	Gtkmm2ext::SVAModifier mod = UIConfiguration::instance().modifier ("automation line fill");
+	if (_sensitive) {
+		line->set_outline_color (UIConfiguration::instance().color (color_name));
+	} else {
+		line->set_outline_color (_insensitive_line_color);
+	}
 
-	line->set_fill_color ((color & 0xffffff00) + mod.a()*255);
+	/* The fill color (and thus the color_mod) is used to shade the area under some
+	 * automation lines
+	 */
+
+	Gtkmm2ext::SVAModifier mod = UIConfiguration::instance().modifier (color_mod.empty () ? "automation line fill" : color_mod);
+	line->set_fill_color ((line->outline_color() & 0xffffff00) + (mod.a() * 255));
+	line->set_fill (true);
+
+	if (_control_points_inherit_color) {
+		for (auto & cp : control_points) {
+			cp->set_color ();
+		}
+	}
+}
+
+void
+AutomationLine::set_colors ()
+{
+	set_line_color (_line_color_name);
+	for (auto & cp : control_points) {
+		cp->set_color ();
+	}
+}
+
+void
+AutomationLine::set_insensitive_line_color (uint32_t color)
+{
+	_insensitive_line_color = color;
+}
+
+uint32_t
+AutomationLine::get_line_fill_color() const
+{
+	return line->fill_color ();
+}
+
+uint32_t
+AutomationLine::get_line_color() const
+{
+	return line->outline_color ();
+}
+
+uint32_t
+AutomationLine::get_line_selected_color() const
+{
+	return line->outline_color ();
+}
+
+bool
+AutomationLine::control_points_inherit_color () const
+{
+	return _control_points_inherit_color;
+}
+
+void
+AutomationLine::set_control_points_inherit_color (bool yn)
+{
+	_control_points_inherit_color = yn;
+
+	for (auto & cp : control_points) {
+		cp->set_color ();
+	}
 }
 
 ControlPoint*
@@ -293,7 +396,7 @@ AutomationLine::nth (uint32_t n) const
 }
 
 void
-AutomationLine::modify_point_y (ControlPoint& cp, double y)
+AutomationLine::modify_points_y (std::vector<ControlPoint*> const& cps, double y)
 {
 	/* clamp y-coord appropriately. y is supposed to be a normalized fraction (0.0-1.0),
 	   and needs to be converted to a canvas unit distance.
@@ -303,17 +406,19 @@ AutomationLine::modify_point_y (ControlPoint& cp, double y)
 	y = min (1.0, y);
 	y = _height - (y * _height);
 
-	trackview.editor().begin_reversible_command (_("automation event move"));
-	trackview.editor().session()->add_command (
-		new MementoCommand<AutomationList> (memento_command_binder(), &get_state(), 0));
-
-	cp.move_to (cp.get_x(), y, ControlPoint::Full);
+	_editing_context.begin_reversible_command (_("automation event move"));
+	_editing_context.add_command (new MementoCommand<AutomationList> (memento_command_binder(), &get_state(), 0));
 
 	alist->freeze ();
-	sync_model_with_view_point (cp);
+	for (auto const& cp : cps) {
+		cp->move_to (cp->get_x(), y, ControlPoint::Full);
+		sync_model_with_view_point (*cp);
+	}
 	alist->thaw ();
 
-	reset_line_coords (cp);
+	for (auto const& cp : cps) {
+		reset_line_coords (*cp);
+	}
 
 	if (line_points.size() > 1) {
 		line->set_steps (line_points, is_stepped());
@@ -321,11 +426,10 @@ AutomationLine::modify_point_y (ControlPoint& cp, double y)
 
 	update_pending = false;
 
-	trackview.editor().session()->add_command (
-		new MementoCommand<AutomationList> (memento_command_binder(), 0, &alist->get_state()));
+	_editing_context.add_command (new MementoCommand<AutomationList> (memento_command_binder(), 0, &alist->get_state()));
 
-	trackview.editor().commit_reversible_command ();
-	trackview.editor().session()->set_dirty ();
+	_editing_context.commit_reversible_command ();
+	_editing_context.session()->set_dirty ();
 }
 
 void
@@ -400,6 +504,7 @@ AutomationLine::string_to_fraction (string const & s) const
 		case BusSendLevel:
 		case EnvelopeAutomation:
 		case TrimAutomation:
+		case SurroundSendLevel:
 		case InsertReturnLevel:
 			if (s == "-inf") { /* translation */
 				v = 0;
@@ -423,8 +528,7 @@ AutomationLine::string_to_fraction (string const & s) const
 void
 AutomationLine::start_drag_single (ControlPoint* cp, double x, float fraction)
 {
-	trackview.editor().session()->add_command (
-		new MementoCommand<AutomationList> (memento_command_binder(), &get_state(), 0));
+	_editing_context.add_command (new MementoCommand<AutomationList> (memento_command_binder(), &get_state(), 0));
 
 	_drag_points.clear ();
 	_drag_points.push_back (cp);
@@ -448,8 +552,7 @@ AutomationLine::start_drag_single (ControlPoint* cp, double x, float fraction)
 void
 AutomationLine::start_drag_line (uint32_t i1, uint32_t i2, float fraction)
 {
-	trackview.editor().session()->add_command (
-		new MementoCommand<AutomationList> (memento_command_binder (), &get_state(), 0));
+	_editing_context.add_command (new MementoCommand<AutomationList> (memento_command_binder (), &get_state(), 0));
 
 	_drag_points.clear ();
 
@@ -467,8 +570,7 @@ AutomationLine::start_drag_line (uint32_t i1, uint32_t i2, float fraction)
 void
 AutomationLine::start_drag_multiple (list<ControlPoint*> cp, float fraction, XMLNode* state)
 {
-	trackview.editor().session()->add_command (
-		new MementoCommand<AutomationList> (memento_command_binder(), state, 0));
+	_editing_context.add_command (new MementoCommand<AutomationList> (memento_command_binder(), state, 0));
 
 	_drag_points = cp;
 	start_drag_common (0, fraction);
@@ -490,7 +592,7 @@ AutomationLine::ContiguousControlPoints::ContiguousControlPoints (AutomationLine
 }
 
 void
-AutomationLine::ContiguousControlPoints::compute_x_bounds (PublicEditor& e)
+AutomationLine::ContiguousControlPoints::compute_x_bounds ()
 {
 	uint32_t sz = size();
 
@@ -598,9 +700,9 @@ AutomationLine::dt_to_dx (timepos_t const & pos, timecnt_t const & dt)
 	/* convert a shift of pos by dt into an absolute timepos */
 	timepos_t const new_pos ((pos + dt + get_origin()).shift_earlier (offset()));
 	/* convert to pixels */
-	double px = trackview.editor().time_to_pixel_unrounded (new_pos);
+	double px = _editing_context.time_to_pixel_unrounded (new_pos);
 	/* convert back to pixels-relative-to-origin */
-	px -= trackview.editor().time_to_pixel_unrounded (get_origin());
+	px -= _editing_context.time_to_pixel_unrounded (get_origin());
 	return px;
 }
 
@@ -653,7 +755,7 @@ AutomationLine::drag_motion (timecnt_t const & pdt, float fraction, bool ignore_
 		}
 
 		for (auto const & ccp : contiguous_points) {
-			ccp->compute_x_bounds (trackview.editor());
+			ccp->compute_x_bounds ();
 		}
 		_drag_had_movement = true;
 	}
@@ -780,10 +882,9 @@ AutomationLine::end_drag (bool with_push, uint32_t final_index)
 		line->set_steps (line_points, is_stepped());
 	}
 
-	trackview.editor().session()->add_command (
-		new MementoCommand<AutomationList>(memento_command_binder (), 0, &alist->get_state()));
+	_editing_context.add_command (new MementoCommand<AutomationList>(memento_command_binder (), 0, &alist->get_state()));
 
-	trackview.editor().session()->set_dirty ();
+	_editing_context.session()->set_dirty ();
 	did_push = false;
 
 	contiguous_points.clear ();
@@ -815,7 +916,7 @@ AutomationLine::sync_model_with_view_point (ControlPoint& cp)
 	const timepos_t absolute_time = model_time + origin;
 
 	/* now convert to pixels relative to start of region, which matches view_x */
-	const double model_x = trackview.editor().time_to_pixel_unrounded (absolute_time) - trackview.editor().time_to_pixel_unrounded (origin);
+	const double model_x = _editing_context.time_to_pixel_unrounded (absolute_time) - _editing_context.time_to_pixel_unrounded (origin);
 
 	if (view_x != model_x) {
 
@@ -828,7 +929,7 @@ AutomationLine::sync_model_with_view_point (ControlPoint& cp)
 		 * pixel_to_sample() islinear only depending on zoom level.
 		 */
 
-		const timepos_t view_samples (trackview.editor().pixel_to_sample (view_x));
+		const timepos_t view_samples (_editing_context.pixel_to_sample (view_x));
 
 		/* measure distance from RegionView origin (this preserves time domain) */
 
@@ -868,7 +969,7 @@ AutomationLine::control_points_adjacent (double xval, uint32_t & before, uint32_
 	ControlPoint *acp = 0;
 	double unit_xval;
 
-	unit_xval = trackview.editor().sample_to_pixel_unrounded (xval);
+	unit_xval = _editing_context.sample_to_pixel_unrounded (xval);
 
 	for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
 
@@ -924,17 +1025,16 @@ AutomationLine::is_first_point (ControlPoint& cp)
 void
 AutomationLine::remove_point (ControlPoint& cp)
 {
-	trackview.editor().begin_reversible_command (_("remove control point"));
+	_editing_context.begin_reversible_command (_("remove control point"));
 	XMLNode &before = alist->get_state();
 
-	trackview.editor ().get_selection ().clear_points ();
+	_editing_context.get_selection ().clear_points ();
 	alist->erase (cp.model());
 
-	trackview.editor().session()->add_command(
-		new MementoCommand<AutomationList> (memento_command_binder (), &before, &alist->get_state()));
+	_editing_context.add_command (new MementoCommand<AutomationList> (memento_command_binder (), &before, &alist->get_state()));
 
-	trackview.editor().commit_reversible_command ();
-	trackview.editor().session()->set_dirty ();
+	_editing_context.commit_reversible_command ();
+	_editing_context.session()->set_dirty ();
 }
 
 /** Get selectable points within an area.
@@ -945,16 +1045,15 @@ AutomationLine::remove_point (ControlPoint& cp)
  *  @param result Filled in with selectable things; in this case, ControlPoints.
  */
 void
-AutomationLine::get_selectables (timepos_t const & start, timepos_t const & end, double botfrac, double topfrac, list<Selectable*>& results)
+AutomationLine::_get_selectables (timepos_t const & start, timepos_t const & end, double botfrac, double topfrac, list<Selectable*>& results, bool /*within*/)
 {
 	/* convert fractions to display coordinates with 0 at the top of the track */
-	double const bot_track = (1 - topfrac) * trackview.current_height ();
-	double const top_track = (1 - botfrac) * trackview.current_height ();
+	double const bot_track = (1 - topfrac) * _height; // this should StreamView::child_height () for RegionGain
+	double const top_track = (1 - botfrac) * _height; //  --"--
 
 	for (auto const & cp : control_points) {
 
 		const timepos_t w = session_position ((*cp->model())->when);
-
 
 		if (w >= start && w <= end && cp->get_y() >= bot_track && cp->get_y() <= top_track) {
 			results.push_back (cp);
@@ -971,12 +1070,17 @@ AutomationLine::get_inverted_selectables (Selection&, list<Selectable*>& /*resul
 void
 AutomationLine::set_selected_points (PointSelection const & points)
 {
-	for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
-		(*i)->set_selected (false);
+	bool one_of_ours = false;
+
+	for (auto & cp : control_points) {
+		cp->set_selected (false);
 	}
 
-	for (PointSelection::const_iterator i = points.begin(); i != points.end(); ++i) {
-		(*i)->set_selected (true);
+	for (auto & p : points) {
+		if (&p->line() == this) {
+			one_of_ours = true;
+			p->set_selected (true);
+		}
 	}
 
 	if (points.empty()) {
@@ -986,14 +1090,154 @@ AutomationLine::set_selected_points (PointSelection const & points)
 	}
 
 	set_colors ();
+
+	if (points.empty() || !one_of_ours) {
+		return;
+	}
+
+	if (one_of_ours && entry_required_post_add && points.size() == 1) {
+		text_edit_control_point (*points.front(), false);
+	} else {
+		if (points.size() > 1 && automation_entry) {
+			delete_when_idle (automation_entry);
+		}
+	}
+
+	if (one_of_ours) {
+		entry_required_post_add = false;
+	}
 }
 
 void
-AutomationLine::set_colors ()
+AutomationLine::text_edit_control_point (ControlPoint& cp, bool grab_focus)
 {
-	set_line_color (UIConfiguration::instance().color ("automation line"));
-	for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
-		(*i)->set_color ();
+	switch (_desc.type) {
+	case GainAutomation:
+	case PanAzimuthAutomation:
+	case PanElevationAutomation:
+	case PanWidthAutomation:
+	case PanFrontBackAutomation:
+	case PanLFEAutomation:
+	case MidiCCAutomation:
+	case MidiPitchBenderAutomation:
+	case MidiChannelPressureAutomation:
+	case MidiNotePressureAutomation:
+	case FadeInAutomation:
+	case FadeOutAutomation:
+	case EnvelopeAutomation:
+	case TrimAutomation:
+	case PhaseAutomation:
+	case MonitoringAutomation:
+	case BusSendLevel:
+	case BusSendEnable:
+	case SurroundSendLevel:
+	case InsertReturnLevel:
+	case MainOutVolume:
+	case MidiVelocityAutomation:
+	case PanSurroundX:
+	case PanSurroundY:
+	case PanSurroundZ:
+	case PanSurroundSize:
+	case PanSurroundSnap:
+	case BinauralRenderMode:
+	case PanSurroundElevationEnable:
+	case PanSurroundZones:
+	case PanSurroundRamp:
+	case SendLevelAutomation:
+	case SendEnableAutomation:
+	case SendAzimuthAutomation:
+		break;
+	default:
+		/* No text editing values for this type of automation */
+		entry_required_post_add = false;
+		return;
+	}
+
+	std::string txt = ARDOUR::value_as_string (_desc, (*cp.model())->value);
+
+	ArdourCanvas::GtkCanvas* cvp = dynamic_cast<ArdourCanvas::GtkCanvas*> (cp.item().canvas());
+	Gtk::Window* toplevel = static_cast<Gtk::Window*> (cvp->get_toplevel());
+	if (!toplevel) {
+		entry_required_post_add = false;
+		return;
+	}
+
+	if (automation_entry) {
+		delete_when_idle (automation_entry);
+		automation_entry = nullptr;
+	}
+
+	automation_entry = new AutomationTextEntry (toplevel, txt);
+	automation_entry->set_name (X_("BigTextEntry"));
+	automation_entry->use_text.connect (sigc::bind (sigc::mem_fun (*this, &AutomationLine::value_edited), &cp));
+	automation_entry->going_away.connect (sigc::mem_fun (*this, &AutomationLine::automation_text_deleted));
+
+	ArdourCanvas::Duple d (cp.get_x(), cp.get_y());
+	d = cp.item().item_to_window (d);
+
+	int wx, wy;
+
+	cvp->translate_coordinates (*toplevel, d.x, d.y, wx, wy);
+
+	/* Shift the text entry a bit to the right */
+	wx += 30 * UIConfiguration::instance().get_ui_scale();
+
+	gint rwx, rwy;
+
+	toplevel->get_position (rwx, rwy);
+	automation_entry->move (rwx + wx, rwy + wy);
+	automation_entry->show ();
+
+	if (grab_focus) {
+		automation_entry->activate_entry ();
+	}
+}
+
+void
+AutomationLine::begin_edit ()
+{
+	if (automation_entry) {
+		return;
+	}
+
+	PointSelection& points (_editing_context.get_selection().points);
+
+	if (points.size() != 1) {
+		return;
+	}
+
+	if (&(points.front()->line()) == this) {
+		text_edit_control_point (*points.front(), true);
+	}
+}
+
+bool
+AutomationLine::end_edit ()
+{
+	if (automation_entry) {
+		delete_when_idle (automation_entry);
+		return true;
+	}
+	return false;
+}
+
+void
+AutomationLine::automation_text_deleted (AutomationTextEntry* ate)
+{
+	if (ate == automation_entry) {
+		automation_entry = nullptr;
+	}
+}
+
+void
+AutomationLine::value_edited (std::string str, int /* what_next*/, ControlPoint* cp)
+{
+	bool legal;
+	double val = ARDOUR::string_as_value (_desc, str, legal);
+
+	if (legal) {
+		alist->modify (cp->model(), (*cp->model())->when, val);
+		automation_entry->hide ();
 	}
 }
 
@@ -1004,7 +1248,7 @@ AutomationLine::list_changed ()
 
 	if (!update_pending) {
 		update_pending = true;
-		Gtkmm2ext::UI::instance()->call_slot (invalidator (*this), boost::bind (&AutomationLine::queue_reset, this));
+		Gtkmm2ext::UI::instance()->call_slot (invalidator (*this), std::bind (&AutomationLine::queue_reset, this));
 	}
 }
 
@@ -1026,8 +1270,8 @@ AutomationLine::reset_callback (const Evoral::ControlList& events)
 	uint32_t np;
 
 	if (events.empty()) {
-		for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
-			delete *i;
+		for (auto & cp : control_points) {
+			delete cp;
 		}
 		control_points.clear ();
 		line->hide();
@@ -1037,8 +1281,8 @@ AutomationLine::reset_callback (const Evoral::ControlList& events)
 
 	/* hide all existing points, and the line */
 
-	for (vector<ControlPoint*>::iterator i = control_points.begin(); i != control_points.end(); ++i) {
-		(*i)->hide();
+	for (auto & cp : control_points) {
+		cp->hide();
 	}
 
 	line->hide ();
@@ -1065,8 +1309,7 @@ AutomationLine::reset_callback (const Evoral::ControlList& events)
 		double ty = model_to_view_coord_y ((*ai)->value);
 
 		if (isnan_local (ty)) {
-			warning << string_compose (_("Ignoring illegal points on AutomationLine \"%1\""),
-			                           _name) << endmsg;
+			warning << string_compose (_("Ignoring illegal points on EditorAutomationLine \"%1\""), _name) << endmsg;
 			continue;
 		}
 
@@ -1099,7 +1342,7 @@ AutomationLine::reset_callback (const Evoral::ControlList& events)
 		 * zoom and scroll into account).
 		 */
 
-		double px = trackview.editor().duration_to_pixels_unrounded (tx);
+		double px = _editing_context.duration_to_pixels_unrounded (tx);
 		add_visible_control_point (vp, pi, px, ty, ai, np);
 		vp++;
 	}
@@ -1136,7 +1379,7 @@ AutomationLine::reset_callback (const Evoral::ControlList& events)
 			double ty = model_to_view_coord_y (e.unlocked_eval (_offset));
 
 			if (isnan_local (ty)) {
-				warning << string_compose (_("Ignoring illegal points on AutomationLine \"%1\""), _name) << endmsg;
+				warning << string_compose (_("Ignoring illegal points on EditorAutomationLine \"%1\""), _name) << endmsg;
 
 
 			} else {
@@ -1157,13 +1400,13 @@ AutomationLine::reset_callback (const Evoral::ControlList& events)
 		 * from the last point to the very end
 		 */
 
-		double px = trackview.editor().duration_to_pixels_unrounded (model_to_view_coord_x (_offset + _maximum_time));
+		double px = _editing_context.duration_to_pixels_unrounded (model_to_view_coord_x (_offset + _maximum_time));
 
 		if (control_points[control_points.size() - 1]->get_x() != px && following != e.end()) {
 			double ty = model_to_view_coord_y (e.unlocked_eval (_offset + _maximum_time));
 
 			if (isnan_local (ty)) {
-				warning << string_compose (_("Ignoring illegal points on AutomationLine \"%1\""), _name) << endmsg;
+				warning << string_compose (_("Ignoring illegal points on EditorAutomationLine \"%1\""), _name) << endmsg;
 
 
 			} else {
@@ -1179,7 +1422,9 @@ AutomationLine::reset_callback (const Evoral::ControlList& events)
 		update_visibility ();
 	}
 
-	set_selected_points (trackview.editor().get_selection().points);
+	if (!entry_required_post_add) {
+		set_selected_points (_editing_context.get_selection().points);
+	}
 }
 
 void
@@ -1209,7 +1454,7 @@ AutomationLine::queue_reset ()
 {
 	/* this must be called from the GUI thread */
 
-	if (trackview.editor().session()->transport_rolling() && alist->automation_write()) {
+	if (_editing_context.session()->transport_rolling() && alist->automation_write()) {
 		/* automation write pass ... defer to a timeout */
 		/* redraw in 1/4 second */
 		if (!have_reset_timeout) {
@@ -1231,8 +1476,7 @@ AutomationLine::clear ()
 	XMLNode &before = alist->get_state();
 	alist->clear();
 
-	trackview.editor().session()->add_command (
-		new MementoCommand<AutomationList> (memento_command_binder (), &before, &alist->get_state()));
+	_editing_context.add_command (new MementoCommand<AutomationList> (memento_command_binder (), &before, &alist->get_state()));
 }
 
 void
@@ -1456,10 +1700,10 @@ AutomationLine::connect_to_list ()
 {
 	_list_connections.drop_connections ();
 
-	alist->StateChanged.connect (_list_connections, invalidator (*this), boost::bind (&AutomationLine::list_changed, this), gui_context());
+	alist->StateChanged.connect (_list_connections, invalidator (*this), std::bind (&AutomationLine::list_changed, this), gui_context());
 
 	alist->InterpolationChanged.connect (
-		_list_connections, invalidator (*this), boost::bind (&AutomationLine::interpolation_changed, this, _1), gui_context());
+		_list_connections, invalidator (*this), std::bind (&AutomationLine::interpolation_changed, this, _1), gui_context());
 }
 
 MementoCommandBinder<AutomationList>*
@@ -1509,4 +1753,74 @@ AutomationLine::set_offset (timepos_t const & off)
 {
 	_offset = off;
 	reset ();
+}
+
+void
+AutomationLine::add (std::shared_ptr<AutomationControl> control, GdkEvent* event, timepos_t const & pos, double y, bool with_guard_points, bool from_kbd)
+{
+	if (alist->in_write_pass()) {
+		/* do not allow the GUI to add automation events during an
+		   automation write pass.
+		*/
+		return;
+	}
+
+	timepos_t when (pos);
+	Session* session (_editing_context.session());
+
+	_editing_context.snap_to_with_modifier (when, event);
+
+	if (!from_kbd && (UIConfiguration::instance().get_new_automation_points_on_lane() || control->list()->size () == 0)) {
+		if (control->list()->size () == 0) {
+			y = control->get_value ();
+		} else {
+			y = control->list()->eval (when);
+		}
+	} else if (from_kbd) {
+		/* relax, y is in model space already */
+	} else {
+		double x = 0;
+		grab_item().canvas_to_item (x, y);
+		/* compute vertical fractional position */
+		y = 1.0 - (y / height());
+		/* map using line */
+		view_to_model_coord_y (y);
+	}
+
+	XMLNode& before = alist->get_state();
+	std::list<Selectable*> results;
+
+	if (from_kbd) {
+		entry_required_post_add = false;
+	}
+
+	if (alist->editor_add (when, y, with_guard_points)) {
+
+		if (control->automation_state () == ARDOUR::Off) {
+			if (atv) {
+				atv->set_automation_state (ARDOUR::Play);
+			}
+		}
+
+		if (UIConfiguration::instance().get_automation_edit_cancels_auto_hide () && control == session->recently_touched_controllable ()) {
+			RouteTimeAxisView::signal_ctrl_touched (false);
+		}
+
+		XMLNode& after = alist->get_state();
+		_editing_context.begin_reversible_command (_("add automation event"));
+		_editing_context.add_command (new MementoCommand<ARDOUR::AutomationList> (*alist.get (), &before, &after));
+
+		get_selectables (when, when, 0.0, 1.0, results);
+		_editing_context.get_selection ().set (results);
+
+		_editing_context.commit_reversible_command ();
+		session->set_dirty ();
+	}
+
+}
+
+void
+AutomationLine::set_atv (AutomationTimeAxisView& a)
+{
+	atv = &a;
 }

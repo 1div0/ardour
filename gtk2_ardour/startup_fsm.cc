@@ -18,10 +18,10 @@
 
 #include <vector>
 
-#include <gtkmm/dialog.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/messagedialog.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/dialog.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/messagedialog.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/basename.h"
 #include "pbd/file_archive.h"
@@ -69,12 +69,14 @@ using std::string;
 using std::vector;
 
 StartupFSM::StartupFSM (EngineControl& amd)
-	: session_existing_sample_rate (0)
+	: session_domain (Config->get_preferred_time_domain())
+	, session_existing_sample_rate (0)
 	, session_engine_hints ("EngineHints")
 	, session_is_new (false)
 	, session_name_edited (false)
+	, session_loaded (false)
 	, new_user (NewUserWizard::required())
-	, new_session_required (ARDOUR_COMMAND_LINE::new_session || (!ARDOUR::Profile->get_mixbus() && new_user))
+	, new_session_required (ARDOUR_COMMAND_LINE::new_session || new_user)
 	, _state (new_user ? WaitingForNewUser : WaitingForSessionPath)
 	, audiomidi_dialog (amd)
 	, new_user_dialog (0)
@@ -98,9 +100,8 @@ StartupFSM::StartupFSM (EngineControl& amd)
 
 	Application* app = Application::instance ();
 
-	app->ShouldQuit.connect (sigc::mem_fun (*this, &StartupFSM::queue_finish));
-
-	Gtkmm2ext::Keyboard::HideMightMeanQuit.connect (sigc::mem_fun (*this, &StartupFSM::dialog_hidden));
+	app_quit_connection = app->ShouldQuit.connect (sigc::mem_fun (*this, &StartupFSM::queue_finish));
+	hide_quit_connection = Gtkmm2ext::Keyboard::HideMightMeanQuit.connect (sigc::mem_fun (*this, &StartupFSM::dialog_hidden));
 }
 
 StartupFSM::~StartupFSM ()
@@ -109,6 +110,15 @@ StartupFSM::~StartupFSM ()
 	delete pre_release_dialog;
 	delete plugin_scan_dialog;
 	delete new_user_dialog;
+}
+
+void
+StartupFSM::set_complete ()
+{
+	app_quit_connection.disconnect ();
+	hide_quit_connection.disconnect ();
+
+	_state = NotWaiting;
 }
 
 void
@@ -133,6 +143,10 @@ StartupFSM::start ()
 	DEBUG_TRACE (DEBUG::GuiStartup, string_compose (X_("State at startup: %1\n"), enum_2_string (_state)));
 
 	switch (_state) {
+	case NotWaiting:
+		abort();
+		break;
+
 	case WaitingForPreRelease:
 		show_pre_release_dialog ();
 		break;
@@ -199,6 +213,10 @@ StartupFSM::dialog_response_handler (int response, StartupFSM::DialogID dialog_i
 	 */
 
 	switch (_state) {
+	case NotWaiting:
+		abort();
+		break;
+
 	case WaitingForPreRelease:
 		switch (dialog_id) {
 		case ApplicationPseudoDialog:
@@ -316,7 +334,7 @@ StartupFSM::dialog_response_handler (int response, StartupFSM::DialogID dialog_i
 			switch (response) {
 			case RESPONSE_OK:
 				if (AudioEngine::instance()->running()) {
-					_signal_response (LoadSession);
+					_signal_response (session_loaded ? LoadedSession : LoadSession);
 				} else {
 					/* Engine died unexpectedly (it was
 					 * running after
@@ -419,7 +437,7 @@ void
 StartupFSM::show_session_dialog (bool new_session_required)
 {
 	set_state (WaitingForSessionPath);
-	session_dialog = new SessionDialog (new_session_required, session_name, session_path, session_template, false);
+	session_dialog = new SessionDialog (new_session_required ? SessionDialog::New : SessionDialog::Recent, session_name, session_path, session_template, false);
 	current_dialog_connection = session_dialog->signal_response().connect (sigc::bind (sigc::mem_fun (*this, &StartupFSM::dialog_response_handler), NewSessionDialog));
 	session_dialog->set_position (WIN_POS_CENTER);
 	session_dialog->present ();
@@ -556,12 +574,14 @@ StartupFSM::get_session_parameters_from_command_line (bool new_session_required)
 }
 
 bool
-StartupFSM::get_session_parameters_from_path (string const & path, string const & template_name, bool new_session_required)
+StartupFSM::get_session_parameters_from_path (string const & path_, string const & template_name, bool new_session_required)
 {
-	if (path.empty()) {
+	if (path_.empty()) {
 		/* use GUI to ask the user */
 		return false;
 	}
+
+	string path (path_);
 
 	if (Glib::file_test (path.c_str(), Glib::FILE_TEST_EXISTS)) {
 
@@ -576,6 +596,10 @@ StartupFSM::get_session_parameters_from_path (string const & path, string const 
 				/* load it anyway */
 			}
 		}
+
+		// TODO THIS SHOULD CALL ::check_session_parameters (false)
+		// to handle session archives etc
+		// (needs refactoring of ::check_session_parameters)
 
 		session_name = basename_nosuffix (path);
 
@@ -613,21 +637,22 @@ StartupFSM::get_session_parameters_from_path (string const & path, string const 
 
 	}
 
-	/*  Everything after this involves a new session
-	 *
-	 *  ... did the  user give us a path or just a name?
-	 */
-
-	if (path.find (G_DIR_SEPARATOR) == string::npos) {
-		/* user gave session name with no path info, use
-		   default session folder.
-		*/
-		session_name = ARDOUR_COMMAND_LINE::session_name;
-		session_path = Glib::build_filename (Config->get_default_session_parent_dir (), session_name);
-	} else {
-		session_name = basename_nosuffix (path);
-		session_path = path;
+	if (!ARDOUR_COMMAND_LINE::new_session) {
+		return false;
 	}
+
+	/*  ... did the  user give us a path or just a name? */
+	if (!Glib::path_is_absolute (path)) {
+		/* check for cwd relative path */
+		if (path.find (G_DIR_SEPARATOR) == string::npos) {
+			path = Glib::build_filename (Config->get_default_session_parent_dir (), path);
+		}
+	}
+
+	/* Everything after this involves a new session */
+
+	session_name = basename_nosuffix (path);
+	session_path = path;
 
 	session_template = string ();
 
@@ -704,9 +729,11 @@ int
 StartupFSM::check_session_parameters (bool must_be_new)
 {
 	bool requested_new = false;
+	session_loaded     = false;
 
-	session_name = session_dialog->session_name (requested_new);
-	session_path = session_dialog->session_folder ();
+	session_name        = session_dialog->session_name (requested_new);
+	session_path        = session_dialog->session_folder ();
+	session_domain      = session_dialog->session_domain ();
 	session_name_edited = session_dialog->was_new_name_edited ();
 
 	if (must_be_new) {
@@ -750,6 +777,21 @@ StartupFSM::check_session_parameters (bool must_be_new)
 		}
 	}
 
+	if (!must_be_new) {
+		int rv = ARDOUR_UI::instance()->new_session_from_aaf (session_name, Config->get_default_session_parent_dir(), session_path, session_name);
+		if (rv < 0) {
+			ArdourMessageDialog msg (*session_dialog, _("Extracting aaf failed"));
+			msg.run ();
+			return 1;
+		} else if (rv == 0) {
+			if (ARDOUR_UI::instance()->session ()) {
+				session_existing_sample_rate = ARDOUR_UI::instance()->session ()->nominal_sample_rate ();
+			}
+			session_loaded = true;
+			return 0;
+		}
+	}
+
 	/* check for ".ardour" in statefile name, because we don't want
 	 * it
 	 *
@@ -775,25 +817,11 @@ StartupFSM::check_session_parameters (bool must_be_new)
 		session_template = session_dialog->session_template_name();
 	}
 
-	if (session_name[0] == G_DIR_SEPARATOR ||
-#ifdef PLATFORM_WINDOWS
-	    // Windows file system .. detect absolute path
-	    // C:/*
-	    (session_name.length() > 3 && session_name[1] == ':' && session_name[2] == G_DIR_SEPARATOR)
-#else
-	    // Sensible file systems
-	    // /* or ./* or ../*
-	    (session_name.length() > 2 && session_name[0] == '.' && session_name[1] == G_DIR_SEPARATOR) ||
-	    (session_name.length() > 3 && session_name[0] == '.' && session_name[1] == '.' && session_name[2] == G_DIR_SEPARATOR)
-#endif
-		)
-	{
-
+	if (Glib::path_is_absolute (session_name) || session_name.find (G_DIR_SEPARATOR) != string::npos) {
 		/* user typed absolute path or cwd-relative path
-		   specified into session name field. So ... infer
-		   session path and name from what was given.
-		*/
-
+		 * specified into session name field. So ... infer
+		 * session path and name from what was given.
+		 */
 		session_path = Glib::path_get_dirname (session_name);
 		session_name = Glib::path_get_basename (session_name);
 
@@ -958,11 +986,17 @@ StartupFSM::show_pre_release_dialog ()
 	pre_release_dialog->add_button (Gtk::Stock::OK, Gtk::RESPONSE_OK);
 
 	Label* label = manage (new Label);
+/*
 	label->set_markup (string_compose (_("<span size=\"x-large\" weight=\"bold\">Welcome to this pre-release build of %1 %2</span>\n\n\
 <span size=\"large\">There are still several issues and bugs to be worked on,\n\
 as well as general workflow improvements, before this can be considered\n\
 release software. So, a few guidelines:\n\
-\n\
+*/
+	label->set_markup (string_compose (_("<span size=\"x-large\" weight=\"bold\">Welcome to this very-much-not-ready build of %1 %2</span>\n\n\
+<span size=\"large\">This is still very much a work-in-progress and many pre-existing\n\
+editing features may be broken. In addition the functionality of the MIDI clip editing\n\
+on the cue page is rapidly evolving, but if you are seeing this message it is not\n\
+considered finished at this time.\n\
 1) Please do <b>NOT</b> use this software with the expectation that it is stable or reliable\n\
    though it may be so, depending on your workflow.\n\
 2) Please wait for a helpful writeup of new features.\n\
@@ -971,7 +1005,7 @@ release software. So, a few guidelines:\n\
    There is no bug triaging before the initial development concludes and\n\
    reporting issue for incomplete, ongoing work-in-progress is mostly useless.\n\
 5) Please <b>DO</b> join us on IRC for real time discussions about %1 %2. You\n\
-   can get there directly from within the program via the Help->Chat menu option.\n\
+   can get there directly from within the program via the Help -> Chat menu option.\n\
 6) Please <b>DO</b> submit patches for issues after discussing them on IRC.\n\
 \n\
 Full information on all the above can be found on the support page at\n\

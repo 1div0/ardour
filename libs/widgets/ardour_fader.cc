@@ -29,6 +29,7 @@
 #include "gtkmm2ext/utils.h"
 
 #include "widgets/ardour_fader.h"
+#include "gtkmm2ext/ui_config.h"
 
 using namespace Gtk;
 using namespace std;
@@ -43,44 +44,32 @@ using namespace ArdourWidgets;
 std::list<ArdourFader::FaderImage*> ArdourFader::_patterns;
 
 ArdourFader::ArdourFader (Gtk::Adjustment& adj, int orientation, int fader_length, int fader_girth)
-	: _layout (0)
-	, _tweaks (Tweaks(0))
-	, _adjustment (adj)
+	: FaderWidget (adj, orientation)
+	, _layout (0)
 	, _text_width (0)
 	, _text_height (0)
 	, _span (fader_length)
 	, _girth (fader_girth)
 	, _min_span (fader_length)
 	, _min_girth (fader_girth)
-	, _orien (orientation)
 	, _pattern (0)
-	, _hovering (false)
-	, _dragging (false)
 	, _centered_text (true)
 	, _current_parent (0)
 	, have_explicit_bg (false)
 	, have_explicit_fg (false)
+	, outline_color (0)
 {
-	_default_value = _adjustment.get_value();
 	update_unity_position ();
 
-	add_events (
-			  Gdk::BUTTON_PRESS_MASK
-			| Gdk::BUTTON_RELEASE_MASK
-			| Gdk::POINTER_MOTION_MASK
-			| Gdk::SCROLL_MASK
-			| Gdk::ENTER_NOTIFY_MASK
-			| Gdk::LEAVE_NOTIFY_MASK
-			);
+	add_events (Gdk::TOUCH_UPDATE_MASK);
 
-	_adjustment.signal_value_changed().connect (mem_fun (*this, &ArdourFader::adjustment_changed));
-	_adjustment.signal_changed().connect (mem_fun (*this, &ArdourFader::adjustment_changed));
-	signal_grab_broken_event ().connect (mem_fun (*this, &ArdourFader::on_grab_broken_event));
 	if (_orien == VERT) {
 		CairoWidget::set_size_request(_girth, _span);
 	} else {
 		CairoWidget::set_size_request(_span, _girth);
 	}
+
+	outline_color = UIConfigurationBase::instance().color ("fader outline");
 }
 
 ArdourFader::~ArdourFader ()
@@ -96,7 +85,6 @@ ArdourFader::flush_pattern_cache () {
 	}
 	_patterns.clear();
 }
-
 
 cairo_pattern_t*
 ArdourFader::find_pattern (double afr, double afg, double afb,
@@ -280,7 +268,8 @@ ArdourFader::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_t
 	cairo_fill(cr);
 
 	cairo_set_line_width (cr, 2);
-	cairo_set_source_rgba (cr, 0, 0, 0, 1.0);
+	Gtkmm2ext::set_source_rgba (cr, outline_color);
+
 
 	cairo_matrix_t matrix;
 	Gtkmm2ext::rounded_rectangle (cr, CORNER_OFFSET, CORNER_OFFSET, w-CORNER_SIZE, h-CORNER_SIZE, CORNER_RADIUS);
@@ -435,156 +424,6 @@ ArdourFader::on_size_allocate (Gtk::Allocation& alloc)
 }
 
 bool
-ArdourFader::on_grab_broken_event (GdkEventGrabBroken* ev)
-{
-	if (_dragging) {
-		remove_modal_grab();
-		_dragging = false;
-		gdk_pointer_ungrab (GDK_CURRENT_TIME);
-		StopGesture ();
-	}
-	return (_tweaks & NoButtonForward) ? true : false;
-}
-
-bool
-ArdourFader::on_button_press_event (GdkEventButton* ev)
-{
-	if (ev->type != GDK_BUTTON_PRESS) {
-		if (_dragging) {
-			remove_modal_grab();
-			_dragging = false;
-			gdk_pointer_ungrab (GDK_CURRENT_TIME);
-			StopGesture ();
-		}
-		return (_tweaks & NoButtonForward) ? true : false;
-	}
-
-	if (ev->button != 1 && ev->button != 2) {
-		return false;
-	}
-
-	add_modal_grab ();
-	StartGesture ();
-	_grab_loc = (_orien == VERT) ? ev->y : ev->x;
-	_grab_start = (_orien == VERT) ? ev->y : ev->x;
-	_grab_window = ev->window;
-	_dragging = true;
-	gdk_pointer_grab(ev->window,false,
-			GdkEventMask( Gdk::POINTER_MOTION_MASK | Gdk::BUTTON_PRESS_MASK |Gdk::BUTTON_RELEASE_MASK),
-			NULL,NULL,ev->time);
-
-	if (ev->button == 2) {
-		set_adjustment_from_event (ev);
-	}
-
-	return (_tweaks & NoButtonForward) ? true : false;
-}
-
-bool
-ArdourFader::on_button_release_event (GdkEventButton* ev)
-{
-	double ev_pos = (_orien == VERT) ? ev->y : ev->x;
-
-	switch (ev->button) {
-	case 1:
-		if (_dragging) {
-			remove_modal_grab();
-			_dragging = false;
-			gdk_pointer_ungrab (GDK_CURRENT_TIME);
-			StopGesture ();
-
-			if (!_hovering) {
-				if (!(_tweaks & NoVerticalScroll)) {
-					Keyboard::magic_widget_drop_focus();
-				}
-				queue_draw ();
-			}
-
-			if (ev_pos == _grab_start) {
-				/* no motion - just a click */
-				ev_pos = rint(ev_pos);
-
-				if (ev->state & Keyboard::TertiaryModifier) {
-					_adjustment.set_value (_default_value);
-				} else if (ev->state & Keyboard::GainFineScaleModifier) {
-					_adjustment.set_value (_adjustment.get_lower());
-#if 0 // ignore clicks
-				} else if (ev_pos == slider_pos) {
-					; // click on current position, no move.
-				} else if ((_orien == VERT && ev_pos < slider_pos) || (_orien == HORIZ && ev_pos > slider_pos)) {
-					/* above the current display height, remember X Window coords */
-					_adjustment.set_value (_adjustment.get_value() + _adjustment.get_step_increment());
-				} else {
-					_adjustment.set_value (_adjustment.get_value() - _adjustment.get_step_increment());
-#endif
-				}
-			}
-			return true;
-		}
-		break;
-
-	case 2:
-		if (_dragging) {
-			remove_modal_grab();
-			_dragging = false;
-			StopGesture ();
-			set_adjustment_from_event (ev);
-			gdk_pointer_ungrab (GDK_CURRENT_TIME);
-			return true;
-		}
-		break;
-
-	default:
-		break;
-	}
-	return false;
-}
-
-bool
-ArdourFader::on_scroll_event (GdkEventScroll* ev)
-{
-	double increment = 0;
-	if (ev->state & Keyboard::GainFineScaleModifier) {
-		if (ev->state & Keyboard::GainExtraFineScaleModifier) {
-			increment = 0.05 * _adjustment.get_step_increment();
-		} else {
-			increment = _adjustment.get_step_increment();
-		}
-	} else {
-		increment = _adjustment.get_page_increment();
-	}
-
-	bool vertical = false;
-	switch (ev->direction) {
-		case GDK_SCROLL_UP:
-		case GDK_SCROLL_DOWN:
-			vertical = !(ev->state & Keyboard::ScrollHorizontalModifier);
-			break;
-		default:
-			break;
-	}
-	if ((_orien == VERT && !vertical) ||
-	    ((_tweaks & NoVerticalScroll) && vertical)) {
-		return false;
-	}
-
-	switch (ev->direction) {
-		case GDK_SCROLL_UP:
-		case GDK_SCROLL_RIGHT:
-			_adjustment.set_value (_adjustment.get_value() + increment);
-			break;
-		case GDK_SCROLL_DOWN:
-		case GDK_SCROLL_LEFT:
-			_adjustment.set_value (_adjustment.get_value() - increment);
-			break;
-		default:
-			return false;
-	}
-
-	return true;
-}
-
-bool
 ArdourFader::on_motion_notify_event (GdkEventMotion* ev)
 {
 	if (_dragging) {
@@ -627,10 +466,16 @@ ArdourFader::on_motion_notify_event (GdkEventMotion* ev)
 	return true;
 }
 
-void
-ArdourFader::adjustment_changed ()
+bool
+ArdourFader::on_touch_update_event (GdkEventTouch* ev)
 {
-	queue_draw ();
+  GdkEventMotion mev;
+  mev.window = ev->window;
+  mev.time   = ev->time;
+  mev.x      = ev->x;
+  mev.y      = ev->y;
+  mev.state  = 0;
+  return ArdourFader::on_motion_notify_event (&mev);
 }
 
 /** @return pixel offset of the current value from the right or bottom of the fader */
@@ -666,30 +511,6 @@ ArdourFader::update_unity_position ()
 	queue_draw ();
 }
 
-bool
-ArdourFader::on_enter_notify_event (GdkEventCrossing*)
-{
-	_hovering = true;
-	if (!(_tweaks & NoVerticalScroll)) {
-		Keyboard::magic_widget_grab_focus ();
-	}
-	queue_draw ();
-	return false;
-}
-
-bool
-ArdourFader::on_leave_notify_event (GdkEventCrossing*)
-{
-	if (!_dragging) {
-		_hovering = false;
-		if (!(_tweaks & NoVerticalScroll)) {
-			Keyboard::magic_widget_drop_focus();
-		}
-		queue_draw ();
-	}
-	return false;
-}
-
 void
 ArdourFader::set_adjustment_from_event (GdkEventButton* ev)
 {
@@ -708,19 +529,6 @@ ArdourFader::set_default_value (float d)
 {
 	_default_value = d;
 	update_unity_position ();
-}
-
-void
-ArdourFader::set_tweaks (Tweaks t)
-{
-	bool need_redraw = false;
-	if ((_tweaks & NoShowUnityLine) ^ (t & NoShowUnityLine)) {
-		need_redraw = true;
-	}
-	_tweaks = t;
-	if (need_redraw) {
-		queue_draw();
-	}
 }
 
 void
@@ -766,6 +574,21 @@ ArdourFader::on_style_changed (const Glib::RefPtr<Gtk::Style>& style)
 	 * during 'expose' in the GUI thread */
 	_pattern = 0;
 	queue_draw ();
+}
+
+void
+ArdourFader::update_min_size (int span, int girth)
+{
+	_min_span = span;
+	_min_girth = girth;
+	_pattern = 0;
+
+	if (_orien == VERT) {
+		CairoWidget::set_size_request(girth, span);
+	} else {
+		CairoWidget::set_size_request(span, girth);
+	}
+	queue_resize ();
 }
 
 Gdk::Color

@@ -26,12 +26,11 @@
 #include <cmath>
 #include <fcntl.h>
 #include <signal.h>
-#include <unistd.h>
 #include <cerrno>
 #include <climits>
 #include <cctype>
 
-#include <gtkmm.h>
+#include <ytkmm/ytkmm.h>
 
 #include "pbd/error.h"
 #include "pbd/touchable.h"
@@ -50,6 +49,7 @@
 #include "gtkmm2ext/activatable.h"
 #include "gtkmm2ext/actions.h"
 #include "gtkmm2ext/gui_thread.h"
+#include "gtkmm2ext/ui_config.h"
 
 #include "pbd/i18n.h"
 
@@ -69,9 +69,13 @@ BaseUI::RequestType Gtkmm2ext::SetTip = BaseUI::new_request_type();
 BaseUI::RequestType Gtkmm2ext::AddIdle = BaseUI::new_request_type();
 BaseUI::RequestType Gtkmm2ext::AddTimeout = BaseUI::new_request_type();
 
-#include "pbd/abstract_ui.cc"  /* instantiate the template */
+#include "pbd/abstract_ui.inc.cc"  /* instantiate the template */
 
 template class AbstractUI<Gtkmm2ext::UIRequest>;
+
+#ifndef NDEBUG
+static int debug_call_slot = -1;
+#endif
 
 UI::UI (string application_name, string thread_name, int *argc, char ***argv)
 	: AbstractUI<UIRequest> (thread_name)
@@ -79,6 +83,16 @@ UI::UI (string application_name, string thread_name, int *argc, char ***argv)
 	, global_bindings (0)
 	, errors (0)
 {
+#ifndef NDEBUG
+	/* one time initialization of this to reduce run time cost in debug builds */
+	if (debug_call_slot < 0) {
+		if (g_getenv ("DEBUG_THREADED_SIGNALS")) {
+			debug_call_slot = 1;
+		} else {
+			debug_call_slot = 0;
+		}
+	}
+#endif
 	theMain = new Main (argc, argv);
 
 	char buf[18];
@@ -105,10 +119,6 @@ UI::UI (string application_name, string thread_name, int *argc, char ***argv)
 	*/
 
 	set_event_loop_for_thread (this);
-
-	/* we will be receiving requests */
-
-	EventLoop::register_request_buffer_factory ("gui", request_buffer_factory);
 
 	/* attach our request source to the default main context */
 
@@ -391,17 +401,25 @@ UI::set_tip (Widget *w, const gchar *tip, const gchar *hlp)
 	if (action) {
 		/* get_bindings_from_widget_hierarchy */
 		Widget* ww = w;
-		Bindings* bindings = NULL;
+		BindingSet* binding_set = nullptr;
 		do {
-			bindings = (Bindings*) ww->get_data ("ardour-bindings");
-			if (bindings) {
+			binding_set = (BindingSet*) ww->get_data (ARDOUR_BINDING_KEY);
+			if (binding_set) {
 				break;
 			}
 			ww = ww->get_parent ();
 		} while (ww);
 
-		if (!bindings) {
+		Bindings* bindings;
+
+		if (!binding_set) {
 			bindings = global_bindings;
+		} else {
+			/* Use only the first bindings for the widget when
+			   looking up keys.
+			*/
+			assert (!binding_set->empty());
+			bindings = binding_set->front ();
 		}
 
 		if (bindings) {
@@ -460,23 +478,6 @@ UI::idle_add (int (*func)(void *), void *arg)
 
 /* END abstract_ui interfaces */
 
-/** Create a PBD::EventLoop::InvalidationRecord and attach a callback
- *  to a given sigc::trackable so that PBD::EventLoop::invalidate_request
- *  is called when that trackable is destroyed.
- */
-PBD::EventLoop::InvalidationRecord*
-__invalidator (sigc::trackable& trackable, const char* file, int line)
-{
-        PBD::EventLoop::InvalidationRecord* ir = new PBD::EventLoop::InvalidationRecord;
-
-        ir->file = file;
-        ir->line = line;
-
-        trackable.add_destroy_notify_callback (ir, PBD::EventLoop::invalidate_request);
-
-        return ir;
-}
-
 void
 UI::do_request (UIRequest* req)
 {
@@ -492,7 +493,7 @@ UI::do_request (UIRequest* req)
 
 	} else if (req->type == CallSlot) {
 #ifndef NDEBUG
-		if (getenv ("DEBUG_THREADED_SIGNALS")) {
+		if (debug_call_slot) {
 			cerr << "call slot for " << event_loop_name() << endl;
 		}
 #endif
@@ -694,7 +695,7 @@ UI::toggle_errors ()
 {
 	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action (X_("Editor"), X_("toggle-log-window"));
 	if (tact->get_active()) {
-		errors->set_position (WIN_POS_MOUSE);
+		errors->set_position (UIConfigurationBase::instance().get_default_window_position());
 		errors->show ();
 	} else {
 		errors->hide ();
@@ -729,14 +730,15 @@ UI::handle_fatal (const char *message)
 	title += ": Fatal Error";
 	win.set_title (title.get_string());
 
-	win.set_position (WIN_POS_MOUSE);
+	win.set_position (UIConfigurationBase::instance().get_default_window_position());
 	win.set_border_width (12);
 
 	win.get_vbox()->pack_start (label, true, true);
 	hpacker.pack_start (quit, true, false);
 	win.get_vbox()->pack_start (hpacker, false, false);
 
-	quit.signal_clicked().connect(mem_fun(*this,&UI::quit));
+	quit.signal_clicked().connect ([&win] { win.response (-4); });
+	win.signal_response().connect([this] (int) { UI::quit (); });
 
 	win.show_all ();
 	win.set_modal (true);
@@ -758,7 +760,7 @@ UI::popup_error (const string& text)
 	MessageDialog msg (text);
 	msg.set_title (string_compose (_("I'm sorry %1, I can't do that"), g_get_user_name()));
 	msg.set_wmclass (X_("error"), Glib::get_application_name());
-	msg.set_position (WIN_POS_MOUSE);
+	msg.set_position (UIConfigurationBase::instance().get_default_window_position());
 	msg.run ();
 }
 

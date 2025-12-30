@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_rbeffect_h__
-#define __ardour_rbeffect_h__
+#pragma once
 
 #include "ardour/filter.h"
 #include "ardour/timefx_request.h"
@@ -32,7 +31,7 @@ class LIBARDOUR_API RBEffect : public Filter {
 	RBEffect (ARDOUR::Session&, TimeFXRequest&);
 	~RBEffect ();
 
-	int run (std::shared_ptr<ARDOUR::Region>, Progress* progress = 0);
+	int run (std::shared_ptr<ARDOUR::Region>, PBD::Progress* progress = 0);
 
   private:
 	TimeFXRequest& tsr;
@@ -40,4 +39,3 @@ class LIBARDOUR_API RBEffect : public Filter {
 
 } /* namespace */
 
-#endif /* __ardour_rbeffect_h__ */

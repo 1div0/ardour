@@ -27,8 +27,6 @@
 #include <string>
 #include <stdint.h>
 
-#include <boost/smart_ptr.hpp>
-
 #include "pbd/controllable.h"
 #include "pbd/signals.h"
 
@@ -41,9 +39,7 @@ namespace ARDOUR {
 	class AutomationControl;
 }
 
-namespace ArdourSurface {
-
-namespace Mackie {
+namespace ArdourSurface { namespace MACKIE_NAMESPACE {
 
 class Strip;
 class Group;
@@ -93,6 +89,6 @@ public:
 }
 }
 
-std::ostream & operator <<  (std::ostream & os, const ArdourSurface::Mackie::Control & control);
+std::ostream & operator <<  (std::ostream & os, const ArdourSurface::MACKIE_NAMESPACE::Control & control);
 
 #endif /* __mackie_controls_h__ */

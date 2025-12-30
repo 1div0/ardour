@@ -20,6 +20,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include "pbd/configuration.h"
+
 #include "ardour/session.h"
 #include "ardour/transport_master_manager.h"
 
@@ -356,18 +358,18 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 
 	add_option (_("Meterbridge"), new OptionEditorBlank ());
 
-	/* Misc */
+	/* MIDI */
 
-	add_option (_("Misc"), new OptionEditorHeading (_("MIDI Options")));
+	add_option (_("MIDI"), new OptionEditorHeading (_("MIDI Options")));
 
-	add_option (_("Misc"), new BoolOption (
+	add_option (_("MIDI"), new BoolOption (
 				"draw-opaque-midi-regions",
 				_("Draw tool creates opaque MIDI regions"),
 				sigc::mem_fun (*_session_config, &SessionConfiguration::get_draw_opaque_midi_regions),
 				sigc::mem_fun (*_session_config, &SessionConfiguration::set_draw_opaque_midi_regions)
 				));
 
-	add_option (_("Misc"), new BoolOption (
+	add_option (_("MIDI"), new BoolOption (
 				"midi-copy-is-fork",
 				_("MIDI region copies are independent"),
 				sigc::mem_fun (*_session_config, &SessionConfiguration::get_midi_copy_is_fork),
@@ -388,23 +390,42 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 	li->add (InsertMergeTruncateAddition, _("shorten the overlapping new note"));
 	li->add (InsertMergeExtend, _("replace both overlapping notes with a single note"));
 
-	add_option (_("Misc"), li);
+	add_option (_("MIDI"), li);
 
-	add_option (_("Misc"), new OptionEditorHeading (_("Glue to Bars and Beats")));
+	/* Misc */
 
-	add_option (_("Misc"), new BoolOption (
-				"glue-new-markers-to-bars-and-beats",
-				_("Glue new markers to bars and beats"),
-				sigc::mem_fun (*_session_config, &SessionConfiguration::get_glue_new_markers_to_bars_and_beats),
-				sigc::mem_fun (*_session_config, &SessionConfiguration::set_glue_new_markers_to_bars_and_beats)
-				));
+	add_option (_("Misc"), new OptionEditorHeading (_("Miscellaneous Options")));
 
-	add_option (_("Misc"), new BoolOption (
-				"glue-new-regions-to-bars-and-beats",
-				_("Glue new regions to bars and beats"),
-				sigc::mem_fun (*_session_config, &SessionConfiguration::get_glue_new_regions_to_bars_and_beats),
-				sigc::mem_fun (*_session_config, &SessionConfiguration::set_glue_new_regions_to_bars_and_beats)
-				));
+
+	ComboOption<Temporal::TimeDomain>* tdo = new ComboOption<Temporal::TimeDomain> (
+		            "default-time-domain",
+		            _("Default time domain"),
+		            sigc::mem_fun (*_session_config, &SessionConfiguration::get_default_time_domain),
+		            sigc::mem_fun (*_session_config, &SessionConfiguration::set_default_time_domain)
+		);
+
+	tdo->add (Temporal::AudioTime, _("Audio (wallclock) time"));
+	tdo->add (Temporal::BeatTime, _("Musical (beats) time"));
+	add_option (_("Misc"), tdo);
+
+#if 0
+	/* We cannot expose this option until it is possible (and sane) to
+	 * allow MIDI tracks to use audio time and audio tracks to use music time.
+	 */
+	bo = new BoolOption (
+		"tracks-follow-session-time",
+		_("New tracks and busses use session time"),
+		sigc::mem_fun (*_session_config, &SessionConfiguration::get_tracks_follow_session_time),
+		sigc::mem_fun (*_session_config, &SessionConfiguration::set_tracks_follow_session_time)
+		);
+
+	Gtkmm2ext::UI::instance()->set_tip (bo->tip_widget(),
+	                                    _("When enabled, new tracks and busses will use the current session default time domain.\n\n"
+	                                      "When disabled, new tracks and busses will use their primary data type to choose their time domain\n"
+	                                      "The time domain will determine what units are used for region and automation timing,\n"
+	                                      "which in turn will affect whether they will change to follow tempo map edits."));
+	add_option (_("Misc"), 	bo);
+#endif
 
 	add_option (_("Misc"), new OptionEditorHeading (_("Metronome")));
 
@@ -413,6 +434,15 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 				_("Always count-in when recording"),
 				sigc::mem_fun (*_session_config, &SessionConfiguration::get_count_in),
 				sigc::mem_fun (*_session_config, &SessionConfiguration::set_count_in)
+				));
+
+	add_option (_("Misc"), new OptionEditorHeading (_("Project Banner")));
+
+	add_option (_("Misc"), new BoolOption (
+				"show-master-bus-comment-on-load",
+				_("Show master bus comment window on session load"),
+				sigc::mem_fun (*_session_config, &SessionConfiguration::get_show_master_bus_comment_on_load),
+				sigc::mem_fun (*_session_config, &SessionConfiguration::set_show_master_bus_comment_on_load)
 				));
 
 	add_option (_("Misc"), new OptionEditorHeading (_("Defaults")));
@@ -426,6 +456,20 @@ SessionOptionEditor::SessionOptionEditor (Session* s)
 	/* Place the search entry */
 
 	vpacker.pack_end (search_packer, false, false);
+
+	/* Connect metadata */
+
+	for (auto p : pages()) {
+		for (auto oc : p.second->components) {
+			Option* o = dynamic_cast<Option*> (oc);
+			if (o) {
+				PBD::Configuration::Metadata const * m = PBD::Configuration::get_metadata (o->id());
+				if (m) {
+					oc->set_metadata (*m);
+				}
+			}
+		}
+	}
 }
 
 void

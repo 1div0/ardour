@@ -24,7 +24,7 @@
  */
 
 #include <sys/stat.h>
-#include <unistd.h>
+
 #include <float.h>
 #include <cerrno>
 #include <ctime>
@@ -96,6 +96,7 @@ Source::Source (Session& s, const XMLNode& node)
 Source::~Source ()
 {
 	DEBUG_TRACE (DEBUG::Destruction, string_compose ("Source %1 destructor %2\n", _name, this));
+	assert (!used ());
 }
 
 void
@@ -440,7 +441,7 @@ Source::set_allow_remove_if_empty (bool yn)
 void
 Source::inc_use_count ()
 {
-    _use_count.fetch_add (1);
+	_use_count.fetch_add (1);
 }
 
 void
@@ -448,20 +449,13 @@ Source::dec_use_count ()
 {
 #ifndef NDEBUG
 	int oldval = _use_count.fetch_sub (1);
-        if (oldval <= 0) {
-                cerr << "Bad use dec for " << name() << endl;
-                abort ();
-        }
-        assert (oldval > 0);
-#else
-        _use_count.fetch_sub (1);
-#endif
-
-	try {
-		std::shared_ptr<Source> sptr = shared_from_this();
-	} catch (...) {
-		/* no shared_ptr available, relax; */
+	if (oldval <= 0) {
+		cerr << "Bad use dec for " << name() << endl;
 	}
+	assert (oldval > 0);
+#else
+	_use_count.fetch_sub (1);
+#endif
 }
 
 bool
@@ -552,10 +546,9 @@ Source::get_segment_descriptor (TimelineRange const & range, SegmentDescriptor& 
 	/* Note: since we disallow overlapping segments, any overlap between
 	   the @p range and an existing segment counts as a match.
 	*/
-
 	for (auto const & sd : segment_descriptors) {
 		if (coverage_exclusive_ends (sd.position(), sd.position() + sd.extent(),
-		                             segment.position(), segment.position() + segment.extent()) != Temporal::OverlapNone) {
+		                             range.start(), range.end()) != Temporal::OverlapNone) {
 			segment = sd;
 			return true;
 		}
@@ -565,18 +558,32 @@ Source::get_segment_descriptor (TimelineRange const & range, SegmentDescriptor& 
 }
 
 int
-Source::set_segment_descriptor (SegmentDescriptor const & sr)
+Source::set_segment_descriptor (SegmentDescriptor const & sr, bool replace)
 {
 	/* We disallow any overlap between segments. They must describe non-overlapping ranges */
 
-	for (auto const & sd : segment_descriptors) {
+	for (auto i = segment_descriptors.begin(); i != segment_descriptors.end(); ++i) {
+
+		SegmentDescriptor& sd (*i);
+
 		if (coverage_exclusive_ends (sd.position(), sd.position() + sd.extent(),
 		                             sr.position(), sr.position() + sr.extent()) != Temporal::OverlapNone) {
-			return -1;
+			if (replace) {
+				segment_descriptors.erase (i);
+				break;
+			} else {
+				return -1;
+			}
 		}
 	}
 
 	segment_descriptors.push_back (sr);
 
 	return 0;
+}
+
+void
+Source::copy_segment_descriptors (Source const & other)
+{
+	segment_descriptors = other.segment_descriptors;
 }

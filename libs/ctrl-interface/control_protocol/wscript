@@ -1,10 +1,4 @@
 #!/usr/bin/env python
-from waflib.extras import autowaf as autowaf
-import os
-
-# Mandatory variables
-top = '.'
-out = 'build'
 
 controlcp_sources = [
     'basic_ui.cc',
@@ -12,7 +6,7 @@ controlcp_sources = [
     ]
 
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     pass
@@ -35,6 +29,3 @@ def build(bld):
     obj.use          = 'libardour libpbd'
     obj.uselib       = 'GLIBMM SIGCPP XML OSX'
     obj.install_path = bld.env['LIBDIR']
-
-def shutdown():
-    autowaf.shutdown()

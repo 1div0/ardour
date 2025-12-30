@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtk_ardour_note_base_h__
-#define __gtk_ardour_note_base_h__
+#pragma once
 
 #include <memory>
 
@@ -27,11 +26,13 @@
 #include "canvas/types.h"
 #include "gtkmm2ext/colors.h"
 
+#include "ardour/types.h"
+
 #include "rgb_macros.h"
 #include "ui_config.h"
 
 class Editor;
-class MidiRegionView;
+class MidiView;
 
 namespace Evoral {
 	template<typename T> class Note;
@@ -43,7 +44,8 @@ namespace ArdourCanvas {
 	class Text;
 }
 
-/** Base class for canvas notes (sustained note rectangles and hit diamonds).
+/** Base class for canvas notes (sustained note rectangles, percussive hit diamonds,
+ * and velocity lollipops)
  *
  * This is not actually a canvas item itself to avoid the dreaded diamond
  * inheritance pattern, since various types of canvas items (Note (rect), Hit
@@ -64,7 +66,7 @@ class NoteBase : public sigc::trackable
   public:
 	typedef Evoral::Note<Temporal::Beats> NoteType;
 
-	NoteBase (MidiRegionView& region, bool, const std::shared_ptr<NoteType> note = std::shared_ptr<NoteType>());
+	NoteBase (MidiView& region, bool, const std::shared_ptr<NoteType> note = std::shared_ptr<NoteType>());
 	virtual ~NoteBase ();
 
 	void set_item (ArdourCanvas::Item *);
@@ -84,12 +86,10 @@ class NoteBase : public sigc::trackable
 	virtual void move_event(double dx, double dy) = 0;
 
 	uint32_t base_color();
+	static uint32_t base_color (int velocity, ARDOUR::ColorMode color_mode, Gtkmm2ext::Color, int channel, bool selected);
 
 	void show_velocity();
 	void hide_velocity();
-
-	/** Channel changed for this specific event */
-	void on_channel_change(uint8_t channel);
 
 	/** Channel selection changed */
 	void on_channel_selection_change(uint16_t selection);
@@ -104,11 +104,14 @@ class NoteBase : public sigc::trackable
 	virtual ArdourCanvas::Coord x1 () const = 0;
 	virtual ArdourCanvas::Coord y1 () const = 0;
 
+	virtual void set_velocity (double) {}
+	virtual double visual_velocity() const = 0;
+
 	float mouse_x_fraction() const { return _mouse_x_fraction; }
 	float mouse_y_fraction() const { return _mouse_y_fraction; }
 
 	const std::shared_ptr<NoteType> note() const { return _note; }
-	MidiRegionView& region_view() const { return _region; }
+	MidiView& midi_view() const { return _view; }
 
 	static void set_colors ();
 
@@ -132,11 +135,11 @@ class NoteBase : public sigc::trackable
 protected:
 	enum State { None, Pressed, Dragging };
 
-	MidiRegionView&                   _region;
+	MidiView&                         _view;
 	ArdourCanvas::Item*               _item;
 	ArdourCanvas::Text*               _text;
 	State                             _state;
-	const std::shared_ptr<NoteType> _note;
+	const std::shared_ptr<NoteType>   _note;
 	bool                              _with_events;
 	bool                              _own_note;
 	Flags                             _flags;
@@ -155,4 +158,3 @@ private:
 	static bool _color_init;
 };
 
-#endif /* __gtk_ardour_note_h__ */

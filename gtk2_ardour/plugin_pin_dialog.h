@@ -16,10 +16,9 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtkardour_plugin_pin_dialog_h__
-#define __gtkardour_plugin_pin_dialog_h__
+#pragma once
 
-#include <gtkmm/drawingarea.h>
+#include <ytkmm/drawingarea.h>
 
 #include "pbd/stateful.h"
 #include "pbd/signals.h"
@@ -27,11 +26,11 @@
 #include "ardour/plugin_insert.h"
 #include "ardour/route.h"
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/box.h>
-#include <gtkmm/drawingarea.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/sizegroup.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/drawingarea.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/sizegroup.h>
 
 #include "gtkmm2ext/persistent_tooltip.h"
 
@@ -183,6 +182,7 @@ private:
 	uint32_t maybe_add_route_to_input_menu (std::shared_ptr<ARDOUR::Route>, ARDOUR::DataType, std::weak_ptr<ARDOUR::Port>);
 	void port_connected_or_disconnected (std::weak_ptr<ARDOUR::Port>, std::weak_ptr<ARDOUR::Port>);
 	void port_pretty_name_changed (std::string);
+	void property_changed (PBD::PropertyChange const&);
 
 	bool sc_input_press (GdkEventButton *, std::weak_ptr<ARDOUR::Port>);
 	bool sc_input_release (GdkEventButton *);
@@ -252,15 +252,17 @@ private:
 	typedef std::shared_ptr<PluginPinWidget> PluginPinWidgetPtr;
 	typedef std::vector<PluginPinWidgetPtr> PluginPinWidgetList;
 
-	void route_going_away ();
+	void going_away ();
+	void processor_property_changed (PBD::PropertyChange const&);
+	void route_property_changed (PBD::PropertyChange const&);
 	void route_processors_changed (ARDOUR::RouteProcessorChange);
 	void add_processor (std::weak_ptr<ARDOUR::Processor>);
 	void map_height (Gtk::Allocation&);
 
+	std::shared_ptr<ARDOUR::PluginInsert> _pi;
 	std::shared_ptr<ARDOUR::Route> _route;
 	PluginPinWidgetList ppw;
-	PBD::ScopedConnectionList _route_connections;
+	PBD::ScopedConnectionList _connections;
 	bool _height_mapped;
 };
 
-#endif

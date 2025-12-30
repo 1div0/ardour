@@ -21,16 +21,29 @@
  */
 
 #include <algorithm>
+#include <climits>
+#include <set>
 #include <vector>
+#include <regex>
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 
 #include <glib.h>
 #include "pbd/gstdio_compat.h"
 
-#ifdef COMPILER_MINGW
-#include <io.h> // For W_OK
-#include <windows.h>
+#if defined COMPILER_MINGW || defined COMPILER_MSVC
+# include <windows.h>
+# include <sys/utime.h>
+# if defined COMPILER_MINGW
+#   include <io.h> // For W_OK
+# endif
+#else // not windows
+# include <utime.h>
 #endif
 
+#include <glibmm/convert.h>
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
 #include <glibmm/pattern.h>
@@ -46,10 +59,9 @@
 /* close(), read(), write() */
 #ifdef COMPILER_MSVC
 #include <io.h> // Microsoft's nearest equivalent to <unistd.h>
+#ifndef WAF_BUILD
 #include <ardourext/misc.h>
-#else
-#include <unistd.h>
-#include <regex.h>
+#endif
 #endif
 
 #include "pbd/compose.h"
@@ -73,17 +85,19 @@ run_functor_for_paths (vector<string>& result,
                        void *arg,
                        bool pass_files_only,
                        bool pass_fullpath, bool return_fullpath,
-                       bool recurse)
+                       bool recurse,
+                       set<string>& scanned_paths)
 {
 	for (vector<string>::const_iterator i = paths.begin(); i != paths.end(); ++i) {
-		string expanded_path = path_expand (*i);
-		DEBUG_TRACE (DEBUG::FileUtils,
-				string_compose("Find files in expanded path: %1\n", expanded_path));
-
-		if (!Glib::file_test (expanded_path, Glib::FILE_TEST_IS_DIR)) continue;
-
 		try
 		{
+			string expanded_path = path_expand (*i);
+
+			DEBUG_TRACE (DEBUG::FileUtils,
+					string_compose("Find files in expanded path: %1\n", expanded_path));
+
+			if (!Glib::file_test (expanded_path, Glib::FILE_TEST_IS_DIR)) continue;
+
 			Glib::Dir dir(expanded_path);
 
 			for (Glib::DirIterator di = dir.begin(); di != dir.end(); di++) {
@@ -94,11 +108,12 @@ run_functor_for_paths (vector<string>& result,
 				bool is_dir = Glib::file_test (fullpath, Glib::FILE_TEST_IS_DIR);
 
 				if (is_dir && recurse) {
-					DEBUG_TRACE (DEBUG::FileUtils,
-							string_compose("Descending into directory:  %1\n",
-								fullpath));
-					run_functor_for_paths (result, fullpath, functor, arg, pass_files_only,
-					                       pass_fullpath, return_fullpath, recurse);
+					if (scanned_paths.find (fullpath) == scanned_paths.end ()) {
+						scanned_paths.insert (fullpath);
+						DEBUG_TRACE (DEBUG::FileUtils, string_compose("Descending into directory:  %1\n", fullpath));
+						run_functor_for_paths (result, fullpath, functor, arg, pass_files_only,
+						                       pass_fullpath, return_fullpath, recurse, scanned_paths);
+					}
 				}
 
 				if (is_dir && pass_files_only) {
@@ -130,9 +145,15 @@ run_functor_for_paths (vector<string>& result,
 				}
 			}
 		}
-		catch (Glib::FileError const& err)
-		{
-			warning << err.what() << endmsg;
+		catch (Glib::FileError const& err) {
+			char errstr[PATH_MAX*2];
+			snprintf (errstr, sizeof (errstr), "Cannot access file: %s", err.what().c_str());
+			warning << errstr << endmsg;
+		}
+		catch (Glib::ConvertError const& err) {
+			char errstr[PATH_MAX*2];
+			snprintf (errstr, sizeof (errstr), "Cannot convert filename: %s", err.what().c_str());
+			warning << errstr << endmsg;
 		}
 	}
 }
@@ -149,8 +170,9 @@ get_paths (vector<string>& result,
            bool files_only,
            bool recurse)
 {
+	set<string> scanned_path;
 	run_functor_for_paths (result, paths, accept_all_files, 0,
-	                       files_only, true, true, recurse);
+	                       files_only, true, true, recurse, scanned_path);
 }
 
 void
@@ -172,9 +194,10 @@ find_files_matching_pattern (vector<string>& result,
                              const Searchpath& paths,
                              const Glib::PatternSpec& pattern)
 {
+	set<string> unused;
 	run_functor_for_paths (result, paths, pattern_filter,
 	                       const_cast<Glib::PatternSpec*>(&pattern),
-	                       true, false, true, false);
+	                       true, false, true, false, unused);
 }
 
 void
@@ -221,8 +244,8 @@ static
 bool
 regexp_filter (const string& str, void *arg)
 {
-	regex_t* pattern = (regex_t*)arg;
-	return regexec (pattern, str.c_str(), 0, 0, 0) == 0;
+	std::regex* pattern = static_cast<std::regex*>(arg);
+	return std::regex_search(str, *pattern);
 }
 
 void
@@ -231,21 +254,11 @@ find_files_matching_regex (vector<string>& result,
                            const std::string& regexp,
                            bool recurse)
 {
-	int err;
-	char msg[256];
-	regex_t compiled_pattern;
-
-	if ((err = regcomp (&compiled_pattern, regexp.c_str(),
-			    REG_EXTENDED|REG_NOSUB))) {
-
-		regerror (err, &compiled_pattern,
-			  msg, sizeof (msg));
-
-		error << "Cannot compile soundfile regexp for use ("
-		      << msg
-		      << ")"
-		      << endmsg;
-
+	std::regex compiled_pattern;
+	try {
+		compiled_pattern = std::regex(regexp);
+	} catch (const std::regex_error& e) {
+		error << "Cannot compile soundfile regexp for use (" << e.what() << ")" << endmsg;
 		return;
 	}
 
@@ -255,8 +268,6 @@ find_files_matching_regex (vector<string>& result,
 	find_files_matching_filter (result, paths,
 	                            regexp_filter, &compiled_pattern,
 	                            true, true, recurse);
-
-	regfree (&compiled_pattern);
 }
 
 void
@@ -267,7 +278,8 @@ find_paths_matching_filter (vector<string>& result,
                             bool pass_fullpath, bool return_fullpath,
                             bool recurse)
 {
-	run_functor_for_paths (result, paths, filter, arg, false, pass_fullpath, return_fullpath, recurse);
+	set<string> scanned_path;
+	run_functor_for_paths (result, paths, filter, arg, false, pass_fullpath, return_fullpath, recurse, scanned_path);
 }
 
 void
@@ -278,7 +290,8 @@ find_files_matching_filter (vector<string>& result,
                             bool pass_fullpath, bool return_fullpath,
                             bool recurse)
 {
-	run_functor_for_paths (result, paths, filter, arg, true, pass_fullpath, return_fullpath, recurse);
+	set<string> scanned_path;
+	run_functor_for_paths (result, paths, filter, arg, true, pass_fullpath, return_fullpath, recurse, scanned_path);
 }
 
 bool
@@ -332,7 +345,7 @@ copy_files(const std::string & from_path, const std::string & to_dir)
 }
 
 void
-copy_recurse(const std::string & from_path, const std::string & to_dir)
+copy_recurse(const std::string & from_path, const std::string & to_dir, bool preseve_timestamps)
 {
 	vector<string> files;
 	find_files_matching_filter (files, from_path, accept_all_files, 0, false, true, true);
@@ -342,7 +355,19 @@ copy_recurse(const std::string & from_path, const std::string & to_dir)
 		std::string from = *i;
 		std::string to = Glib::build_filename (to_dir, (*i).substr(prefix_len));
 		g_mkdir_with_parents (Glib::path_get_dirname (to).c_str(), 0755);
-		copy_file (from, to);
+		if (copy_file (from, to) && preseve_timestamps) {
+			GStatBuf sb;
+			if (g_stat (from.c_str(), &sb) != 0) {
+				error << string_compose (_("Unable to query file timestamp from %1 to %2"), from) << endmsg;
+				continue;
+			}
+			struct utimbuf utb;
+			utb.actime = sb.st_atime;
+			utb.modtime = sb.st_mtime;
+			if (0 != g_utime (to.c_str (), &utb)) {
+				error << string_compose (_("Unable to preseve file timestamp from %1 to %2"), from, to) << endmsg;
+			}
+		}
 	}
 }
 
@@ -489,18 +514,24 @@ exists_and_writable (const std::string & p)
 	GStatBuf statbuf;
 
 	if (g_stat (p.c_str(), &statbuf) != 0) {
+		DEBUG_TRACE (DEBUG::FileUtils, string_compose("exists_and_writable stat '%1': failed\n", p));
 		/* doesn't exist - not writable */
 		return false;
 	} else {
+#ifndef PLATFORM_WINDOWS
+		/* Folders on Windows fail this test if they're on OneDrive */
+		DEBUG_TRACE (DEBUG::FileUtils, string_compose("exists_and_writable stat '%1': %2 \n", p, statbuf.st_mode));
 		if (!(statbuf.st_mode & S_IWUSR)) {
 			/* exists and is not writable */
 			return false;
 		}
+#endif
 		/* filesystem may be mounted read-only, so even though file
 		 * permissions permit access, the mount status does not.
 		 * access(2) seems like the best test for this.
 		 */
 		if (g_access (p.c_str(), W_OK) != 0) {
+			DEBUG_TRACE (DEBUG::FileUtils, string_compose("exists_and_writable g_access '%1': !W_OK\n", p));
 			return false;
 		}
 	}

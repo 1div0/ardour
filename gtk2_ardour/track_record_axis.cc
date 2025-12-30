@@ -70,8 +70,8 @@ using namespace Gtk;
 using namespace Gtkmm2ext;
 using namespace std;
 
-PBD::Signal1<void, TrackRecordAxis*> TrackRecordAxis::CatchDeletion;
-PBD::Signal2<void, TrackRecordAxis*, bool> TrackRecordAxis::EditNextName;
+PBD::Signal<void(TrackRecordAxis*)> TrackRecordAxis::CatchDeletion;
+PBD::Signal<void(TrackRecordAxis*, bool)> TrackRecordAxis::EditNextName;
 
 #define PX_SCALE(pxmin, dflt) rint (std::max ((double)pxmin, (double)dflt* UIConfiguration::instance ().get_ui_scale ()))
 
@@ -108,7 +108,7 @@ TrackRecordAxis::TrackRecordAxis (Session* s, std::shared_ptr<ARDOUR::Route> rt)
 	Config->ParameterChanged.connect (*this, invalidator (*this), ui_bind (&TrackRecordAxis::parameter_changed, this, _1), gui_context ());
 	s->config.ParameterChanged.connect (*this, invalidator (*this), ui_bind (&TrackRecordAxis::parameter_changed, this, _1), gui_context ());
 
-	PublicEditor::instance().playhead_cursor()->PositionChanged.connect (*this, invalidator (*this), boost::bind (&TrackSummary::playhead_position_changed, &_track_summary, _1), gui_context());
+	PublicEditor::instance().playhead_cursor()->PositionChanged.connect (*this, invalidator (*this), std::bind (&TrackSummary::playhead_position_changed, &_track_summary, _1), gui_context());
 
 	ResetAllPeakDisplays.connect (sigc::mem_fun (*this, &TrackRecordAxis::reset_peak_display));
 	ResetRoutePeakDisplays.connect (sigc::mem_fun (*this, &TrackRecordAxis::reset_route_peak_display));
@@ -119,10 +119,6 @@ TrackRecordAxis::TrackRecordAxis (Session* s, std::shared_ptr<ARDOUR::Route> rt)
 	_number_label.set_alignment (.5, .5);
 	_number_label.set_fallthrough_to_parent (true);
 	_number_label.signal_button_press_event().connect (sigc::mem_fun(*this, &TrackRecordAxis::route_ops_click), false);
-
-	PropertyList* plist = new PropertyList();
-	plist->add (ARDOUR::Properties::group_mute, true);
-	plist->add (ARDOUR::Properties::group_solo, true);
 
 	_playlist_button.set_name ("route button");
 	_playlist_button.signal_button_press_event().connect (sigc::mem_fun(*this, &TrackRecordAxis::playlist_click), false);
@@ -154,6 +150,7 @@ TrackRecordAxis::TrackRecordAxis (Session* s, std::shared_ptr<ARDOUR::Route> rt)
 
 	/* force the track header buttons into a boxy grid-shape */
 	rec_enable_button->set_tweaks(ArdourButton::Tweaks(ArdourButton::TrackHeader | ArdourButton::ForceBoxy));
+	mute_button->set_tweaks(ArdourButton::Tweaks(ArdourButton::TrackHeader | ArdourButton::ForceBoxy));
 	monitor_disk_button->set_tweaks(ArdourButton::Tweaks(ArdourButton::ForceBoxy));
 	monitor_input_button->set_tweaks(ArdourButton::Tweaks(ArdourButton::ForceBoxy));
 	_playlist_button.set_tweaks(ArdourButton::Tweaks(ArdourButton::TrackHeader | ArdourButton::ForceBoxy));
@@ -161,18 +158,20 @@ TrackRecordAxis::TrackRecordAxis (Session* s, std::shared_ptr<ARDOUR::Route> rt)
 	_number_label.set_tweaks(ArdourButton::Tweaks(ArdourButton::ForceBoxy | ArdourButton::ForceFlat));
 
 	_ctrls.attach (*rec_enable_button,     1,  2, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
-	_ctrls.attach (_input_button,          2,  3, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
-	_ctrls.attach (_playlist_button,       3,  4, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
-	_ctrls.attach (_name_frame,            4,  5, 0, 1, Gtk::FILL,         Gtk::FILL,   0, 0);
-	_ctrls.attach (*monitor_input_button,  5,  6, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
-	_ctrls.attach (*monitor_disk_button,   6,  7, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
-	_ctrls.attach (*_level_meter,          7,  8, 0, 1, Gtk::SHRINK,       Gtk::SHRINK, 0, 0);
-	_ctrls.attach (_number_label,          8,  9, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
-	_ctrls.attach (_vseparator,            9, 10, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
-	_ctrls.attach (_track_summary,        10, 11, 0, 1, Gtk::EXPAND|FILL,  Gtk::FILL,   1, 0);
+	_ctrls.attach (*mute_button,           2,  3, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
+	_ctrls.attach (_input_button,          3,  4, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
+	_ctrls.attach (_playlist_button,       4,  5, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
+	_ctrls.attach (_name_frame,            5,  6, 0, 1, Gtk::FILL,         Gtk::FILL,   0, 0);
+	_ctrls.attach (*monitor_input_button,  6,  7, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
+	_ctrls.attach (*monitor_disk_button,   7,  8, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
+	_ctrls.attach (*_level_meter,          8,  9, 0, 1, Gtk::SHRINK,       Gtk::SHRINK, 0, 0);
+	_ctrls.attach (_number_label,          9, 10, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
+	_ctrls.attach (_vseparator,           10, 11, 0, 1, Gtk::SHRINK,       Gtk::FILL,   0, 0);
+	_ctrls.attach (_track_summary,        11, 12, 0, 1, Gtk::EXPAND|FILL,  Gtk::FILL,   1, 0);
 
 	set_tooltip (*mute_button, _("Mute"));
 	set_tooltip (*rec_enable_button, _("Record"));
+	set_tooltip (*mute_button, _("Mute"));
 	set_tooltip (_playlist_button, _("Playlist")); // playlist_tip ()
 
 	set_name_label ();
@@ -187,6 +186,7 @@ TrackRecordAxis::TrackRecordAxis (Session* s, std::shared_ptr<ARDOUR::Route> rt)
 	pack_start (_ctrls, false, false);
 
 	rec_enable_button->show ();
+	mute_button->show ();
 	monitor_input_button->show ();
 	monitor_disk_button->show ();
 	mute_button->show ();
@@ -260,8 +260,8 @@ TrackRecordAxis::set_button_names ()
 	monitor_input_button->set_text (S_("MonitorInput|I"));
 	monitor_disk_button->set_text (S_("MonitorDisk|D"));
 #else
-	monitor_input_button->set_text (_("In"));
-	monitor_disk_button->set_text (_("Disk"));
+	monitor_input_button->set_text (S_("Monitor|In"));
+	monitor_disk_button->set_text (S_("Monitor|Disk"));
 #endif
 
 	/* Solo/Listen is N/A */
@@ -444,7 +444,7 @@ TrackRecordAxis::reset_route_peak_display (Route* route)
 }
 
 void
-TrackRecordAxis::reset_group_peak_display (RouteGroup* group)
+TrackRecordAxis::reset_group_peak_display (std::shared_ptr<RouteGroup> group)
 {
 	if (_route && group == _route->route_group ()) {
 		reset_peak_display ();
@@ -466,7 +466,7 @@ TrackRecordAxis::playlist_click (GdkEventButton* ev)
 	}
 
 	build_playlist_menu ();
-	_route->session ().selection().select_stripable_and_maybe_group (_route, false, true, 0);
+	_route->session ().selection().select_stripable_and_maybe_group (_route, SelectionSet, false, true, nullptr);
 	Gtkmm2ext::anchored_menu_popup (playlist_action_menu, &_playlist_button, "", 1, ev->time);
 
 	return true;
@@ -481,7 +481,7 @@ TrackRecordAxis::route_ops_click (GdkEventButton* ev)
 
 	build_route_ops_menu ();
 
-	_route->session ().selection().select_stripable_and_maybe_group (_route, false, true, 0);
+	_route->session ().selection().select_stripable_and_maybe_group (_route, SelectionSet, false, true, nullptr);
 
 	Gtkmm2ext::anchored_menu_popup (_route_ops_menu, &_number_label, "", 1, ev->time);
 	return true;
@@ -498,7 +498,7 @@ TrackRecordAxis::build_route_ops_menu ()
 
 	MenuList& items = _route_ops_menu->items ();
 
-	items.push_back (MenuElem (_("Color..."), sigc::mem_fun (*this, &RouteUI::choose_color)));
+	items.push_back (MenuElem (_("Color..."), sigc::bind (sigc::mem_fun (*this, &RouteUI::choose_color), dynamic_cast<Gtk::Window*> (get_toplevel()))));
 	items.push_back (MenuElem (_("Comments..."), sigc::mem_fun (*this, &RouteUI::open_comment_editor)));
 	items.push_back (MenuElem (_("Inputs..."), sigc::mem_fun (*this, &RouteUI::edit_input_configuration)));
 	items.push_back (MenuElem (_("Outputs..."), sigc::mem_fun (*this, &RouteUI::edit_output_configuration)));
@@ -671,14 +671,14 @@ TrackRecordAxis::TrackSummary::TrackSummary (std::shared_ptr<ARDOUR::Route> r)
 	_track = std::dynamic_pointer_cast<Track> (r);
 	assert (_track);
 
-	_track->PlaylistChanged.connect (_connections, invalidator (*this), boost::bind (&TrackSummary::playlist_changed, this), gui_context ());
-	_track->playlist()->ContentsChanged.connect (_playlist_connections, invalidator (*this), boost::bind (&TrackSummary::playlist_contents_changed, this), gui_context ());
-	_track->presentation_info().PropertyChanged.connect (_connections, invalidator (*this), boost::bind (&TrackSummary::property_changed, this, _1), gui_context ());
+	_track->PlaylistChanged.connect (_connections, invalidator (*this), std::bind (&TrackSummary::playlist_changed, this), gui_context ());
+	_track->playlist()->ContentsChanged.connect (_playlist_connections, invalidator (*this), std::bind (&TrackSummary::playlist_contents_changed, this), gui_context ());
+	_track->presentation_info().PropertyChanged.connect (_connections, invalidator (*this), std::bind (&TrackSummary::property_changed, this, _1), gui_context ());
 
-	_track->rec_enable_control()->Changed.connect (_connections, invalidator (*this), boost::bind (&TrackSummary::maybe_setup_rec_box, this), gui_context());
-	_track->session().TransportStateChange.connect (_connections, invalidator (*this), boost::bind (&TrackSummary::maybe_setup_rec_box, this), gui_context());
-	_track->session().TransportLooped.connect (_connections, invalidator (*this), boost::bind (&TrackSummary::maybe_setup_rec_box, this), gui_context());
-	_track->session().RecordStateChanged.connect (_connections, invalidator (*this), boost::bind (&TrackSummary::maybe_setup_rec_box, this), gui_context());
+	_track->rec_enable_control()->Changed.connect (_connections, invalidator (*this), std::bind (&TrackSummary::maybe_setup_rec_box, this), gui_context());
+	_track->session().TransportStateChange.connect (_connections, invalidator (*this), std::bind (&TrackSummary::maybe_setup_rec_box, this), gui_context());
+	_track->session().TransportLooped.connect (_connections, invalidator (*this), std::bind (&TrackSummary::maybe_setup_rec_box, this), gui_context());
+	_track->session().RecordStateChanged.connect (_connections, invalidator (*this), std::bind (&TrackSummary::maybe_setup_rec_box, this), gui_context());
 
 }
 
@@ -696,7 +696,7 @@ TrackRecordAxis::TrackSummary::render (Cairo::RefPtr<Cairo::Context> const& cr, 
 	cr->rectangle (r->x, r->y, r->width, r->height);
 	cr->clip ();
 
-	RouteGroup* g = _track->route_group ();
+	std::shared_ptr<RouteGroup> g (_track->route_group ());
 	if (g && g->is_color()) {
 		Gtkmm2ext::set_source_rgba (cr, GroupTabs::group_color (g));
 	} else {
@@ -833,7 +833,7 @@ void
 TrackRecordAxis::TrackSummary::playlist_changed ()
 {
 	_playlist_connections.disconnect ();
-	_track->playlist()->ContentsChanged.connect (_playlist_connections, invalidator (*this), boost::bind (&TrackSummary::playlist_contents_changed, this), gui_context ());
+	_track->playlist()->ContentsChanged.connect (_playlist_connections, invalidator (*this), std::bind (&TrackSummary::playlist_contents_changed, this), gui_context ());
 	set_dirty ();
 }
 

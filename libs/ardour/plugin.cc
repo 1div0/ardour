@@ -77,7 +77,7 @@ using namespace PBD;
 
 namespace ARDOUR { class AudioEngine; }
 
-PBD::Signal3<void, std::string, Plugin*, bool> Plugin::PresetsChanged;
+PBD::Signal<void(std::string, Plugin*, bool)> Plugin::PresetsChanged;
 
 bool
 PluginInfo::needs_midi_input () const
@@ -95,11 +95,12 @@ Plugin::Plugin (AudioEngine& e, Session& s)
 	, _have_pending_stop_events (false)
 	, _parameter_changed_since_last_preset (false)
 	, _immediate_events(6096) // FIXME: size?
-	, _pi (0)
+	, _resolve_midi (false)
+	, _pib (0)
 	, _num (0)
 {
 	_pending_stop_events.ensure_buffers (DataType::MIDI, 1, 4096);
-	PresetsChanged.connect_same_thread(_preset_connection, boost::bind (&Plugin::invalidate_preset_cache, this, _1, _2, _3));
+	PresetsChanged.connect_same_thread(_preset_connection, std::bind (&Plugin::invalidate_preset_cache, this, _1, _2, _3));
 }
 
 Plugin::Plugin (const Plugin& other)
@@ -116,12 +117,13 @@ Plugin::Plugin (const Plugin& other)
 	, _last_preset (other._last_preset)
 	, _parameter_changed_since_last_preset (false)
 	, _immediate_events(6096) // FIXME: size?
-	, _pi (other._pi)
+	, _resolve_midi (false)
+	, _pib (other._pib)
 	, _num (other._num)
 {
 	_pending_stop_events.ensure_buffers (DataType::MIDI, 1, 4096);
 
-	PresetsChanged.connect_same_thread(_preset_connection, boost::bind (&Plugin::invalidate_preset_cache, this, _1, _2, _3));
+	PresetsChanged.connect_same_thread(_preset_connection, std::bind (&Plugin::invalidate_preset_cache, this, _1, _2, _3));
 }
 
 Plugin::~Plugin ()
@@ -300,19 +302,19 @@ ARDOUR::find_plugin(Session& session, string identifier, PluginType type)
 ChanCount
 Plugin::output_streams () const
 {
-	/* LADSPA & VST should not get here because they do not
-	   return "infinite" i/o counts.
-	*/
-	return ChanCount::ZERO;
+	return get_info()->n_outputs;
 }
 
 ChanCount
 Plugin::input_streams () const
 {
-	/* LADSPA & VST should not get here because they do not
-	   return "infinite" i/o counts.
-	*/
-	return ChanCount::ZERO;
+	return get_info()->n_inputs;
+}
+
+samplecnt_t
+Plugin::plugin_tailtime () const
+{
+	return _session.sample_rate () * Config->get_tail_duration_sec ();
 }
 
 Plugin::IOPortDescription
@@ -331,9 +333,9 @@ Plugin::describe_io_port (ARDOUR::DataType dt, bool input, uint32_t id) const
 			break;
 	}
 	if (input) {
-		ss << _("In") << " ";
+		ss << S_("IO|In") << " ";
 	} else {
-		ss << _("Out") << " ";
+		ss << S_("IO|Out") << " ";
 	}
 
 	std::stringstream gn;
@@ -362,6 +364,7 @@ const Plugin::PresetRecord *
 Plugin::preset_by_label (const string& label)
 {
 	if (!_have_presets) {
+		_presets.clear ();
 		find_presets ();
 		_have_presets = true;
 	}
@@ -383,6 +386,7 @@ Plugin::preset_by_uri (const string& uri)
 		return 0;
 	}
 	if (!_have_presets) {
+		_presets.clear ();
 		find_presets ();
 		_have_presets = true;
 	}
@@ -408,7 +412,7 @@ int
 Plugin::connect_and_run (BufferSet& bufs,
 		samplepos_t /*start*/, samplepos_t /*end*/, double /*speed*/,
 		ChanMapping const& /*in_map*/, ChanMapping const& /*out_map*/,
-		pframes_t nframes, samplecnt_t /*offset*/)
+		pframes_t nframes, samplecnt_t offset)
 {
 	if (bufs.count().n_midi() > 0) {
 
@@ -419,7 +423,16 @@ Plugin::connect_and_run (BufferSet& bufs,
 		/* Track notes that we are sending to the plugin */
 		const MidiBuffer& b = bufs.get_midi (0);
 
-		_tracker.track (b.begin(), b.end());
+		for (auto const ev : b) {
+			if (ev.time () >= offset && ev.time () < nframes + offset) {
+				_tracker.track (ev);
+			}
+		}
+
+		bool canderef (true);
+		if (_resolve_midi.compare_exchange_strong (canderef, false)) {
+			resolve_midi ();
+		}
 
 		if (_have_pending_stop_events) {
 			/* Transmit note-offs that are pending from the last transport stop */
@@ -434,21 +447,21 @@ Plugin::connect_and_run (BufferSet& bufs,
 void
 Plugin::realtime_handle_transport_stopped ()
 {
-	resolve_midi ();
+	_resolve_midi = true;
 }
 
 void
 Plugin::realtime_locate (bool for_loop_end)
 {
 	if (!for_loop_end) {
-		resolve_midi ();
+		_resolve_midi = true;
 	}
 }
 
 void
 Plugin::monitoring_changed ()
 {
-	resolve_midi ();
+	_resolve_midi = true;
 }
 
 void
@@ -469,6 +482,7 @@ Plugin::get_presets ()
 	vector<PresetRecord> p;
 
 	if (!_have_presets) {
+		_presets.clear ();
 		find_presets ();
 		_have_presets = true;
 	}
@@ -518,6 +532,17 @@ Plugin::parameter_changed_externally (uint32_t which, float /* value */)
 	_session.set_dirty ();
 	ParameterChangedExternally (which, get_parameter (which)); /* EMIT SIGNAL */
 	PresetDirty (); /* EMIT SIGNAL */
+}
+
+void
+Plugin::send_processors_changed (ARDOUR::RouteProcessorChange const& rpc)
+{
+	ProcessorChange (rpc);
+
+	Route* r = dynamic_cast<Route*> (_owner);
+	if (r) {
+		r->processors_changed (rpc); /* EMIT SIGNAL */
+	}
 }
 
 void

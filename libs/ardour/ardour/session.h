@@ -29,8 +29,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_session_h__
-#define __ardour_session_h__
+#pragma once
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -48,9 +47,6 @@
 #include <stdint.h>
 
 #include <boost/dynamic_bitset.hpp>
-#include <boost/scoped_ptr.hpp>
-#include <boost/utility.hpp>
-
 #include <glibmm/threads.h>
 
 #include <ltc.h>
@@ -59,15 +55,22 @@
 #include "pbd/error.h"
 #include "pbd/event_loop.h"
 #include "pbd/file_archive.h"
+#include "pbd/history_owner.h"
 #include "pbd/rcu.h"
-#include "pbd/reallocpool.h"
 #include "pbd/statefuldestructible.h"
 #include "pbd/signals.h"
 #include "pbd/undo.h"
+#include "pbd/uuid.h"
 
+#ifdef USE_TLSF
+#  include "pbd/tlsf.h"
+#else
+#  include "pbd/reallocpool.h"
+#endif
 #include "lua/luastate.h"
 
 #include "temporal/range.h"
+#include "temporal/domain_provider.h"
 
 #include "midi++/types.h"
 #include "midi++/mmc.h"
@@ -85,7 +88,6 @@
 #include "ardour/rc_configuration.h"
 #include "ardour/session_configuration.h"
 #include "ardour/session_event.h"
-#include "ardour/interpolation.h"
 #include "ardour/plugin.h"
 #include "ardour/presentation_info.h"
 #include "ardour/route.h"
@@ -108,6 +110,8 @@ class Parser;
 
 namespace PBD {
 class Controllable;
+class Progress;
+class Command;
 }
 
 namespace luabridge {
@@ -146,6 +150,7 @@ struct GraphChain;
 class IO;
 class IOPlug;
 class IOProcessor;
+class IOTaskList;
 class ImportStatus;
 class MidiClockTicker;
 class MidiControlUI;
@@ -160,8 +165,8 @@ class PluginInsert;
 class PluginInfo;
 class Port;
 class PortInsert;
+class PortManager;
 class ProcessThread;
-class Progress;
 class Processor;
 class Region;
 class Return;
@@ -198,17 +203,14 @@ private:
 };
 
 /** Ardour Session */
-class LIBARDOUR_API Session : public PBD::StatefulDestructible, public PBD::ScopedConnectionList, public SessionEventManager, public TransportAPI
+class LIBARDOUR_API Session : public PBD::HistoryOwner,
+                              public PBD::StatefulDestructible,
+                              public PBD::ScopedConnectionList,
+                              public SessionEventManager,
+                              public TransportAPI,
+                              public Temporal::TimeDomainProvider
 {
-private:
-
 public:
-	enum RecordState {
-		Disabled = 0,
-		Enabled = 1,
-		Recording = 2
-	};
-
 	/* a new session might have non-empty mix_template, an existing session should always have an empty one.
 	   the bus profile can be null if no master out bus is required.
 	*/
@@ -218,7 +220,8 @@ public:
 	         const std::string& snapshot_name,
 	         BusProfile const * bus_profile = 0,
 	         std::string mix_template = "",
-	         bool unnamed = false);
+	         bool unnamed = false,
+	         samplecnt_t samplerate = 0);
 
 	virtual ~Session ();
 
@@ -231,6 +234,7 @@ public:
 	 * internal, not user-visible IDs */
 	static unsigned int next_name_id ();
 
+	std::string uuid() const { return _uuid.to_s(); }
 	std::string path() const { return _path; }
 	std::string name() const { return _name; }
 	std::string snap_name() const { return _current_snapshot_name; }
@@ -253,18 +257,19 @@ public:
 	bool cannot_save () const                      { return _state_of_the_state & CannotSave; }
 	bool in_cleanup () const                       { return _state_of_the_state & InCleanup; }
 	bool inital_connect_or_deletion_in_progress () const { return _state_of_the_state & (InitialConnecting | Deletion); }
+	bool have_external_connections_for_current_backend (bool tracks_only = true) const;
 	bool unnamed() const;
 
 	void end_unnamed_status () const;
 
-	PBD::Signal0<void> DirtyChanged;
+	PBD::Signal<void()> DirtyChanged;
 
 	const SessionDirectory& session_directory () const { return *(_session_dir.get()); }
 
-	static PBD::Signal1<void,std::string> Dialog;
+	static PBD::Signal<void(std::string)> Dialog;
 
-	PBD::Signal0<void> BatchUpdateStart;
-	PBD::Signal0<void> BatchUpdateEnd;
+	PBD::Signal<void()> BatchUpdateStart;
+	PBD::Signal<void()> BatchUpdateEnd;
 
 	int ensure_subdirs ();
 
@@ -292,20 +297,22 @@ public:
 	RouteList new_route_from_template (uint32_t how_many, PresentationInfo::order_t insert_at, const std::string& template_path, const std::string& name, PlaylistDisposition pd = NewPlaylist);
 	RouteList new_route_from_template (uint32_t how_many, PresentationInfo::order_t insert_at, XMLNode&, const std::string& name, PlaylistDisposition pd = NewPlaylist);
 	std::vector<std::string> get_paths_for_new_sources (bool allow_replacing, const std::string& import_file_path,
-	                                                    uint32_t channels, std::vector<std::string> const & smf_track_names);
+	                                                    uint32_t channels, std::vector<std::string> const & smf_track_names, bool use_smf_file_names);
 
-	int bring_all_sources_into_session (boost::function<void(uint32_t,uint32_t,std::string)> callback);
+	int bring_all_sources_into_session (std::function<void(uint32_t,uint32_t,std::string)> callback);
 
 	void process (pframes_t nframes);
 
 	void send_ltc_for_cycle (samplepos_t, samplepos_t, pframes_t);
-	void send_mclk_for_cycle (pframes_t, samplecnt_t);
+	void send_mclk_for_cycle (samplepos_t, samplepos_t, pframes_t, samplecnt_t);
 
 	BufferSet& get_silent_buffers (ChanCount count = ChanCount::ZERO);
 	BufferSet& get_noinplace_buffers (ChanCount count = ChanCount::ZERO);
 	BufferSet& get_scratch_buffers (ChanCount count = ChanCount::ZERO, bool silence = true);
 	BufferSet& get_route_buffers (ChanCount count = ChanCount::ZERO, bool silence = true);
 	BufferSet& get_mix_buffers (ChanCount count = ChanCount::ZERO);
+
+	void ensure_buffers_unlocked (ChanCount howmany);
 
 	bool have_rec_enabled_track () const;
 	bool have_rec_disabled_track () const;
@@ -323,11 +330,12 @@ public:
 	void refresh_disk_space ();
 
 	int load_routes (const XMLNode&, int);
-	std::shared_ptr<RouteList> get_routes() const {
+	std::shared_ptr<RouteList const> get_routes() const {
 		return routes.reader ();
 	}
 
 	std::shared_ptr<RTTaskList> rt_tasklist () { return _rt_tasklist; }
+	std::shared_ptr<IOTaskList> io_tasklist () { return _io_tasklist; }
 
 	RouteList get_routelist (bool mixer_order = false, PresentationInfo::Flag fl = PresentationInfo::MixerRoutes) const;
 
@@ -346,8 +354,6 @@ public:
 	std::shared_ptr<RouteList> get_routes_with_internal_returns() const;
 	std::shared_ptr<RouteList> get_routes_with_regions_at (timepos_t const &) const;
 
-	std::shared_ptr<AudioTrack> get_nth_audio_track (uint32_t) const;
-
 	uint32_t nstripables (bool with_monitor = false) const;
 	uint32_t nroutes() const { return routes.reader()->size(); }
 	uint32_t ntracks () const;
@@ -356,7 +362,7 @@ public:
 
 	bool plot_process_graph (std::string const& file_name) const;
 
-	std::shared_ptr<BundleList> bundles () {
+	std::shared_ptr<BundleList const> bundles () {
 		return _bundles.reader ();
 	}
 
@@ -378,6 +384,7 @@ public:
 	bool io_name_is_legal (const std::string&) const;
 	std::shared_ptr<Route> route_by_name (std::string) const;
 	std::shared_ptr<Route> route_by_id (PBD::ID) const;
+	std::shared_ptr<Stripable> stripable_by_name (std::string) const;
 	std::shared_ptr<Stripable> stripable_by_id (PBD::ID) const;
 	std::shared_ptr<Stripable> get_remote_nth_stripable (PresentationInfo::order_t n, PresentationInfo::Flag) const;
 	std::shared_ptr<Route> get_remote_nth_route (PresentationInfo::order_t n) const;
@@ -396,7 +403,7 @@ public:
 	}
 
 	RecordState record_status() const {
-		return _record_status.load(); 
+		return _record_status.load();
 	}
 
 	bool actively_recording () const {
@@ -412,22 +419,27 @@ public:
 
 	void maybe_write_autosave ();
 
+	PBD::Signal<void(int)> SurroundObjectCountChanged;
+
 	/* Emitted when all i/o connections are complete */
 
-	PBD::Signal0<void> IOConnectionsComplete;
+	PBD::Signal<void()> IOConnectionsComplete;
 
 	/* Record status signals */
 
-	PBD::Signal0<void> RecordStateChanged; /* signals changes in recording state (i.e. are we recording) */
+	PBD::Signal<void()> RecordStateChanged; /* signals changes in recording state (i.e. are we recording) */
 	/* XXX may 2015: paul says: it isn't clear to me that this has semantics that cannot be inferrred
 	   from the previous signal and session state.
 	*/
-	PBD::Signal0<void> RecordArmStateChanged; /* signals changes in recording arming */
+	PBD::Signal<void()> RecordArmStateChanged; /* signals changes in recording arming */
 
-	PBD::Signal0<void> UpdateRouteRecordState; /* signals potential change in route recording arming */
+	PBD::Signal<void()> UpdateRouteRecordState; /* signals potential change in route recording arming */
+
+	PBD::Signal<void()> RecordPassCompleted;
+	PBD::Signal<void()> ClearedLastCaptureSources;
 
 	/* Emited when session is loaded */
-	PBD::Signal0<void> SessionLoaded;
+	PBD::Signal<void()> SessionLoaded;
 
 	/* Transport mechanism signals */
 
@@ -438,38 +450,42 @@ public:
 	 *  - start (from the process thread)
 	 *  - engine halted
 	 */
-	PBD::Signal0<void> TransportStateChange;
+	PBD::Signal<void()> TransportStateChange;
 
-	PBD::Signal1<void,samplepos_t> PositionChanged; /* sent after any non-sequential motion */
-	PBD::Signal1<void,samplepos_t> Xrun;
-	PBD::Signal0<void> TransportLooped;
+	PBD::Signal<void(samplepos_t)> PositionChanged; /* sent after any non-sequential motion */
+	PBD::Signal<void(samplepos_t)> Xrun;
+	PBD::Signal<void()> TransportLooped;
 
 	/** emitted when a locate has occurred */
-	PBD::Signal0<void> Located;
+	PBD::Signal<void()> Located;
 
-	PBD::Signal1<void,RouteList&> RouteAdded;
+	PBD::Signal<void(RouteList&)> RouteAdded;
+	/* This is emitted after one or more routes are added that are actually
+	   Tracks with an instrument plugin.
+	*/
+	PBD::Signal<void(RouteList&)> InstrumentRouteAdded;
 	/** Emitted when a property of one of our route groups changes.
 	 *  The parameter is the RouteGroup that has changed.
 	 */
-	PBD::Signal1<void, RouteGroup *> RouteGroupPropertyChanged;
+	PBD::Signal<void(std::shared_ptr<RouteGroup>)> RouteGroupPropertyChanged;
 	/** Emitted when a route is added to one of our route groups.
 	 *  First parameter is the RouteGroup, second is the route.
 	 */
-	PBD::Signal2<void, RouteGroup *, std::weak_ptr<Route> > RouteAddedToRouteGroup;
+	PBD::Signal<void(std::shared_ptr<RouteGroup>, std::weak_ptr<Route> )> RouteAddedToRouteGroup;
 	/** Emitted when a route is removed from one of our route groups.
 	 *  First parameter is the RouteGroup, second is the route.
 	 */
-	PBD::Signal2<void, RouteGroup *, std::weak_ptr<Route> > RouteRemovedFromRouteGroup;
+	PBD::Signal<void(std::shared_ptr<RouteGroup>, std::weak_ptr<Route> )> RouteRemovedFromRouteGroup;
 
 	/** Emitted when a foldback send is created or deleted
 	 */
-	PBD::Signal0<void> FBSendsChanged;
+	PBD::Signal<void()> FBSendsChanged;
 
 	/* Step Editing status changed */
-	PBD::Signal1<void,bool> StepEditStatusChange;
+	PBD::Signal<void(bool)> StepEditStatusChange;
 
 	/* Timecode state signals */
-	PBD::Signal0<void> MtcOrLtcInputPortChanged;
+	PBD::Signal<void()> MtcOrLtcInputPortChanged;
 
 	void queue_event (SessionEvent*);
 
@@ -478,6 +494,8 @@ public:
 	void request_roll (TransportRequestSource origin = TRS_UI);
 	void request_stop (bool abort = false, bool clear_state = false, TransportRequestSource origin = TRS_UI);
 	void request_locate (samplepos_t sample, bool force = false, LocateTransportDisposition ltd = RollIfAppropriate, TransportRequestSource origin = TRS_UI);
+
+	bool request_locate_to_mark (std::string const&, LocateTransportDisposition ltd = RollIfAppropriate, TransportRequestSource origin = TRS_UI);
 
 	void request_play_loop (bool yn, bool leave_rolling = false);
 	bool get_play_loop () const { return play_loop; }
@@ -535,9 +553,9 @@ public:
 
 	Locations *locations() { return _locations; }
 
-	PBD::Signal1<void,Location*>    auto_loop_location_changed;
-	PBD::Signal1<void,Location*>    auto_punch_location_changed;
-	PBD::Signal0<void>              locations_modified;
+	PBD::Signal<void(Location*)>    auto_loop_location_changed;
+	PBD::Signal<void(Location*)>    auto_punch_location_changed;
+	PBD::Signal<void()>              locations_modified;
 
 	void set_auto_punch_location (Location *);
 	void set_auto_loop_location (Location *);
@@ -553,7 +571,7 @@ public:
 	samplecnt_t worst_latency_preroll () const;
 	samplecnt_t worst_latency_preroll_buffer_size_ceil () const;
 
-	PBD::Signal1<void, bool> LatencyUpdated;
+	PBD::Signal<void(bool)> LatencyUpdated;
 
 	struct SaveAs {
 		std::string new_parent_folder;  /* parent folder where new session folder will be created */
@@ -576,7 +594,7 @@ public:
 		 * Handler should return true for save-as to continue, or false
 		 * to stop (and remove all evidence of partial save-as).
 		 */
-		PBD::Signal3<bool,float,int64_t,int64_t> Progress;
+		PBD::Signal<bool(float,int64_t,int64_t)> Progress;
 
 		/* if save_as() returns non-zero, this string will indicate the reason why.
 		 */
@@ -611,7 +629,7 @@ public:
 	                     ArchiveEncode compress_audio = FLAC_16BIT,
 	                     PBD::FileArchive::CompressionLevel compression_level = PBD::FileArchive::CompressGood,
 	                     bool only_used_sources = false,
-	                     Progress* p = 0);
+	                     PBD::Progress* p = 0);
 
 	int restore_state (std::string snapshot_name);
 	int save_template (const std::string& template_name, const std::string& description = "", bool replace_existing = false);
@@ -625,8 +643,8 @@ public:
 	void set_nsm_state (bool state) { _under_nsm_control = state; }
 	bool save_default_options ();
 
-	PBD::Signal1<void,std::string> StateSaved;
-	PBD::Signal0<void> StateReady;
+	PBD::Signal<void(std::string)> StateSaved;
+	PBD::Signal<void()> StateReady;
 
 	/* emitted when session needs to be saved due to some internal
 	 * event or condition (i.e. not in response to a user request).
@@ -636,17 +654,49 @@ public:
 	 *
 	 * Argument is the snapshot name to use when saving.
 	 */
-	PBD::Signal1<void,std::string> SaveSessionRequested;
+	PBD::Signal<void(std::string)> SaveSessionRequested;
 
 	/* emitted during a session save to allow other entities to add state, via
 	 * extra XML, to the session state
 	 */
-	PBD::Signal0<void> SessionSaveUnderway;
+	PBD::Signal<void()> SessionSaveUnderway;
 
 	std::vector<std::string> possible_states() const;
 	static std::vector<std::string> possible_states (std::string path);
 
-	bool export_track_state (std::shared_ptr<RouteList> rl, const std::string& path);
+	enum RouteGroupImportMode {
+		IgnoreRouteGroup,
+		UseRouteGroup,
+		CreateRouteGroup
+	};
+
+	struct RouteImportInfo {
+		RouteImportInfo (std::string const& n, PresentationInfo const& p, int mb)
+			: name (n)
+			, pi (p)
+			, mixbus (mb)
+		{}
+
+		std::string      name;
+		PresentationInfo pi;
+		int              mixbus;
+
+		bool operator< (RouteImportInfo const& o) {
+			if (mixbus != o.mixbus) {
+				return mixbus < o.mixbus;
+			}
+			return name < o.name;
+		}
+
+		bool operator== (RouteImportInfo const& o) {
+			return mixbus == o.mixbus && name == o.name;
+		}
+	};
+
+	bool export_route_state (std::shared_ptr<RouteList> rl, const std::string& path, bool with_sources);
+	int  import_route_state (const std::string& path, std::map<PBD::ID, PBD::ID> const&, RouteGroupImportMode rgim = CreateRouteGroup);
+
+	std::map<PBD::ID, RouteImportInfo> parse_route_state (const std::string& path, bool& match_pbd_id);
 
 	/// The instant xml file is written to the session directory
 	void add_instant_xml (XMLNode&, bool write_to_config = true);
@@ -694,26 +744,24 @@ public:
 		bool _reconfigure_on_delete;
 	};
 
-	RouteGroup* new_route_group (const std::string&);
-	void add_route_group (RouteGroup *);
-	void remove_route_group (RouteGroup* rg) { if (rg) remove_route_group (*rg); }
-	void remove_route_group (RouteGroup&);
-	void reorder_route_groups (std::list<RouteGroup*>);
+	std::shared_ptr<RouteGroup> new_route_group (const std::string&);
+	void add_route_group (std::shared_ptr<RouteGroup>);
+	void remove_route_group (std::shared_ptr<RouteGroup> rg);
+	void reorder_route_groups (RouteGroupList);
 
-	RouteGroup* route_group_by_name (std::string);
-	RouteGroup& all_route_group() const;
+	std::shared_ptr<RouteGroup> route_group_by_name (std::string);
 
-	PBD::Signal1<void,RouteGroup*> route_group_added;
-	PBD::Signal0<void>             route_group_removed;
-	PBD::Signal0<void>             route_groups_reordered;
+	PBD::Signal<void(std::shared_ptr<RouteGroup>)> route_group_added;
+	PBD::Signal<void()>             route_group_removed;
+	PBD::Signal<void()>             route_groups_reordered;
 
-	void foreach_route_group (boost::function<void(RouteGroup*)> f) {
-		for (std::list<RouteGroup *>::iterator i = _route_groups.begin(); i != _route_groups.end(); ++i) {
-			f (*i);
+	void foreach_route_group (std::function<void(std::shared_ptr<RouteGroup>)> f) {
+		for (auto & rg : _route_groups) {
+			f (rg);
 		}
 	}
 
-	std::list<RouteGroup*> const & route_groups () const {
+	RouteGroupList const & route_groups () const {
 		return _route_groups;
 	}
 
@@ -722,7 +770,7 @@ public:
 	std::list<std::shared_ptr<AudioTrack> > new_audio_track (
 		int input_channels,
 		int output_channels,
-		RouteGroup* route_group,
+		std::shared_ptr<RouteGroup> route_group,
 		uint32_t how_many,
 		std::string name_template,
 		PresentationInfo::order_t order,
@@ -735,15 +783,15 @@ public:
 		const ChanCount& input, const ChanCount& output, bool strict_io,
 		std::shared_ptr<PluginInfo> instrument,
 		Plugin::PresetRecord* pset,
-		RouteGroup* route_group, uint32_t how_many, std::string name_template,
+		std::shared_ptr<RouteGroup> route_group, uint32_t how_many, std::string name_template,
 		PresentationInfo::order_t,
 		TrackMode mode,
 		bool input_auto_connect,
 		bool trigger_visibility = false
 		);
 
-	RouteList new_audio_route (int input_channels, int output_channels, RouteGroup* route_group, uint32_t how_many, std::string name_template, PresentationInfo::Flag, PresentationInfo::order_t);
-	RouteList new_midi_route (RouteGroup* route_group, uint32_t how_many, std::string name_template, bool strict_io, std::shared_ptr<PluginInfo> instrument, Plugin::PresetRecord*, PresentationInfo::Flag, PresentationInfo::order_t);
+	RouteList new_audio_route (int input_channels, int output_channels, std::shared_ptr<RouteGroup> route_group, uint32_t how_many, std::string name_template, PresentationInfo::Flag, PresentationInfo::order_t);
+	RouteList new_midi_route (std::shared_ptr<RouteGroup> route_group, uint32_t how_many, std::string name_template, bool strict_io, std::shared_ptr<PluginInfo> instrument, Plugin::PresetRecord*, PresentationInfo::Flag, PresentationInfo::order_t);
 
 	void remove_routes (std::shared_ptr<RouteList>);
 	void remove_route (std::shared_ptr<Route>);
@@ -762,7 +810,7 @@ public:
 	samplepos_t audible_sample (bool* latent_locate = NULL) const;
 	samplepos_t requested_return_sample() const { return _requested_return_sample; }
 	void set_requested_return_sample(samplepos_t return_to);
-	boost::optional<samplepos_t> const & nominal_jack_transport_sample() { return _nominal_jack_transport_sample; }
+	std::optional<samplepos_t> const & nominal_jack_transport_sample() { return _nominal_jack_transport_sample; }
 
 	bool compute_audible_delta (samplepos_t& pos_and_delta) const;
 	samplecnt_t remaining_latency_preroll () const { return _remaining_latency_preroll; }
@@ -793,15 +841,15 @@ public:
 	samplecnt_t convert_to_samples (AnyTime const & position);
 	samplecnt_t any_duration_to_samples (samplepos_t position, AnyTime const & duration);
 
-	static PBD::Signal1<void, samplepos_t> StartTimeChanged;
-	static PBD::Signal1<void, samplepos_t> EndTimeChanged;
+	static PBD::Signal<void(samplepos_t)> StartTimeChanged;
+	static PBD::Signal<void(samplepos_t)> EndTimeChanged;
 
 	void   request_sync_source (std::shared_ptr<TransportMaster>);
 	bool   synced_to_engine() const;
 
 	double engine_speed() const { return _engine_speed; }
 	double actual_speed() const;
-	double transport_speed() const;
+	double transport_speed (bool incl_preroll = false) const;
 	/** @return true if the transport state (TFSM) is stopped */
 	bool   transport_stopped() const;
 	/** @return true if the transport state (TFSM) is stopped or stopping */
@@ -822,7 +870,7 @@ public:
 
 	bool punch_is_possible () const;
 	bool loop_is_possible () const;
-	PBD::Signal0<void> PunchLoopConstraintChange;
+	PBD::Signal<void()> PunchLoopConstraintChange;
 
 	void maybe_update_tempo_from_midiclock_tempo (float bpm);
 
@@ -850,11 +898,11 @@ public:
 
 	int start_audio_export (samplepos_t position, bool realtime = false, bool region_export = false);
 
-	PBD::Signal1<int, samplecnt_t> ProcessExport;
-	static PBD::Signal4<void, std::string, std::string, bool, samplepos_t> Exported;
+	PBD::Signal<int(samplecnt_t)> ProcessExport;
+	static PBD::Signal<void(std::string, std::string, bool, samplepos_t)> Exported;
 
 	void add_source (std::shared_ptr<Source>);
-	void remove_source (std::weak_ptr<Source>);
+	void remove_source (std::weak_ptr<Source>, bool drop_references = true);
 
 	void cleanup_regions();
 	bool can_cleanup_peakfiles () const;
@@ -865,32 +913,34 @@ public:
 	int destroy_sources (std::list<std::shared_ptr<Source> > const&);
 
 	int remove_last_capture ();
-	void get_last_capture_sources (std::list<std::shared_ptr<Source> >&);
+	bool have_last_capture_sources () const;
+	void last_capture_sources (std::list<std::shared_ptr<Source> >&) const;
+	void reset_last_capture_sources ();
 
 	/** handlers should return -1 for "stop cleanup",
 	    0 for "yes, delete this playlist",
 	    1 for "no, don't delete this playlist".
 	*/
-	static PBD::Signal1<int,std::shared_ptr<Playlist> >  AskAboutPlaylistDeletion;
+	static PBD::Signal<int(std::shared_ptr<Playlist> )>  AskAboutPlaylistDeletion;
 
 	/** handlers should return 0 for "ignore the rate mismatch",
 	    !0 for "do not use this session"
 	*/
-	static PBD::Signal2<int, samplecnt_t, samplecnt_t> AskAboutSampleRateMismatch;
+	static PBD::Signal<int(samplecnt_t, samplecnt_t)> AskAboutSampleRateMismatch;
 
 	/** non interactive message */
-	static PBD::Signal2<void, samplecnt_t, samplecnt_t> NotifyAboutSampleRateMismatch;
+	static PBD::Signal<void(samplecnt_t, samplecnt_t)> NotifyAboutSampleRateMismatch;
 
 	/** handlers should return !0 for use pending state, 0 for ignore it.
 	 */
-	static PBD::Signal0<int> AskAboutPendingState;
+	static PBD::Signal<int()> AskAboutPendingState;
 
 	/** after loading a session, once all ports have been created and connected
 	 * signal is emitted to let objects that need to do some housekeeping
 	 * post-connect.
 	 */
 
-	static PBD::Signal0<void> AfterConnect;
+	static PBD::Signal<void()> AfterConnect;
 
 	std::shared_ptr<AudioFileSource> create_audio_source_for_session (
 		size_t, std::string const &, uint32_t);
@@ -903,7 +953,7 @@ public:
 	std::shared_ptr<MidiSource> midi_source_by_path (const std::string&, bool need_source_lock) const;
 	uint32_t count_sources_by_origin (const std::string&);
 
-	void add_playlist (std::shared_ptr<Playlist>, bool unused = false);
+	void add_playlist (std::shared_ptr<Playlist>);
 
 	/* Curves and AutomationLists (TODO when they go away) */
 	void add_automation_list(AutomationList*);
@@ -916,7 +966,7 @@ public:
 	void cancel_audition ();
 	bool is_auditioning () const;
 
-	PBD::Signal1<void,bool> AuditionActive;
+	PBD::Signal<void(bool)> AuditionActive;
 
 	/* session script */
 	void register_lua_function (const std::string&, const std::string&, const LuaScriptParamList&);
@@ -925,32 +975,33 @@ public:
 	uint32_t registered_lua_function_count () const { return _n_lua_scripts; }
 	void scripts_changed (); // called from lua, updates _n_lua_scripts
 
-	PBD::Signal0<void> LuaScriptsChanged;
+	PBD::Signal<void()> LuaScriptsChanged;
 
 	/* I/O Plugin */
-	PBD::Signal0<void> IOPluginsChanged;
+	PBD::Signal<void()> IOPluginsChanged;
 
 	void load_io_plugin (std::shared_ptr<IOPlug>);
 	bool unload_io_plugin (std::shared_ptr<IOPlug>);
 
 	std::shared_ptr<IOPlug> nth_io_plug (uint32_t n) {
-		std::shared_ptr<IOPlugList> iop (_io_plugins.reader ());
+		std::shared_ptr<IOPlugList const> iop (_io_plugins.reader ());
 		if (n < iop->size ()) {
 			return (*iop)[n];
 		}
 		return std::shared_ptr<IOPlug> ();
 	}
 
-	std::shared_ptr<IOPlugList> io_plugs () const {
+	std::shared_ptr<IOPlugList const> io_plugs () const {
 		return _io_plugins.reader ();
 	}
 
 	/* flattening stuff */
 
 	std::shared_ptr<Region> write_one_track (Track&, samplepos_t start, samplepos_t end,
-	                                           bool overwrite, std::vector<std::shared_ptr<Source> >&, InterThreadInfo& wot,
-	                                           std::shared_ptr<Processor> endpoint,
-	                                           bool include_endpoint, bool for_export, bool for_freeze, std::string const& name);
+	                                         bool overwrite, std::vector<std::shared_ptr<Source> >&, InterThreadInfo& wot,
+	                                         std::shared_ptr<Processor> endpoint,
+	                                         bool include_endpoint, bool for_export, bool for_freeze,
+	                                         std::string const& source_name = "", std::string const& region_name = "");
 	int freeze_all (InterThreadInfo&);
 
 	/* session-wide solo/mute/rec-enable */
@@ -966,26 +1017,27 @@ public:
 	bool solo_selection_active ();
 	void solo_selection (StripableList&, bool);
 
-	void clear_all_solo_state (std::shared_ptr<RouteList>);
+	void clear_all_solo_state (std::shared_ptr<RouteList const>);
 	void prepare_momentary_solo (SoloMuteRelease* smr = NULL, bool exclusive = false, std::shared_ptr<Route> route = std::shared_ptr<Route> ());
 
 	static const SessionEvent::RTeventCallback rt_cleanup;
 
 	/* Control-based methods */
 
-	void set_controls (std::shared_ptr<ControlList>, double val, PBD::Controllable::GroupControlDisposition);
+	void set_controls (std::shared_ptr<AutomationControlList>, double val, PBD::Controllable::GroupControlDisposition);
 	void set_control (std::shared_ptr<AutomationControl>, double val, PBD::Controllable::GroupControlDisposition);
 
 	void set_exclusive_input_active (std::shared_ptr<RouteList> rt, bool onoff, bool flip_others = false);
 
-	PBD::Signal1<void,bool> SoloActive;
-	PBD::Signal0<void> SoloChanged;
-	PBD::Signal0<void> MuteChanged;
-	PBD::Signal0<void> IsolatedChanged;
-	PBD::Signal0<void> MonitorChanged;
-	PBD::Signal0<void> MonitorBusAddedOrRemoved;
+	PBD::Signal<void(bool)> SoloActive;
+	PBD::Signal<void()> SoloChanged;
+	PBD::Signal<void()> MuteChanged;
+	PBD::Signal<void()> IsolatedChanged;
+	PBD::Signal<void()> MonitorChanged;
+	PBD::Signal<void()> MonitorBusAddedOrRemoved;
+	PBD::Signal<void()> SurroundMasterAddedOrRemoved;
 
-	PBD::Signal0<void> session_routes_reconnected;
+	PBD::Signal<void()> session_routes_reconnected;
 
 	/* monitor/master out */
 	int add_master_bus (ChanCount const&);
@@ -996,6 +1048,7 @@ public:
 	std::shared_ptr<Route> monitor_out() const { return _monitor_out; }
 	std::shared_ptr<Route> master_out() const { return _master_out; }
 	std::shared_ptr<GainControl>  master_volume () const;
+	std::shared_ptr<Route> surround_master() const { return _surround_master; }
 
 	PresentationInfo::order_t master_order_key () const { return _master_out ? _master_out->presentation_info ().order () : -1; }
 	bool ensure_stripable_sort_order ();
@@ -1022,21 +1075,27 @@ public:
 	}
 
 	uint32_t next_send_id();
+	uint32_t next_surround_send_id();
 	uint32_t next_aux_send_id();
 	uint32_t next_return_id();
 	uint32_t next_insert_id();
 	void mark_send_id (uint32_t);
+	void mark_surround_send_id (uint32_t);
 	void mark_aux_send_id (uint32_t);
 	void mark_return_id (uint32_t);
 	void mark_insert_id (uint32_t);
 	void unmark_send_id (uint32_t);
+	void unmark_surround_send_id (uint32_t);
 	void unmark_aux_send_id (uint32_t);
 	void unmark_return_id (uint32_t);
 	void unmark_insert_id (uint32_t);
 
+	bool vapor_barrier ();
+	bool vapor_export_barrier ();
+
 	/* s/w "RAID" management */
 
-	boost::optional<samplecnt_t> available_capture_duration();
+	std::optional<samplecnt_t> available_capture_duration();
 
 	/* I/O bundles */
 
@@ -1044,7 +1103,7 @@ public:
 	void remove_bundle (std::shared_ptr<Bundle>);
 	std::shared_ptr<Bundle> bundle_by_name (std::string) const;
 
-	PBD::Signal0<void> BundleAddedOrRemoved;
+	PBD::Signal<void()> BundleAddedOrRemoved;
 
 	void midi_panic ();
 
@@ -1059,81 +1118,19 @@ public:
 	 */
 	void redo (uint32_t n);
 
-	UndoHistory& history() { return _history; }
+	PBD::UndoHistory& history() { return _history; }
 
 	uint32_t undo_depth() const { return _history.undo_depth(); }
 	uint32_t redo_depth() const { return _history.redo_depth(); }
 	std::string next_undo() const { return _history.next_undo(); }
 	std::string next_redo() const { return _history.next_redo(); }
 
-	/** begin collecting undo information
-	 *
-	 * This call must always be followed by either
-	 * begin_reversible_command() or commit_reversible_command()
-	 *
-	 * @param cmd_name human readable name for the undo operation
-	 */
-	void begin_reversible_command (const std::string& cmd_name);
-	void begin_reversible_command (GQuark);
-	/** abort an open undo command
-	 * This must only be called after begin_reversible_command ()
-	 */
-	void abort_reversible_command ();
-	/** finalize an undo command and commit pending transactions
-	 *
-	 * This must only be called after begin_reversible_command ()
-	 * @param cmd (additional) command to add
-	 */
-	void commit_reversible_command (Command* cmd = 0);
-
-	void add_command (Command *const cmd);
-
-	/** create an StatefulDiffCommand from the given object and add it to the stack.
-	 *
-	 * This function must only be called after  begin_reversible_command.
-	 * Failing to do so may lead to a crash.
-	 *
-	 * @param sfd the object to diff
-	 * @returns the allocated StatefulDiffCommand (already added via add_command)
-	 */
-	PBD::StatefulDiffCommand* add_stateful_diff_command (std::shared_ptr<PBD::StatefulDestructible> sfd);
-
-	/** @return The list of operations that are currently in progress */
-	std::list<GQuark> const & current_operations () {
-		return _current_trans_quarks;
-	}
-
-	bool operation_in_progress (GQuark) const;
-
-	/**
-	 * Test if any undo commands were added since the
-	 * call to begin_reversible_command ()
-	 *
-	 * This is useful to determine if an undoable
-	 * action was performed before adding additional
-	 * information (e.g. selection changes) to the
-	 * undo transaction.
-	 *
-	 * @return true if undo operation is valid but empty
-	 */
-	bool collected_undo_commands () const {
-		return _current_trans && !_current_trans->empty ();
-	}
-
-	/**
-	 * Abort reversible command IFF no undo changes
-	 * have been collected.
-	 * @return true if undo operation was aborted.
-	 */
-	bool abort_empty_reversible_command ();
-
-	void add_commands (std::vector<Command*> const & cmds);
 
 	std::map<PBD::ID,PBD::StatefulDestructible*> registry;
 
 	// these commands are implemented in libs/ardour/session_command.cc
-	Command* memento_command_factory(XMLNode* n);
-	Command* stateful_diff_command_factory (XMLNode *);
+	PBD::Command* memento_command_factory(XMLNode* n);
+	PBD::Command* stateful_diff_command_factory (XMLNode *);
 	void register_with_memento_command_factory(PBD::ID, PBD::StatefulDestructible*);
 
 	/* clicking */
@@ -1170,7 +1167,7 @@ public:
 	void clear_range_selection ();
 	void clear_object_selection ();
 
-	void cut_copy_section (Temporal::timepos_t const& start, Temporal::timepos_t const& end, Temporal::timepos_t const& to, bool const copy = false);
+	void cut_copy_section (Temporal::timepos_t const& start, Temporal::timepos_t const& end, Temporal::timepos_t const& to, SectionOperation const op);
 
 	/* buffers for gain and pan */
 
@@ -1179,8 +1176,6 @@ public:
 	gain_t* send_gain_automation_buffer () const;
 	gain_t* scratch_automation_buffer () const;
 	pan_t** pan_automation_buffer () const;
-
-	void ensure_buffer_set (BufferSet& buffers, const ChanCount& howmany);
 
 	/* VST support */
 
@@ -1197,7 +1192,7 @@ public:
 		float opt
 		);
 
-	static PBD::Signal0<void> SendFeedback;
+	static PBD::Signal<void()> SendFeedback;
 
 	/* Speakers */
 
@@ -1284,12 +1279,12 @@ public:
 	    processing path.  Until it is fixed (by the user) some (unspecified)
 	    routes will not be run.
 	*/
-	static PBD::Signal0<void> FeedbackDetected;
+	static PBD::Signal<void()> FeedbackDetected;
 
 	/** Emitted when a graph sort has successfully completed, which means
 	    that it has no feedback cycles.
 	*/
-	static PBD::Signal0<void> SuccessfulGraphSort;
+	static PBD::Signal<void()> SuccessfulGraphSort;
 
 	/* handlers can return an integer value:
 	   0: config.set_audio_search_path() or config.set_midi_search_path() was used
@@ -1300,19 +1295,19 @@ public:
 	   -1: just mark this one missing
 	   any other value: as -1
 	*/
-	static PBD::Signal3<int,Session*,std::string,DataType> MissingFile;
+	static PBD::Signal<int(Session*,std::string,DataType)> MissingFile;
 
 	void set_missing_file_replacement (const std::string& mfr) {
 		_missing_file_replacement = mfr;
 	}
 
 	/** Emitted when the session wants Ardour to quit */
-	static PBD::Signal0<void> Quit;
+	static PBD::Signal<void()> Quit;
 
 	/** Emitted when Ardour is asked to load a session in an older session
 	 * format, and makes a backup copy.
 	 */
-	static PBD::Signal2<void,std::string,std::string> VersionMismatch;
+	static PBD::Signal<void(std::string,std::string)> VersionMismatch;
 
 	SceneChanger* scene_changer() const { return _scene_changer; }
 
@@ -1383,16 +1378,17 @@ public:
 	int num_triggerboxes () const;
 	std::shared_ptr<TriggerBox> triggerbox_at (int32_t route_index) const;
 	TriggerPtr trigger_at (int32_t route_index, int32_t row_index) const;
-	bool bang_trigger_at(int32_t route_index, int32_t row_index);
+	bool bang_trigger_at(int32_t route_index, int32_t row_index, float velocity = 1.0);
 	bool unbang_trigger_at(int32_t route_index, int32_t row_index);
+	void clear_cue (int row_index);
+	std::shared_ptr<TriggerBox> armed_triggerbox () const;
 
-	void globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to);
+	void start_domain_bounce (Temporal::DomainBounceInfo&);
+	void finish_domain_bounce (Temporal::DomainBounceInfo&);
 
-	/* Can be accessed only in process() context, and only after
-	 * Session::process() has returned.
-	 */
-
-	ProcessedRanges processed_ranges;
+	AnyTime global_quantization() const { return _global_quantization; }
+	void set_global_quantization (AnyTime const &);
+	PBD::Signal<void()> QuantizationChanged;
 
 protected:
 	friend class AudioEngine;
@@ -1485,6 +1481,12 @@ private:
 	void add_monitor_section ();
 	void remove_monitor_section ();
 
+	void add_surround_master ();
+	void remove_surround_master ();
+
+	std::optional<bool> _vapor_available;
+	std::optional<bool> _vapor_exportable;
+
 	void update_latency (bool playback);
 	void set_owned_port_public_latency (bool playback);
 	bool update_route_latency (bool reverse, bool apply_to_delayline, bool* delayline_update_needed);
@@ -1498,8 +1500,9 @@ private:
 	void setup_engine_resampling ();
 
 	void ensure_buffers (ChanCount howmany = ChanCount::ZERO);
+	ChanCount _required_thread_buffers;
+	size_t    _required_thread_buffersize;
 
-	void process_scrub          (pframes_t);
 	void process_without_events (pframes_t);
 	void process_with_events    (pframes_t);
 	void process_audition       (pframes_t);
@@ -1586,6 +1589,7 @@ private:
 	bool maybe_stop (samplepos_t limit);
 	bool maybe_sync_start (pframes_t &);
 
+	PBD::UUID               _uuid;
 	std::string             _path;
 	std::string             _name;
 	bool                    _is_new;
@@ -1594,11 +1598,11 @@ private:
 	 *  know when to send full MTC messages every so often.
 	 */
 	pframes_t               _pframes_since_last_mtc;
-	bool                     play_loop;
+	std::atomic<bool>        play_loop;
 	bool                     loop_changing;
 	samplepos_t              last_loopend;
 
-	boost::scoped_ptr<SessionDirectory> _session_dir;
+	const std::unique_ptr<SessionDirectory> _session_dir;
 
 	void hookup_io ();
 	void graph_reordered (bool called_from_backend);
@@ -1611,10 +1615,11 @@ private:
 	XMLTree*         state_tree;
 	StateOfTheState _state_of_the_state;
 
-	friend class    StateProtector;
-	std::atomic<int>  _suspend_save;
-	volatile bool      _save_queued;
-	volatile bool      _save_queued_pending;
+	friend class     StateProtector;
+	std::atomic<int> _suspend_save;
+	volatile bool    _save_queued;
+	volatile bool    _save_queued_pending;
+	bool             _no_save_signal;
 
 	Glib::Threads::Mutex save_state_lock;
 	Glib::Threads::Mutex save_source_lock;
@@ -1632,7 +1637,11 @@ private:
 	bool              pending_abort;
 	bool              pending_auto_loop;
 
+#ifdef USE_TLSF
+	PBD::TLSF _mempool;
+#else
 	PBD::ReallocPool _mempool;
+#endif
 	LuaState lua;
 	mutable Glib::Threads::Mutex lua_lock;
 	luabridge::LuaRef * _lua_run;
@@ -1645,6 +1654,7 @@ private:
 	uint32_t            _n_lua_scripts;
 
 	void setup_lua ();
+	void luabindings_session_rt (lua_State*);
 	void try_run_lua (pframes_t);
 
 	SerializedRCUManager<IOPlugList> _io_plugins;
@@ -1813,10 +1823,10 @@ private:
 	void mmc_shuttle (MIDI::MachineControl &mmc, float speed, bool forw);
 	void mmc_record_enable (MIDI::MachineControl &mmc, size_t track, bool enabled);
 
-	struct timeval last_mmc_step;
-	double step_speed;
+	int64_t _last_mmc_step;
+	double  step_speed;
 
-	typedef boost::function<bool()> MidiTimeoutCallback;
+	typedef std::function<bool()> MidiTimeoutCallback;
 	typedef std::list<MidiTimeoutCallback> MidiTimeoutList;
 
 	MidiTimeoutList midi_timeouts;
@@ -1911,7 +1921,6 @@ private:
 	void force_locate (samplepos_t sample, LocateTransportDisposition);
 	void realtime_stop (bool abort, bool clear_state);
 	void realtime_locate (bool);
-	void non_realtime_start_scrub ();
 	void non_realtime_set_speed ();
 	void non_realtime_locate ();
 	void non_realtime_stop (bool abort, int entry_request_count, bool& finished, bool will_locate);
@@ -1936,8 +1945,8 @@ private:
 
 	int load_route_groups (const XMLNode&, int);
 
-	std::list<RouteGroup *> _route_groups;
-	RouteGroup*             _all_route_group;
+	RouteGroupList _route_groups;
+	void route_group_emptied (std::shared_ptr<RouteGroup>);
 
 	/* routes stuff */
 
@@ -1980,7 +1989,7 @@ private:
 	void route_solo_changed (bool self_solo_change, PBD::Controllable::GroupControlDisposition group_override, std::weak_ptr<Route>);
 	void route_solo_isolated_changed (std::weak_ptr<Route>);
 
-	void update_route_solo_state (std::shared_ptr<RouteList> r = std::shared_ptr<RouteList>());
+	void update_route_solo_state (std::shared_ptr<RouteList const> r = std::shared_ptr<RouteList const>());
 
 	void listen_position_changed ();
 	void solo_control_mode_changed ();
@@ -1992,9 +2001,9 @@ private:
 	int load_regions (const XMLNode& node);
 	int load_compounds (const XMLNode& node);
 
-	void route_added_to_route_group (RouteGroup *, std::weak_ptr<Route>);
-	void route_removed_from_route_group (RouteGroup *, std::weak_ptr<Route>);
-	void route_group_property_changed (RouteGroup *);
+	void route_added_to_route_group (std::shared_ptr<RouteGroup>, std::weak_ptr<Route>);
+	void route_removed_from_route_group (std::shared_ptr<RouteGroup>, std::weak_ptr<Route>);
+	void route_group_property_changed (std::weak_ptr<RouteGroup>);
 
 	/* SOURCES */
 
@@ -2003,12 +2012,12 @@ private:
 public:
 
 	/* Emited when a new source is added to the session */
-	PBD::Signal1< void, std::weak_ptr<Source> > SourceAdded;
-	PBD::Signal1< void, std::weak_ptr<Source> > SourceRemoved;
+	PBD::Signal< void(std::weak_ptr<Source> )> SourceAdded;
+	PBD::Signal< void(std::weak_ptr<Source> )> SourceRemoved;
 
 	typedef std::map<PBD::ID,std::shared_ptr<Source> > SourceMap;
 
-	void foreach_source (boost::function<void( std::shared_ptr<Source> )> f) {
+	void foreach_source (std::function<void( std::shared_ptr<Source> )> f) {
 		Glib::Threads::Mutex::Lock ls (source_lock);
 		for (SourceMap::iterator i = sources.begin(); i != sources.end(); ++i) {
 			f ( (*i).second );
@@ -2019,7 +2028,7 @@ public:
 	ARDOUR::CueMarkers pending_source_markers; // source markers created while recording
 
 private:
-	void reset_write_sources (bool mark_write_complete, bool force = false);
+	void reset_write_sources (bool mark_write_complete);
 	SourceMap sources;
 
 	int load_sources (const XMLNode& node);
@@ -2062,6 +2071,7 @@ private:
 	/* INSERT AND SEND MANAGEMENT */
 
 	boost::dynamic_bitset<uint32_t> send_bitset;
+	boost::dynamic_bitset<uint32_t> surround_send_bitset;
 	boost::dynamic_bitset<uint32_t> aux_send_bitset;
 	boost::dynamic_bitset<uint32_t> return_bitset;
 	boost::dynamic_bitset<uint32_t> insert_bitset;
@@ -2092,7 +2102,7 @@ private:
 
 	std::vector<space_and_path> session_dirs;
 	std::vector<space_and_path>::iterator last_rr_session_dir;
-	uint32_t _total_free_4k_blocks;
+	uint64_t _total_free_4k_blocks;
 	/** If this is true, _total_free_4k_blocks is not definite,
 	    as one or more of the session directories' filesystems
 	    could not report free space.
@@ -2113,14 +2123,7 @@ private:
 	XMLNode* _bundle_xml_node;
 	int load_bundles (XMLNode const &);
 
-	UndoHistory      _history;
-	/** current undo transaction, or 0 */
-	UndoTransaction* _current_trans;
-	/** GQuarks to describe the reversible commands that are currently in progress.
-	 *  These may be nested, in which case more recently-started commands are toward
-	 *  the front of the list.
-	 */
-	std::list<GQuark> _current_trans_quarks;
+	mutable XMLNode* _engine_state;
 
 	int  backend_sync_callback (TransportState, samplepos_t);
 
@@ -2150,8 +2153,8 @@ private:
 	Clicks                        clicks;
 	bool                         _clicking;
 	bool                         _click_rec_only;
-	std::shared_ptr<IO>        _click_io;
-	std::shared_ptr<Amp>       _click_gain;
+	std::shared_ptr<IO>          _click_io;
+	std::shared_ptr<Amp>         _click_gain;
 	Sample*                       click_data;
 	Sample*                       click_emphasis_data;
 	samplecnt_t                   click_length;
@@ -2159,6 +2162,7 @@ private:
 	mutable Glib::Threads::RWLock click_lock;
 	samplecnt_t                  _click_io_latency;
 	PBD::ScopedConnection        _click_io_connection;
+	Temporal::GridIterator       _click_iterator;
 
 	static const Sample     default_click[];
 	static const samplecnt_t default_click_length;
@@ -2199,10 +2203,16 @@ private:
 
 	std::shared_ptr<Route> _master_out;
 	std::shared_ptr<Route> _monitor_out;
+	std::shared_ptr<Route> _surround_master;
 
+	friend class PortManager;
 	void auto_connect_master_bus ();
+	void auto_connect_monitor_bus ();
+	void auto_connect_surround_master ();
+	void auto_connect_io (std::shared_ptr<IO>);
 
 	void setup_route_monitor_sends (bool enable, bool need_process_lock);
+	void setup_route_surround_sends (bool enable, bool need_process_lock);
 
 	int find_all_sources (std::string path, std::set<std::string>& result);
 	int find_all_sources_across_snapshots (std::set<std::string>& result, bool exclude_this_snapshot);
@@ -2231,6 +2241,8 @@ private:
 
 	mutable bool have_looped; ///< Used in \ref audible_sample
 
+	bool roll_started_loop;
+
 	void update_route_record_state ();
 	std::atomic<int> _have_rec_enabled_track;
 	std::atomic<int> _have_rec_disabled_track;
@@ -2239,10 +2251,10 @@ private:
 
 	/* realtime "apply to set of routes" operations */
 	template<typename T> SessionEvent*
-		get_rt_event (std::shared_ptr<RouteList> rl, T targ, SessionEvent::RTeventCallback after, PBD::Controllable::GroupControlDisposition group_override,
-		              void (Session::*method) (std::shared_ptr<RouteList>, T, PBD::Controllable::GroupControlDisposition)) {
+		get_rt_event (std::shared_ptr<RouteList const> rl, T targ, SessionEvent::RTeventCallback after, PBD::Controllable::GroupControlDisposition group_override,
+		              void (Session::*method) (std::shared_ptr<RouteList const>, T, PBD::Controllable::GroupControlDisposition)) {
 		SessionEvent* ev = new SessionEvent (SessionEvent::RealTimeOperation, SessionEvent::Add, SessionEvent::Immediate, 0, 0.0);
-		ev->rt_slot = boost::bind (method, this, rl, targ, group_override);
+		ev->rt_slot = std::bind (method, this, rl, targ, group_override);
 		ev->rt_return = after;
 		ev->event_loop = PBD::EventLoop::get_event_loop_for_thread ();
 
@@ -2251,10 +2263,10 @@ private:
 
 	/* specialized version realtime "apply to set of routes" operations */
 	template<typename T1, typename T2> SessionEvent*
-		get_rt_event (std::shared_ptr<RouteList> rl, T1 t1arg, T2 t2arg, SessionEvent::RTeventCallback after, PBD::Controllable::GroupControlDisposition group_override,
-		              void (Session::*method) (std::shared_ptr<RouteList>, T1, T2, PBD::Controllable::GroupControlDisposition)) {
+		get_rt_event (std::shared_ptr<RouteList const> rl, T1 t1arg, T2 t2arg, SessionEvent::RTeventCallback after, PBD::Controllable::GroupControlDisposition group_override,
+		              void (Session::*method) (std::shared_ptr<RouteList const>, T1, T2, PBD::Controllable::GroupControlDisposition)) {
 		SessionEvent* ev = new SessionEvent (SessionEvent::RealTimeOperation, SessionEvent::Add, SessionEvent::Immediate, 0, 0.0);
-		ev->rt_slot = boost::bind (method, this, rl, t1arg, t2arg, group_override);
+		ev->rt_slot = std::bind (method, this, rl, t1arg, t2arg, group_override);
 		ev->rt_return = after;
 		ev->event_loop = PBD::EventLoop::get_event_loop_for_thread ();
 
@@ -2262,17 +2274,17 @@ private:
 	}
 
 	/* specialized version realtime "apply to set of controls" operations */
-	SessionEvent* get_rt_event (std::shared_ptr<WeakControlList> cl, double arg, PBD::Controllable::GroupControlDisposition group_override) {
+	SessionEvent* get_rt_event (std::shared_ptr<WeakAutomationControlList> cl, double arg, PBD::Controllable::GroupControlDisposition group_override) {
 		SessionEvent* ev = new SessionEvent (SessionEvent::RealTimeOperation, SessionEvent::Add, SessionEvent::Immediate, 0, 0.0);
-		ev->rt_slot = boost::bind (&Session::rt_set_controls, this, cl, arg, group_override);
+		ev->rt_slot = std::bind (&Session::rt_set_controls, this, cl, arg, group_override);
 		ev->rt_return = Session::rt_cleanup;
 		ev->event_loop = PBD::EventLoop::get_event_loop_for_thread ();
 
 		return ev;
 	}
 
-	void rt_set_controls (std::shared_ptr<WeakControlList>, double val, PBD::Controllable::GroupControlDisposition group_override);
-	void rt_clear_all_solo_state (std::shared_ptr<RouteList>, bool yn, PBD::Controllable::GroupControlDisposition group_override);
+	void rt_set_controls (std::shared_ptr<WeakAutomationControlList>, double val, PBD::Controllable::GroupControlDisposition group_override);
+	void rt_clear_all_solo_state (std::shared_ptr<RouteList const>, bool yn, PBD::Controllable::GroupControlDisposition group_override);
 
 	void setup_midi_machine_control ();
 
@@ -2318,6 +2330,7 @@ private:
 	std::shared_ptr<Port>  _ltc_output_port;
 
 	std::shared_ptr<RTTaskList> _rt_tasklist;
+	std::shared_ptr<IOTaskList> _io_tasklist;
 
 	/* Scene Changing */
 	SceneChanger* _scene_changer;
@@ -2331,6 +2344,9 @@ private:
 	void setup_click_state (const XMLNode*);
 	void setup_bundles ();
 
+	void port_registry_changed ();
+	void probe_ctrl_surfaces ();
+
 	void save_as_bring_callback (uint32_t, uint32_t, std::string);
 
 	static const uint32_t session_end_shift;
@@ -2342,6 +2358,7 @@ private:
 	std::shared_ptr<Route> get_midi_nth_route_by_id (PresentationInfo::order_t n) const;
 
 	std::string created_with;
+	mutable std::string modified_with;
 
 	void midi_track_presentation_info_changed (PBD::PropertyChange const &, std::weak_ptr<MidiTrack>);
 	void rewire_selected_midi (std::shared_ptr<MidiTrack>);
@@ -2354,7 +2371,7 @@ private:
 	CoreSelection* _selection;
 
 	bool _global_locate_pending;
-	boost::optional<samplepos_t> _nominal_jack_transport_sample;
+	std::optional<samplepos_t> _nominal_jack_transport_sample;
 
 	bool _had_destructive_tracks;
 
@@ -2382,9 +2399,12 @@ private:
 
 	int tb_with_filled_slots;
 	void handle_slots_empty_status (std::weak_ptr<Route> const &);
+
+	void time_domain_changed ();
+
+	AnyTime _global_quantization;
 };
 
 
 } // namespace ARDOUR
 
-#endif /* __ardour_session_h__ */

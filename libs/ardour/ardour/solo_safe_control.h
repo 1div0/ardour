@@ -16,8 +16,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_solo_safe_control_h__
-#define __ardour_solo_safe_control_h__
+#pragma once
 
 #include <string>
 
@@ -34,7 +33,7 @@ class Session;
 class LIBARDOUR_API SoloSafeControl : public SlavableAutomationControl
 {
   public:
-	SoloSafeControl (Session& session, std::string const & name, Temporal::TimeDomain);
+	SoloSafeControl (Session& session, std::string const & name, Temporal::TimeDomainProvider const &);
 
 	double get_value () const;
 
@@ -52,4 +51,3 @@ class LIBARDOUR_API SoloSafeControl : public SlavableAutomationControl
 
 } /* namespace */
 
-#endif /* __libardour_solo_safe_control_h__ */

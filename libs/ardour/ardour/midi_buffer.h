@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_midi_buffer_h__
-#define __ardour_midi_buffer_h__
+#pragma once
 
 #include "evoral/Event.h"
 #include "evoral/EventSink.h"
@@ -43,6 +42,7 @@ public:
 	MidiBuffer(size_t capacity);
 	~MidiBuffer();
 
+	void clear();
 	void silence (samplecnt_t nframes, samplecnt_t offset = 0);
 	void read_from (const Buffer& src, samplecnt_t nframes, sampleoffset_t dst_offset = 0, sampleoffset_t src_offset = 0);
 	void merge_from (const Buffer& src, samplecnt_t nframes, sampleoffset_t dst_offset = 0, sampleoffset_t src_offset = 0);
@@ -58,6 +58,7 @@ public:
 	void resize(size_t);
 	size_t size() const { return _size; }
 	bool empty() const { return _size == 0; }
+	bool silent_data () const { return _size == 0; }
 
 	bool insert_event(const Evoral::Event<TimeType>& event);
 	bool merge_in_place(const MidiBuffer &other);
@@ -69,11 +70,17 @@ public:
 		class iterator_base
 	{
 	public:
-		iterator_base<BufferType, EventType>(BufferType& b, samplecnt_t o)
-			: buffer(&b), offset(o) {}
+		iterator_base (BufferType& b, samplecnt_t o)
+		        : buffer (&b)
+		        , offset (o)
+		{
+		}
 
-		iterator_base<BufferType, EventType>(const iterator_base<BufferType,EventType>& o)
-			: buffer (o.buffer), offset(o.offset) {}
+		iterator_base (const iterator_base<BufferType, EventType>& o)
+		        : buffer (o.buffer)
+		        , offset (o.offset)
+		{
+		}
 
 		inline iterator_base<BufferType,EventType> operator= (const iterator_base<BufferType,EventType>& o) {
 			if (&o != this) {
@@ -152,8 +159,15 @@ public:
 
 		size_t total_data_deleted = align32 (sizeof(TimeType) + sizeof (Evoral::EventType) + event_size);
 
-		if (i.offset + total_data_deleted > _size) {
+		if (total_data_deleted >= _size) {
 			_size = 0;
+			_silent = true;
+			return end();
+		}
+
+		if (i.offset + total_data_deleted >= _size) {
+			assert (_size > total_data_deleted);
+			_size -= total_data_deleted;
 			return end();
 		}
 
@@ -166,6 +180,8 @@ public:
 		}
 
 		_size -= total_data_deleted;
+
+		assert (_size > 0);
 
 		/* all subsequent iterators are now invalid, and the one we
 		 * return should refer to the event we copied, which was after
@@ -200,4 +216,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif // __ardour_midi_buffer_h__

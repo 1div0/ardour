@@ -29,8 +29,8 @@
 
 #include <boost/tokenizer.hpp>
 
-#include <gtkmm/box.h>
-#include <gtkmm/alignment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/alignment.h>
 #include "gtkmm2ext/utils.h"
 #include "gtkmm2ext/colors.h"
 
@@ -42,9 +42,11 @@
 
 #include "pbd/configuration.h"
 #include "pbd/replace_all.h"
+#include "pbd/openuri.h"
 #include "pbd/strsplit.h"
 
 #include "widgets/frame.h"
+#include "widgets/slider_controller.h"
 
 #include "gui_thread.h"
 #include "option_editor.h"
@@ -109,6 +111,10 @@ OptionEditorComponent::maybe_add_note (OptionEditorPage* p, int n)
 		l->set_use_markup (true);
 		l->set_line_wrap (true);
 		p->table.attach (*l, 1, 3, n, n + 1, FILL | EXPAND);
+		if (_note.find ("<a href=") != _note.npos) {
+			l->property_track_visited_links() = false;
+			l->signal_activate_link().connect ([](std::string const& url) { return PBD::open_uri (url); }, false);
+		}
 	}
 }
 
@@ -442,12 +448,11 @@ HSliderOption::HSliderOption (
 	, _set (s)
 	, _adj (lower, lower, upper, step_increment, page_increment, 0)
 	, _hscale (_adj)
-	, _label (n + ":")
 	, _mult (mult)
 	, _log (logarithmic)
 {
-	_label.set_alignment (0, 0.5);
-	_label.set_name ("OptionsLabel");
+	_label = manage (left_aligned_label (n + ":"));
+	_label->set_name ("OptionsLabel");
 	_adj.set_value (_get());
 	_adj.signal_value_changed().connect (sigc::mem_fun (*this, &HSliderOption::changed));
 	_hscale.set_update_policy (Gtk::UPDATE_DISCONTINUOUS);
@@ -483,7 +488,7 @@ HSliderOption::changed ()
 void
 HSliderOption::add_to_page (OptionEditorPage* p)
 {
-	add_widgets_to_page (p, &_label, &_hscale);
+	add_widgets_to_page (p, _label, &_hscale);
 }
 
 void
@@ -611,9 +616,8 @@ FaderOption::FaderOption (string const & i, string const & n, sigc::slot<gain_t>
 {
 	_db_slider = manage (new ArdourWidgets::HSliderController (&_db_adjustment, std::shared_ptr<PBD::Controllable>(), 220, 18));
 
-	_label.set_text (n + ":");
-	_label.set_alignment (0, 0.5);
-	_label.set_name (X_("OptionsLabel"));
+	_label = manage (left_aligned_label (n + ":"));
+	_label->set_name (X_("OptionsLabel"));
 
 	_fader_centering_box.pack_start (*_db_slider, true, false);
 
@@ -677,7 +681,12 @@ FaderOption::on_key_press (GdkEventKey* ev)
 void
 FaderOption::add_to_page (OptionEditorPage* p)
 {
-	add_widgets_to_page (p, &_label, &_box);
+	add_widgets_to_page (p, _label, &_box);
+}
+
+Gtk::Widget&
+FaderOption::tip_widget() {
+	return *_db_slider;
 }
 
 /*--------------------------*/
@@ -688,9 +697,8 @@ ClockOption::ClockOption (string const & i, string const & n, sigc::slot<std::st
 	, _get (g)
 	, _set (s)
 {
-	_label.set_text (n + ":");
-	_label.set_alignment (0, 0.5);
-	_label.set_name (X_("OptionsLabel"));
+	_label = manage (left_aligned_label (n + ":"));
+	_label->set_name (X_("OptionsLabel"));
 	_clock.ValueChanged.connect (sigc::mem_fun (*this, &ClockOption::save_clock_time));
 }
 
@@ -720,14 +728,16 @@ ClockOption::save_clock_time ()
 void
 ClockOption::add_to_page (OptionEditorPage* p)
 {
-	add_widgets_to_page (p, &_label, &_clock);
+	add_widgets_to_page (p, _label, &_clock);
 }
 
 void
 ClockOption::set_session (Session* s)
 {
 	_session = s;
-	_clock.set_session (s);
+	if (s) {
+		_clock.set_session (s);
+	}
 }
 
 /*--------------------------*/
@@ -813,7 +823,7 @@ OptionEditor::OptionEditor (PBD::Configuration* c)
 	option_treeview.get_selection()->signal_changed().connect (sigc::mem_fun (*this, &OptionEditor::treeview_row_selected));
 
 	/* Watch out for changes to parameters */
-	_config->ParameterChanged.connect (config_connection, invalidator (*this), boost::bind (&OptionEditor::parameter_changed, this, _1), gui_context());
+	_config->ParameterChanged.connect (config_connection, invalidator (*this), std::bind (&OptionEditor::parameter_changed, this, _1), gui_context());
 
 	search_entry.show ();
 	search_entry.set_text (_("Search here..."));
@@ -1110,20 +1120,20 @@ OptionEditor::add_path_to_treeview (std::string const & pn, Gtk::Widget& widget)
 }
 
 /** Add a component to a given page.
- *  @param pn Page name (will be created if it doesn't already exist)
+ *  @param page_name Page name (will be created if it doesn't already exist)
  *  @param o Component.
  */
 void
-OptionEditor::add_option (std::string const & pn, OptionEditorComponent* o)
+OptionEditor::add_option (std::string const & page_name, OptionEditorComponent* o)
 {
-	if (_pages.find (pn) == _pages.end()) {
-		OptionEditorPage* oep = new OptionEditorPage (_notebook, pn);
-		_pages[pn] = oep;
+	if (_pages.find (page_name) == _pages.end()) {
+		OptionEditorPage* oep = new OptionEditorPage (_notebook, page_name);
+		_pages[page_name] = oep;
 
-		add_path_to_treeview (pn, oep->box);
+		add_path_to_treeview (page_name, oep->box);
 	}
 
-	OptionEditorPage* p = _pages[pn];
+	OptionEditorPage* p = _pages[page_name];
 	p->components.push_back (o);
 
 	o->add_to_page (p);

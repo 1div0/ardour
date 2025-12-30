@@ -1,17 +1,6 @@
 #!/usr/bin/env python
-from waflib.extras import autowaf as autowaf
-from waflib import Options, TaskGen
-import waflib.Logs as Logs, waflib.Utils as Utils
 import os
-import shutil
 import sys
-import re
-import time
-from waflib.Task import Task
-
-# Mandatory variables
-top = '.'
-out = 'build'
 
 hardour_sources = [
         'load_session.cc',
@@ -19,22 +8,20 @@ hardour_sources = [
 ]
 
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
-    conf.load('misc')
+    pass
 
 def build(bld):
-
-    VERSION = "%s.%s" % (bld.env['MAJOR'], bld.env['MINOR'])
-
     # just the normal executable version of the GTK GUI
     obj = bld (features = 'cxx c cxxprogram')
     # this program does not do the whole hidden symbols thing
     obj.cxxflags = [ '-fvisibility=default' ]
     obj.source    = hardour_sources
-    obj.target = 'hardour-' + str (bld.env['VERSION'])
+    obj.target = 'hardour-' + bld.env['VERSION']
     obj.includes = ['.']
+    obj.linkflags= bld.env['compiler_flags_dict']['execstack']
     obj.use      = [ 'libpbd',
                      'libardour',
                      'libardour_cp',
@@ -43,7 +30,7 @@ def build(bld):
                      ]
 
     obj.defines = [
-        'VERSIONSTRING="' + str(bld.env['VERSION']) + '"',
+        'VERSIONSTRING="' + bld.env['VERSION'] + '"',
         'DATA_DIR="' + os.path.normpath(bld.env['DATADIR']) + '"',
         'CONFIG_DIR="' + os.path.normpath(bld.env['SYSCONFDIR']) + '"',
         'LOCALEDIR="' + os.path.join(os.path.normpath(bld.env['DATADIR']), 'locale') + '"',
@@ -54,16 +41,19 @@ def build(bld):
     obj.uselib       += ' FFTW3F LO TAGLIB LILV RUBBERBAND AUBIO LRDF ARCHIVE VAMPSDK VAMPHOSTSDK'
 
     if bld.is_defined('HAVE_SUIL'):
-        obj.uselib += ' SUIL'
+        obj.use += [ 'libsuil' ]
+
+    if bld.is_defined('HAVE_USB'):
+        obj.uselib += ' USB'
 
     if sys.platform == 'darwin':
         obj.uselib += ' AUDIOUNITS OSX'
         obj.use    += ' libappleutility'
+    elif bld.env['build_target'] == 'mingw' or bld.env['build_target'] == 'msvc':
+        if bld.env['DEBUG'] == False:
+            obj.linkflags += ' -mwindows'
+
     obj.includes += ['../libs']
 
-    if bld.env['build_target'] == 'mingw':
-        if bld.env['DEBUG'] == False:
-            obj.linkflags = ['-mwindows']
-
     if bld.is_defined('NEED_INTL'):
-        obj.linkflags = ' -lintl'
+        obj.linkflags += ' -lintl'

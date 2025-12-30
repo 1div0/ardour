@@ -57,13 +57,13 @@ PortInsert::PortInsert (Session& s, std::shared_ptr<Pannable> pannable, std::sha
 	, _measured_latency (0)
 {
 	/* Send */
-	_out->set_gain_control (std::shared_ptr<GainControl> (new GainControl (_session, Evoral::Parameter(BusSendLevel), std::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (BusSendLevel), time_domain())))));
+	_out->set_gain_control (std::shared_ptr<GainControl> (new GainControl (_session, Evoral::Parameter(BusSendLevel), std::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (BusSendLevel), *this)))));
 
-	_out->set_polarity_control (std::shared_ptr<AutomationControl> (new AutomationControl (_session, PhaseAutomation, ParameterDescriptor (PhaseAutomation), std::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(PhaseAutomation), time_domain())), "polarity-invert")));
+	_out->set_polarity_control (std::shared_ptr<AutomationControl> (new AutomationControl (_session, PhaseAutomation, ParameterDescriptor (PhaseAutomation), std::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(PhaseAutomation), *this)), "polarity-invert")));
 	_send_meter.reset (new PeakMeter (_session, name()));
 
 	/* Return */
-	_gain_control = std::shared_ptr<GainControl> (new GainControl (_session, Evoral::Parameter(InsertReturnLevel), std::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (InsertReturnLevel), time_domain()))));
+	_gain_control = std::shared_ptr<GainControl> (new GainControl (_session, Evoral::Parameter(InsertReturnLevel), std::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (InsertReturnLevel), *this))));
 	_amp.reset (new Amp (_session, _("Return"), _gain_control, true));
 	_return_meter.reset (new PeakMeter (_session, name()));
 
@@ -73,8 +73,8 @@ PortInsert::PortInsert (Session& s, std::shared_ptr<Pannable> pannable, std::sha
 
 	_io_latency = _session.engine().samples_per_cycle();
 
-	input ()->changed.connect_same_thread (*this, boost::bind (&PortInsert::io_changed, this, _1, _2));
-	output ()->changed.connect_same_thread (*this, boost::bind (&PortInsert::io_changed, this, _1, _2));
+	input ()->changed.connect_same_thread (*this, std::bind (&PortInsert::io_changed, this, _1, _2));
+	output ()->changed.connect_same_thread (*this, std::bind (&PortInsert::io_changed, this, _1, _2));
 }
 
 PortInsert::~PortInsert ()
@@ -147,8 +147,8 @@ PortInsert::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_samp
 
 		if (_input->n_ports().n_audio() != 0) {
 
-			AudioBuffer& outbuf (_output->ports().nth_audio_port(0)->get_audio_buffer (nframes));
-			Sample* in = _input->ports().nth_audio_port(0)->get_audio_buffer (nframes).data();
+			AudioBuffer& outbuf (_output->ports()->nth_audio_port(0)->get_audio_buffer (nframes));
+			Sample* in = _input->ports()->nth_audio_port(0)->get_audio_buffer (nframes).data();
 			Sample* out = outbuf.data();
 
 			_mtdm->process (nframes, in, out);
@@ -202,6 +202,12 @@ PortInsert::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_samp
 	if (_metering) {
 		_return_meter->run (bufs, start_sample, end_sample, speed, nframes, true);
 	}
+}
+
+void
+PortInsert::flush_buffers (samplecnt_t nframes)
+{
+	_out->flush_buffers (nframes);
 }
 
 XMLNode&

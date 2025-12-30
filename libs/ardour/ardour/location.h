@@ -22,13 +22,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_location_h__
-#define __ardour_location_h__
+#pragma once
 
 #include <string>
 #include <list>
 #include <iostream>
 #include <map>
+#include <vector>
 
 #include <sys/types.h>
 
@@ -38,6 +38,8 @@
 #include "pbd/stateful.h"
 #include "pbd/statefuldestructible.h"
 
+#include "temporal/domain_provider.h"
+#include "temporal/domain_swap.h"
 #include "temporal/types.h"
 
 #include "ardour/ardour.h"
@@ -65,11 +67,13 @@ public:
 		IsClockOrigin = 0x200,
 		IsXrun = 0x400,
 		IsCueMarker = 0x800,
+		IsSection = 0x1000,
+		IsScene = 0x2000
 	};
 
 	Location (Session &);
 	Location (Session &, Temporal::timepos_t const &, Temporal::timepos_t const &, const std::string &, Flags bits = Flags(0), int32_t cue_id = 0);
-	Location (const Location& other);
+	Location (Location const& other, bool no_signal);
 	Location (Session &, const XMLNode&);
 	Location* operator= (const Location& other);
 
@@ -106,6 +110,7 @@ public:
 	void set_is_clock_origin (bool yn, void* src);
 	void set_skip (bool yn);
 	void set_skipping (bool yn);
+	void set_section (bool yn);
 
 	bool is_auto_punch () const { return _flags & IsAutoPunch; }
 	bool is_auto_loop () const { return _flags & IsAutoLoop; }
@@ -119,7 +124,12 @@ public:
 	bool is_clock_origin() const { return _flags & IsClockOrigin; }
 	bool is_skipping() const { return (_flags & IsSkip) && (_flags & IsSkipping); }
 	bool is_xrun() const { return _flags & IsXrun; }
+	bool is_section() const { return _flags & IsSection; }
+	bool is_scene() const { return (bool) _scene_change && _flags & IsScene; }
 	bool matches (Flags f) const { return _flags & f; }
+
+	/* any range with start < end  -- not a marker */
+	bool is_range() const { return _flags & (IsSessionRange | IsRangeMarker | IsAutoLoop | IsAutoPunch | IsCDMarker); }
 
 	Flags flags () const { return _flags; }
 
@@ -133,32 +143,32 @@ public:
 	 * locations at once.
 	 */
 
-	static PBD::Signal1<void,Location*> name_changed;
-	static PBD::Signal1<void,Location*> end_changed;
-	static PBD::Signal1<void,Location*> start_changed;
-	static PBD::Signal1<void,Location*> flags_changed;
-	static PBD::Signal1<void,Location*> lock_changed;
-	static PBD::Signal1<void,Location*> cue_change;
-	static PBD::Signal1<void,Location*> scene_changed;
-	static PBD::Signal1<void,Location*> time_domain_changed; /* unused */
+	static PBD::Signal<void(Location*)> name_changed;
+	static PBD::Signal<void(Location*)> end_changed;
+	static PBD::Signal<void(Location*)> start_changed;
+	static PBD::Signal<void(Location*)> flags_changed;
+	static PBD::Signal<void(Location*)> lock_changed;
+	static PBD::Signal<void(Location*)> cue_change;
+	static PBD::Signal<void(Location*)> scene_changed;
+	static PBD::Signal<void(Location*)> time_domain_changed; /* unused */
 
 	/* this is sent only when both start and end change at the same time */
-	static PBD::Signal1<void,Location*> changed;
+	static PBD::Signal<void(Location*)> changed;
 
 	/* these are member signals for objects that care only about
 	 * changes to this object
 	 */
 
-	PBD::Signal0<void> Changed;
+	PBD::Signal<void()> Changed;
 
-	PBD::Signal0<void> NameChanged;
-	PBD::Signal0<void> EndChanged;
-	PBD::Signal0<void> StartChanged;
-	PBD::Signal0<void> FlagsChanged;
-	PBD::Signal0<void> LockChanged;
-	PBD::Signal0<void> CueChanged;
-	PBD::Signal0<void> SceneChanged; /* unused */
-	PBD::Signal0<void> TimeDomainChanged;
+	PBD::Signal<void()> NameChanged;
+	PBD::Signal<void()> EndChanged;
+	PBD::Signal<void()> StartChanged;
+	PBD::Signal<void()> FlagsChanged;
+	PBD::Signal<void()> LockChanged;
+	PBD::Signal<void()> CueChanged;
+	PBD::Signal<void()> SceneChanged; /* unused */
+	PBD::Signal<void()> TimeDomainChanged;
 
 	/* CD Track / CD-Text info */
 
@@ -169,9 +179,13 @@ public:
 	int set_state (const XMLNode&, int version);
 
 	Temporal::TimeDomain position_time_domain() const { return _start.time_domain(); }
-	void set_position_time_domain (Temporal::TimeDomain ps);
 
-	void globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to);
+	/* Similar to, but not identical to the Temporal::TimeDomainSwapper API */
+
+	void start_domain_bounce (Temporal::DomainBounceInfo&);
+	void finish_domain_bounce (Temporal::DomainBounceInfo&);
+
+	void set_time_domain (Temporal::TimeDomain);
 
 	class ChangeSuspender {
 		public:
@@ -194,6 +208,7 @@ protected:
 	void resume_signals ();
 
 private:
+	Location (Location const&); // no copy c'tor
 	void set_mark (bool yn);
 	bool set_flag_internal (bool yn, Flags flag);
 
@@ -206,7 +221,7 @@ private:
 		Lock,
 		Cue,
 		Scene,
-		Domain
+		Domain,
 	};
 
 	void emit_signal (Signal);
@@ -225,13 +240,16 @@ private:
 	std::set<Signal> _postponed_signals;
 
 	std::shared_ptr<SceneChange> _scene_change;
+
+	void set_position_time_domain (Temporal::TimeDomain);
 };
 
 /** A collection of session locations including unique dedicated locations (loop, punch, etc) */
-class LIBARDOUR_API Locations : public SessionHandleRef, public PBD::StatefulDestructible
+class LIBARDOUR_API Locations : public SessionHandleRef, public PBD::StatefulDestructible, public Temporal::TimeDomainProvider, public Temporal::TimeDomainSwapper
 {
 public:
 	typedef std::list<Location *> LocationList;
+	typedef std::pair<Temporal::timepos_t, Location*> LocationPair;
 
 	Locations (Session &);
 	~Locations ();
@@ -257,8 +275,11 @@ public:
 	bool clear_ranges ();
 
 	bool clear_cue_markers (samplepos_t start, samplepos_t end);
+	bool clear_scene_markers (samplepos_t start, samplepos_t end);
 
-	void ripple (timepos_t const & at, timecnt_t const & distance, bool include_locked, bool notify);
+	void cut_copy_section (timepos_t const& start, timepos_t const& end, timepos_t const& to, SectionOperation const op);
+
+	void ripple (timepos_t const & at, timecnt_t const & distance, bool include_locked);
 
 	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
@@ -275,12 +296,23 @@ public:
 	int set_current (Location *, bool want_lock = true);
 	Location *current () const { return current_location; }
 
-	Location* mark_at (timepos_t const &, timecnt_t const & slop = timecnt_t::zero (Temporal::AudioTime)) const;
+	Location* mark_at (timepos_t const &, timecnt_t const & slop = timecnt_t::zero (Temporal::AudioTime), Location::Flags flags = Location::Flags (0)) const;
 
 	void set_clock_origin (Location*, void *src);
 
-	timepos_t first_mark_before (timepos_t const &, bool include_special_ranges = false);
-	timepos_t first_mark_after (timepos_t const &, bool include_special_ranges = false);
+	timepos_t first_mark_before_flagged (timepos_t const &, bool include_special_ranges = false, Location::Flags whitelist = Location::Flags (0), Location::Flags blacklist = Location::Flags (0), Location::Flags equalist = Location::Flags (0), Location** retval = nullptr);
+	timepos_t first_mark_after_flagged (timepos_t const &, bool include_special_ranges = false, Location::Flags whitelist = Location::Flags (0), Location::Flags blacklist = Location::Flags (0), Location::Flags equalist = Location::Flags (0), Location** retval = nullptr);
+
+	timepos_t first_mark_after (timepos_t const & t, bool include_special_ranges = false) {
+		return first_mark_after_flagged (t, include_special_ranges);
+	}
+	timepos_t first_mark_before (timepos_t const & t, bool include_special_ranges = false) {
+		return first_mark_before_flagged (t, include_special_ranges);
+	}
+
+	Location* next_section (Location*, timepos_t&, timepos_t&) const;
+	Location* next_section_iter (Location*, timepos_t&, timepos_t&, std::vector<LocationPair>& cache) const;
+	Location* section_at (timepos_t const&, timepos_t&, timepos_t&) const;
 
 	void marks_either_side (timepos_t const &, timepos_t &, timepos_t &) const;
 
@@ -292,21 +324,25 @@ public:
 	 *
 	 * @return Location object or nil
 	 */
-	Location* range_starts_at (timepos_t const &, timecnt_t const & slop = timecnt_t (Temporal::AudioTime), bool incl = false) const;
+	Location* range_starts_at (timepos_t const & pos, timecnt_t const & slop = timecnt_t (Temporal::AudioTime), bool incl = false) const;
 
 	void find_all_between (timepos_t const & start, timepos_t const & end, LocationList&, Location::Flags);
 
-	void globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to);
+	void set_time_domain (Temporal::TimeDomain);
+	void start_domain_bounce (Temporal::DomainBounceInfo&);
+	void finish_domain_bounce (Temporal::DomainBounceInfo&);
 
-	PBD::Signal1<void,Location*> current_changed;
+	void time_domain_changed ();
+
+	PBD::Signal<void(Location*)> current_changed;
 
 	/* Objects that care about individual addition and removal of Locations should connect to added/removed.
 	 * If an object additionally cares about potential mass clearance of Locations, they should connect to changed.
 	 */
 
-	PBD::Signal1<void,Location*> added;
-	PBD::Signal1<void,Location*> removed;
-	PBD::Signal0<void> changed; /* emitted when any action that could have added/removed more than 1 location actually removed 1 or more */
+	PBD::Signal<void(Location*)> added;
+	PBD::Signal<void(Location*)> removed;
+	PBD::Signal<void()> changed; /* emitted when any action that could have added/removed more than 1 location actually removed 1 or more */
 
 	template<class T> void apply (T& obj, void (T::*method)(const LocationList&)) const {
 		/* We don't want to hold the lock while the given method runs, so take a copy
@@ -321,6 +357,8 @@ public:
 	}
 
 private:
+	void sorted_section_locations (std::vector<LocationPair>&) const;
+
 	LocationList locations;
 	Location*    current_location;
 	mutable Glib::Threads::RWLock _lock;
@@ -332,4 +370,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_location_h__ */

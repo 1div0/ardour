@@ -30,7 +30,7 @@ using namespace PBD;
 using namespace ArdourSurface;
 
 static ControlProtocol*
-new_push2 (ControlProtocolDescriptor*, Session* s)
+new_push2 (Session* s)
 {
 	Push2 * p2 = 0;
 
@@ -48,7 +48,7 @@ new_push2 (ControlProtocolDescriptor*, Session* s)
 }
 
 static void
-delete_push2 (ControlProtocolDescriptor*, ControlProtocol* cp)
+delete_push2 (ControlProtocol* cp)
 {
 	try
 	{
@@ -60,39 +60,23 @@ delete_push2 (ControlProtocolDescriptor*, ControlProtocol* cp)
 	}
 }
 
-/**
-	This is called on startup to check whether the lib should be loaded.
-
-	So anything that can be changed in the UI should not be used here to
-	prevent loading of the lib.
-*/
 static bool
-probe_push2 (ControlProtocolDescriptor*)
+probe_push2_midi_protocol ()
 {
-	return Push2::probe();
+	std::string i, o;
+	return Push2::probe (i, o);
 }
 
-static void*
-push2_request_buffer_factory (uint32_t num_requests)
-{
-	return MIDISurface::request_factory (num_requests);
-}
 
 static ControlProtocolDescriptor push2_descriptor = {
-	/*name :              */   "Ableton Push 2",
-	/*id :                */   "uri://ardour.org/surfaces/push2:0",
-	/*ptr :               */   0,
-	/*module :            */   0,
-	/*mandatory :         */   0,
-	// actually, the surface does support feedback, but all this
-	// flag does is show a submenu on the UI, which is useless for the mackie
-	// because feedback is always on. In any case, who'd want to use the
-	// mcu without the motorised sliders doing their thing?
-	/*supports_feedback : */   false,
-	/*probe :             */   probe_push2,
-	/*initialize :        */   new_push2,
-	/*destroy :           */   delete_push2,
-	/*request_buffer_factory */ push2_request_buffer_factory
+	/* name       */ "Ableton Push 2",
+	/* id         */ "uri://ardour.org/surfaces/push2:0",
+	/* module     */ 0,
+	/* available  */ Push2::available,
+	/* probe_port */ probe_push2_midi_protocol,
+	/* match usb  */ 0, // Push2::match_usb,
+	/* initialize */ new_push2,
+	/* destroy    */ delete_push2,
 };
 
 extern "C" ARDOURSURFACE_API ControlProtocolDescriptor* protocol_descriptor () { return &push2_descriptor; }

@@ -18,14 +18,17 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <unistd.h>
 #include <algorithm>
 
-#include <assert.h>
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 
 #ifndef COMPILER_MSVC
 #include <dirent.h>
@@ -278,9 +281,7 @@ SystemExec::~SystemExec ()
 static void*
 interposer_thread (void *arg) {
 	SystemExec *sex = static_cast<SystemExec *>(arg);
-	pthread_set_name ("ExecStdOut");
 	sex->output_interposer();
-	pthread_exit(0);
 	return 0;
 }
 
@@ -407,15 +408,21 @@ SystemExec::terminate ()
 	close_stdin();
 
 	if (pid) {
-		/* terminate */
-		EnumWindows(my_terminateApp, (LPARAM)pid->dwProcessId);
-		PostThreadMessage(pid->dwThreadId, WM_CLOSE, 0, 0);
+		/* close windows (if any) */
+		EnumWindows (my_terminateApp, (LPARAM)pid->dwProcessId);
+
+		if (PostThreadMessage (pid->dwThreadId, WM_CLOSE, 0, 0)) {
+			/* OK, wait for child to terminate cleanly */
+			WaitForSingleObject(pid->hProcess, 150 /*ms*/);
+		}
 
 		/* kill ! */
-		TerminateProcess(pid->hProcess, 0xf291);
+		TerminateProcess(pid->hProcess, 0);
+		wait ();
 
-		CloseHandle(pid->hThread);
 		CloseHandle(pid->hProcess);
+		CloseHandle(pid->hThread);
+		pid->hThread = pid->hProcess = 0;
 		destroy_pipe(stdinP);
 		destroy_pipe(stdoutP);
 		destroy_pipe(stderrP);
@@ -516,7 +523,7 @@ SystemExec::start (StdErrMode stderr_mode, const char * /*vfork_exec_wrapper*/)
 		return -1;
 	}
 
-	int rv = pthread_create (&thread_id_tt, NULL, interposer_thread, this);
+	int rv = pthread_create_and_store ("ExecStdOut", &thread_id_tt, interposer_thread, this, 0);
 	thread_active=true;
 	if (rv) {
 		thread_active=false;
@@ -554,7 +561,6 @@ SystemExec::output_interposer()
 		ReadStdout(rv, bytesRead); /* EMIT SIGNAL */
 	}
 	Terminated(); /* EMIT SIGNAL */
-	pthread_exit(0);
 }
 
 void
@@ -802,7 +808,7 @@ SystemExec::start (StdErrMode stderr_mode, const char *vfork_exec_wrapper)
 		close_fd (pout[1]);
 		close_fd (pin[0]);
 
-		int rv = pthread_create (&thread_id_tt, NULL, interposer_thread, this);
+		int rv = pthread_create_and_store ("ExecStdOut", &thread_id_tt, interposer_thread, this, 0);
 		thread_active=true;
 
 		if (rv) {
@@ -911,7 +917,6 @@ again:
 		ReadStdout (rv, r); /* EMIT SIGNAL */
 	}
 	Terminated (); /* EMIT SIGNAL */
-	pthread_exit (0);
 }
 
 void

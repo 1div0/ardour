@@ -16,11 +16,9 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <boost/shared_ptr.hpp>
-
-#include <gtkmm/frame.h>
-#include <gtkmm/label.h>
-#include <gtkmm/scrolledwindow.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/label.h>
+#include <ytkmm/scrolledwindow.h>
 
 #include "ardour/audioengine.h"
 #include "ardour/io_plug.h"
@@ -33,6 +31,7 @@
 #include "gtkmm2ext/menu_elems.h"
 #include "gtkmm2ext/utils.h"
 
+#include "widgets/prompter.h"
 #include "widgets/tooltips.h"
 
 #include "context_menu_helper.h"
@@ -42,6 +41,7 @@
 #include "mixer_ui.h"
 #include "plugin_selector.h"
 #include "plugin_ui.h"
+#include "plugin_window_proxy.h"
 #include "ui_config.h"
 
 #include "pbd/i18n.h"
@@ -94,14 +94,15 @@ void
 IOPluginWindow::set_session (Session* s)
 {
 	ArdourWindow::set_session (s);
-	_box_pre.set_session (s);
-	_box_post.set_session (s);
 
 	if (!_session) {
 		return;
 	}
+
+	_box_pre.set_session (s);
+	_box_post.set_session (s);
 	refill ();
-	_session->IOPluginsChanged.connect (_session_connections, invalidator (*this), boost::bind (&IOPluginWindow::refill, this), gui_context ());
+	_session->IOPluginsChanged.connect (_session_connections, invalidator (*this), std::bind (&IOPluginWindow::refill, this), gui_context ());
 }
 
 void
@@ -125,7 +126,7 @@ IOPluginWindow::refill ()
 	if (!_session) {
 		return;
 	}
-	std::shared_ptr<IOPlugList> iop (_session->io_plugs ());
+	std::shared_ptr<IOPlugList const> iop (_session->io_plugs ());
 	for (auto& i : *iop) {
 		IOPlugUI* iopup = manage (new IOPlugUI (i));
 		if (i->is_pre ()) {
@@ -144,7 +145,9 @@ IOPluginWindow::PluginBox::PluginBox (bool is_pre)
 {
 	add_events (Gdk::BUTTON_PRESS_MASK | Gdk::BUTTON_RELEASE_MASK);
 	signal_button_press_event ().connect (sigc::mem_fun (*this, &IOPluginWindow::PluginBox::button_press_event));
-	_base.signal_expose_event ().connect (sigc::bind (sigc::ptr_fun (&ArdourWidgets::ArdourIcon::expose_with_text), &_base, ArdourWidgets::ArdourIcon::ShadedPlusSign, _("Right-click or Double-click here\nto add I/O Plugins")));
+	if (UIConfiguration::instance().get_render_plus_hints ()) {
+		_base.signal_expose_event ().connect (sigc::bind (sigc::ptr_fun (&ArdourWidgets::ArdourIcon::expose_with_text), &_base, ArdourWidgets::ArdourIcon::ShadedPlusSign, _("Right-click or Double-click here\nto add I/O Plugins")));
+	}
 
 	std::vector<Gtk::TargetEntry> target_table;
 	target_table.push_back (Gtk::TargetEntry ("x-ardour/plugin.favorite", Gtk::TARGET_SAME_APP)); // from sidebar
@@ -299,7 +302,7 @@ IOPluginWindow::IOPlugUI::IOPlugUI (std::shared_ptr<ARDOUR::IOPlug> iop)
 		_window_proxy = dynamic_cast<PluginWindowProxy*> (iop->window_proxy ());
 		assert (_window_proxy);
 	} else {
-		_window_proxy = new PluginWindowProxy (string_compose ("IOP-%1", _iop->id ()), _iop);
+		_window_proxy = new PluginWindowProxy (string_compose ("IOP-%1", _iop->id ()), "I/O", _iop);
 
 		const XMLNode* ui_xml = _iop->session ().extra_xml (X_("UI"));
 		if (ui_xml) {
@@ -311,7 +314,7 @@ IOPluginWindow::IOPlugUI::IOPlugUI (std::shared_ptr<ARDOUR::IOPlug> iop)
 	}
 
 	_btn_ioplug.signal_button_press_event ().connect (sigc::mem_fun (*this, &IOPluginWindow::IOPlugUI::button_press_event), false);
-	_iop->DropReferences.connect (_going_away_connection, invalidator (*this), boost::bind (&IOPluginWindow::IOPlugUI::self_delete, this), gui_context ());
+	_iop->DropReferences.connect (_going_away_connection, invalidator (*this), std::bind (&IOPluginWindow::IOPlugUI::self_delete, this), gui_context ());
 	show_all ();
 }
 
@@ -330,12 +333,40 @@ IOPluginWindow::IOPlugUI::self_remove ()
 }
 
 void
+IOPluginWindow::IOPlugUI::rename ()
+{
+	ArdourWidgets::Prompter name_prompter (true);
+	name_prompter.set_title (_("Rename I/O Plugin"));
+	name_prompter.set_prompt (_("New name:"));
+	name_prompter.set_initial_text (_iop->name());
+	name_prompter.add_button (_("Rename"), Gtk::RESPONSE_ACCEPT);
+	name_prompter.set_response_sensitive (Gtk::RESPONSE_ACCEPT, false);
+	name_prompter.show_all ();
+
+	std::string result;
+	switch (name_prompter.run ()) {
+		case Gtk::RESPONSE_ACCEPT:
+			name_prompter.get_result (result);
+			name_prompter.hide ();
+			if (result.length ()) {
+				_iop->set_name (result);
+				_btn_ioplug.set_text (_iop->name ());
+			}
+			break;
+		default:
+			break;
+	}
+}
+
+void
 IOPluginWindow::IOPlugUI::edit_plugin (bool custom_ui)
 {
 	_window_proxy->set_custom_ui_mode (custom_ui);
 	_window_proxy->show_the_right_window ();
 	Gtk::Window* tlw = dynamic_cast<Gtk::Window*> (get_toplevel ());
-	_window_proxy->set_transient_for (*tlw);
+	if (tlw) {
+		_window_proxy->set_transient_for (*tlw);
+	}
 }
 
 bool
@@ -350,6 +381,8 @@ IOPluginWindow::IOPlugUI::button_press_event (GdkEventButton* ev)
 		Gtk::Menu* m = ARDOUR_UI_UTILS::shared_popup_menu ();
 		MenuList& items = m->items ();
 
+		items.push_back (MenuElem (_("Rename"), sigc::mem_fun (*this, &IOPluginWindow::IOPlugUI::rename)));
+		items.push_back (SeparatorElem());
 		items.push_back (MenuElem (_("Edit..."), sigc::bind (sigc::mem_fun (*this, &IOPluginWindow::IOPlugUI::edit_plugin), true)));
 		items.back().set_sensitive (_iop->plugin ()->has_editor ());
 		items.push_back (MenuElem (_("Edit with generic controls..."), sigc::bind (sigc::mem_fun (*this, &IOPluginWindow::IOPlugUI::edit_plugin), false)));
@@ -371,113 +404,6 @@ IOPluginWindow::IOPlugUI::button_resized (Gtk::Allocation& alloc)
 	_btn_ioplug.set_layout_ellipsize_width (alloc.get_width () * PANGO_SCALE);
 }
 
-/* ****************************************************************************/
-
-IOPluginWindow::PluginWindowProxy::PluginWindowProxy (std::string const& name, std::weak_ptr<PlugInsertBase> plugin)
-	: WM::ProxyBase (name, std::string ())
-	, _pib (plugin)
-	, _is_custom (true)
-	, _want_custom (true)
-{
-	std::shared_ptr<PlugInsertBase> p = _pib.lock ();
-	if (!p) {
-		return;
-	}
-	p->DropReferences.connect (_going_away_connection, MISSING_INVALIDATOR, boost::bind (&IOPluginWindow::PluginWindowProxy::plugin_going_away, this), gui_context ());
-}
-
-IOPluginWindow::PluginWindowProxy::~PluginWindowProxy ()
-{
-	_window = 0;
-}
-
-Gtk::Window*
-IOPluginWindow::PluginWindowProxy::get (bool create)
-{
-	std::shared_ptr<PlugInsertBase> p = _pib.lock ();
-	if (!p) {
-		return 0;
-	}
-
-	if (_window && (_is_custom != _want_custom)) {
-		set_state_mask (WindowProxy::StateMask (state_mask () & ~WindowProxy::Size));
-		drop_window ();
-	}
-
-	if (!_window) {
-		if (!create) {
-			return 0;
-		}
-
-		_is_custom = _want_custom;
-		_window    = new PluginUIWindow (p, false, _is_custom);
-
-		if (_window) {
-			std::shared_ptr<ARDOUR::IOPlug> iop = std::dynamic_pointer_cast<ARDOUR::IOPlug> (p);
-			assert (iop);
-			_window->set_title (iop->name ());
-			setup ();
-			_window->show_all ();
-		}
-	}
-	return _window;
-}
-
-void
-IOPluginWindow::PluginWindowProxy::show_the_right_window ()
-{
-	if (_window && (_is_custom != _want_custom)) {
-		set_state_mask (WindowProxy::StateMask (state_mask () & ~WindowProxy::Size));
-		drop_window ();
-	}
-
-	if (_window) {
-		_window->unset_transient_for ();
-	}
-	toggle ();
-}
-
-int
-IOPluginWindow::PluginWindowProxy::set_state (const XMLNode& node, int)
-{
-	XMLNodeList                 children = node.children ();
-	XMLNodeList::const_iterator i        = children.begin ();
-	while (i != children.end ()) {
-		std::string name;
-		if ((*i)->name () == X_("Window") && (*i)->get_property (X_("name"), name) && name == _name) {
-			break;
-		}
-		++i;
-	}
-
-	if (i != children.end ()) {
-		(*i)->get_property (X_("custom-ui"), _want_custom);
-	}
-
-	return ProxyBase::set_state (node, 0);
-}
-
-XMLNode&
-IOPluginWindow::PluginWindowProxy::get_state () const
-{
-	XMLNode* node;
-	node = &ProxyBase::get_state ();
-	node->set_property (X_("custom-ui"), _is_custom);
-	return *node;
-}
-
-void
-IOPluginWindow::PluginWindowProxy::plugin_going_away ()
-{
-	delete _window;
-	_window = 0;
-	WM::Manager::instance ().remove (this);
-	_going_away_connection.disconnect ();
-	delete this;
-}
-
-/* ****************************************************************************/
-
 IOPluginWindow::IOButton::IOButton (std::shared_ptr<ARDOUR::IO> io, bool pre)
 	: _io (io)
 	, _pre (pre)
@@ -498,11 +424,11 @@ IOPluginWindow::IOButton::IOButton (std::shared_ptr<ARDOUR::IO> io, bool pre)
 	signal_button_press_event ().connect (sigc::mem_fun (*this, &IOButton::button_press), false);
 	signal_button_release_event ().connect (sigc::mem_fun (*this, &IOButton::button_release), false);
 
-	AudioEngine::instance ()->PortConnectedOrDisconnected.connect (_connections, invalidator (*this), boost::bind (&IOButton::port_connected_or_disconnected, this, _1, _3), gui_context ());
-	AudioEngine::instance ()->PortPrettyNameChanged.connect (_connections, invalidator (*this), boost::bind (&IOButton::port_pretty_name_changed, this, _1), gui_context ());
+	AudioEngine::instance ()->PortConnectedOrDisconnected.connect (_connections, invalidator (*this), std::bind (&IOButton::port_connected_or_disconnected, this, _1, _3), gui_context ());
+	AudioEngine::instance ()->PortPrettyNameChanged.connect (_connections, invalidator (*this), std::bind (&IOButton::port_pretty_name_changed, this, _1), gui_context ());
 
-	_io->changed.connect (_connections, invalidator (*this), boost::bind (&IOButton::update, this), gui_context ());
-	_io->session ().BundleAddedOrRemoved.connect (_connections, invalidator (*this), boost::bind (&IOButton::update, this), gui_context ());
+	_io->changed.connect (_connections, invalidator (*this), std::bind (&IOButton::update, this), gui_context ());
+	_io->session ().BundleAddedOrRemoved.connect (_connections, invalidator (*this), std::bind (&IOButton::update, this), gui_context ());
 }
 
 IOPluginWindow::IOButton::~IOButton ()
@@ -550,7 +476,7 @@ IOPluginWindow::IOButton::update ()
 	set_label (*this, _io->session (), bundle, _io);
 
 	if (bundle) {
-		bundle->Changed.connect (_bundle_connections, invalidator (*this), boost::bind (&IOButton::update, this), gui_context ());
+		bundle->Changed.connect (_bundle_connections, invalidator (*this), std::bind (&IOButton::update, this), gui_context ());
 	}
 }
 
@@ -586,9 +512,9 @@ IOPluginWindow::IOButton::button_press (GdkEventButton* ev)
 
 	uint32_t const n_with_separator = citems.size ();
 
-	std::shared_ptr<ARDOUR::BundleList> b      = _io->session ().bundles ();
-	std::shared_ptr<ARDOUR::RouteList>  routes = _io->session ().get_routes ();
-	RouteList                             copy   = *routes;
+	std::shared_ptr<ARDOUR::BundleList const> b      = _io->session ().bundles ();
+	std::shared_ptr<ARDOUR::RouteList const>  routes = _io->session ().get_routes ();
+	RouteList                                 copy   = *routes;
 	copy.sort (RouteCompareByName ());
 
 	if (_io->direction () == IO::Input) {
@@ -619,7 +545,7 @@ IOPluginWindow::IOButton::button_press (GdkEventButton* ev)
 		if (_pre) {
 			/* suggest connecting output of io-plugins running before process to route inputs */
 			for (auto const& i : copy) {
-				if (i->is_foldbackbus () || i->is_monitor ()) {
+				if (i->is_foldbackbus () || i->is_monitor () || i->is_surround_master ()) {
 					continue;
 				}
 				maybe_add_bundle_to_menu (i->input ()->bundle ());

@@ -28,8 +28,8 @@
 using namespace std;
 using namespace ARDOUR;
 
-InternalReturn::InternalReturn (Session& s, Temporal::TimeDomain td, std::string const& name)
-	: Processor (s, name, td)
+InternalReturn::InternalReturn (Session& s, Temporal::TimeDomainProvider const & tdp, std::string const& name)
+	: Processor (s, name, tdp)
 {
 	_display_to_user = false;
 }
@@ -47,9 +47,9 @@ InternalReturn::run (BufferSet& bufs, samplepos_t /*start_sample*/, samplepos_t 
 		return;
 	}
 
-	for (list<InternalSend*>::iterator i = _sends.begin(); i != _sends.end(); ++i) {
-		if ((*i)->active () && (!(*i)->source_route() || (*i)->source_route()->active())) {
-			bufs.merge_from ((*i)->get_buffers(), nframes);
+	for (auto & send : _sends) {
+		if ((send->active() || send->actually_active()) && (!send->source_route() || send->source_route()->active())) {
+			bufs.merge_from (send->get_buffers(), nframes);
 		}
 	}
 }

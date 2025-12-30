@@ -31,7 +31,7 @@
 #include <set>
 #include <vector>
 
-#include <gtkmm/widget.h>
+#include <ytkmm/widget.h>
 #include <sigc++/signal.h>
 
 #include "ardour_dialog.h"
@@ -42,7 +42,11 @@
 
 #include "lv2_external_ui.h"
 
-#include "lv2/lv2plug.in/ns/extensions/ui/ui.h"
+#ifdef HAVE_LV2_1_18_6
+#include <lv2/ui/ui.h>
+#else
+#include <lv2/lv2plug.in/ns/extensions/ui/ui.h>
+#endif
 
 namespace ARDOUR {
 	class LV2Plugin;
@@ -62,6 +66,9 @@ public:
 	bool start_updating(GdkEventAny*);
 	bool stop_updating(GdkEventAny*);
 
+	bool is_external () const;
+	bool is_external_visible () const;
+
 	int package (Gtk::Window&);
 	void grab_focus ();
 
@@ -73,7 +80,7 @@ private:
 
 	std::shared_ptr<ARDOUR::PlugInsertBase> _pib;
 	std::shared_ptr<ARDOUR::LV2Plugin>      _lv2;
-	std::vector<int>                          _output_ports;
+	std::vector<uint32_t>                     _output_ports;
 	sigc::connection                          _screen_update_connection;
 	sigc::connection                          _message_update_connection;
 	Gtk::Widget*                              _gui_widget;

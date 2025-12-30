@@ -20,8 +20,7 @@
  */
 
 
-#ifndef __ardour_directory_names_h__
-#define __ardour_directory_names_h__
+#pragma once
 
 #include "ardour/libardour_visibility.h"
 
@@ -41,6 +40,7 @@ namespace ARDOUR {
 	LIBARDOUR_API extern const char* const export_formats_dir_name;
 	LIBARDOUR_API extern const char* const plugin_metadata_dir_name;
 	LIBARDOUR_API extern const char* const templates_dir_name;
+	LIBARDOUR_API extern const char* const routestates_dir_name;
 	LIBARDOUR_API extern const char* const route_templates_dir_name;
 	LIBARDOUR_API extern const char* const surfaces_dir_name;
 	LIBARDOUR_API extern const char* const theme_dir_name;
@@ -57,4 +57,3 @@ namespace ARDOUR {
 
 };
 
-#endif

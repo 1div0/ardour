@@ -20,6 +20,7 @@
 #ifndef mackie_surface_h
 #define mackie_surface_h
 
+#include <array>
 #include <stdint.h>
 
 #include <sigc++/trackable.h>
@@ -48,13 +49,9 @@ namespace ARDOUR {
 
 class MidiByteArray;
 
-namespace ArdourSurface {
+namespace ArdourSurface { namespace MACKIE_NAMESPACE {
 
 class MackieControlProtocol;
-
-namespace Mackie
-{
-
 class MackieButtonHandler;
 class SurfacePort;
 class MackieMidiBuilder;
@@ -100,7 +97,7 @@ public:
 	std::map<int,Meter*> meters;
 	std::map<int,Control*> controls_by_device_independent_id;
 
-	Mackie::JogWheel* jog_wheel() const { return _jog_wheel; }
+	MACKIE_NAMESPACE::JogWheel* jog_wheel() const { return _jog_wheel; }
 	Fader* master_fader() const { return _master_fader; }
 
 	/// The collection of all numbered strips.
@@ -193,7 +190,7 @@ public:
 	MackieControlProtocol& mcp() const { return _mcp; }
 
 	void next_jog_mode ();
-	void set_jog_mode (Mackie::JogWheel::Mode);
+	void set_jog_mode (MACKIE_NAMESPACE::JogWheel::Mode);
 
         void notify_metering_state_changed();
 	void turn_it_on ();
@@ -209,26 +206,37 @@ public:
 
 	bool get_qcon_flag() { return is_qcon; }
 
+	bool get_v1_flag() { return is_v1m; }
+	bool get_p1m_flag() { return is_p1m; }
+	bool get_p1nano_flag() { return is_p1nano; }
+
+	void force_icon_rgb_update() { _pending_icon_rgb.fill(0xFF); }
+
 	void toggle_master_monitor ();
 	bool master_stripable_is_master_monitor ();
 
   private:
-	MackieControlProtocol& _mcp;
-	SurfacePort*           _port;
-	surface_type_t         _stype;
-	uint32_t               _number;
-	std::string            _name;
-	bool                   _active;
-	bool                   _connected;
-	Mackie::JogWheel*      _jog_wheel;
-	Fader*                 _master_fader;
-	float                  _last_master_gain_written;
-	PBD::ScopedConnection   master_connection;
-	bool                   _has_master_display;
-	bool                   _has_master_meter;
+	MackieControlProtocol&             _mcp;
+	SurfacePort*                       _port;
+	surface_type_t                     _stype;
+	uint32_t                           _number;
+	std::string                        _name;
+	bool                               _active;
+	bool                               _connected;
+	MACKIE_NAMESPACE::JogWheel*        _jog_wheel;
+	Fader*                             _master_fader;
+	float                              _last_master_gain_written;
+	PBD::ScopedConnection              master_connection;
+	bool                               _has_master_display;
+	bool                               _has_master_meter;
 	std::shared_ptr<ARDOUR::Stripable> _master_stripable;
+
 	std::string pending_display[2];
 	std::string current_display[2];
+
+	// iCON P1-M / V1-M RGB — same pattern as master display
+	std::array<uint8_t, 24> _pending_icon_rgb{};
+	std::array<uint8_t, 24> _current_icon_rgb{};
 
 	void handle_midi_sysex (MIDI::Parser&, MIDI::byte *, size_t count);
 	MidiByteArray host_connection_query (MidiByteArray& bytes);
@@ -258,6 +266,17 @@ public:
 	MidiByteArray display_line (std::string const& msg, int line_num);
 	MidiByteArray display_colors_on_xtouch (const XTouchColors color_values[]) const;
 	uint8_t convert_color_to_xtouch_value (uint32_t color) const;
+
+	// iCON Flags
+	bool is_v1m;
+	bool is_p1m;
+	bool is_p1nano;
+
+	/** Send RGB colors to P1-M and V1-M scribble strips (iCON-specific SysEx) */
+	MidiByteArray display_colors_on_p1m_v1m (const std::array<uint8_t, 24>& rgb_values) const;
+	std::array<uint8_t, 24> _solid_icon_rgb{};     // stores the real solid colors
+	bool                   _blink_state = false;   // true = full brightness, false = dim/off
+	uint64_t               _last_blink_toggle = 0;
 
   public:
 	/* IP MIDI devices need to keep a handle on this and destroy it */

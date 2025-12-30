@@ -21,8 +21,8 @@
 #endif
 
 #include <cassert>
-#include <gtkmm/frame.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/openuri.h"
 #include "pbd/unwind.h"
@@ -291,9 +291,9 @@ PluginManagerUI::PluginManagerUI ()
 
 	/* connect to signals */
 
-	PluginManager::instance ().PluginListChanged.connect (_manager_connections, invalidator (*this), boost::bind (&PluginManagerUI::refill, this), gui_context ());
-	PluginManager::instance ().PluginScanLogChanged.connect (_manager_connections, invalidator (*this), boost::bind (&PluginManagerUI::refill, this), gui_context ());
-	PluginManager::instance ().PluginStatusChanged.connect (_manager_connections, invalidator (*this), boost::bind (&PluginManagerUI::plugin_status_changed, this, _1, _2, _3), gui_context ());
+	PluginManager::instance ().PluginListChanged.connect (_manager_connections, invalidator (*this), std::bind (&PluginManagerUI::refill, this), gui_context ());
+	PluginManager::instance ().PluginScanLogChanged.connect (_manager_connections, invalidator (*this), std::bind (&PluginManagerUI::refill, this), gui_context ());
+	PluginManager::instance ().PluginStatusChanged.connect (_manager_connections, invalidator (*this), std::bind (&PluginManagerUI::plugin_status_changed, this, _1, _2, _3), gui_context ());
 
 	_btn_reindex.signal_clicked.connect (sigc::mem_fun (*this, &PluginManagerUI::reindex));
 	_btn_discover.signal_clicked.connect (sigc::mem_fun (*this, &PluginManagerUI::discover));
@@ -783,7 +783,7 @@ PluginManagerUI::rescan_all ()
 {
 	ArdourMessageDialog msg (_("Are you sure you want to rescan all plugins?"), false, MESSAGE_QUESTION, BUTTONS_YES_NO, true);
 	msg.set_title (_("Rescan Plugins"));
-	msg.set_secondary_text (_("This starts a fresh scan, dropping all cached plugin data and ignorelist. Depending on the number if plugins installed this can take a long time."));
+	msg.set_secondary_text (_("This starts a fresh scan, dropping all cached plugin data and ignorelist. Depending on the number of plugins installed this can take a long time."));
 
 	if (msg.run () != RESPONSE_YES) {
 		return;

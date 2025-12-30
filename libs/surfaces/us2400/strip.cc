@@ -55,6 +55,7 @@
 #include "ardour/user_bundle.h"
 #include "ardour/profile.h"
 #include "ardour/value_as_string.h"
+#include "ardour/well_known_enum.h"
 
 #include "us2400_control_protocol.h"
 #include "surface_port.h"
@@ -187,27 +188,27 @@ Strip::set_stripable (std::shared_ptr<Stripable> r, bool /*with_messages*/)
 	_solo->set_control (_stripable->solo_control());
 	_mute->set_control (_stripable->mute_control());
 
-	_stripable->solo_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_solo_changed, this), ui_context());
-	_stripable->mute_control()->Changed.connect(stripable_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_mute_changed, this), ui_context());
+	_stripable->solo_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_solo_changed, this), ui_context());
+	_stripable->mute_control()->Changed.connect(stripable_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_mute_changed, this), ui_context());
 
 	std::shared_ptr<AutomationControl> pan_control = _stripable->pan_azimuth_control();
 	if (pan_control) {
-		pan_control->Changed.connect(stripable_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_panner_azi_changed, this, false), ui_context());
+		pan_control->Changed.connect(stripable_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_panner_azi_changed, this, false), ui_context());
 	}
 
 	pan_control = _stripable->pan_width_control();
 	if (pan_control) {
-		pan_control->Changed.connect(stripable_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_panner_width_changed, this, false), ui_context());
+		pan_control->Changed.connect(stripable_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_panner_width_changed, this, false), ui_context());
 	}
 
-	_stripable->gain_control()->Changed.connect(stripable_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_gain_changed, this, false), ui_context());
-	_stripable->PropertyChanged.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_property_changed, this, _1), ui_context());
-	_stripable->presentation_info().PropertyChanged.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_property_changed, this, _1), ui_context());
+	_stripable->gain_control()->Changed.connect(stripable_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_gain_changed, this, false), ui_context());
+	_stripable->PropertyChanged.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_property_changed, this, _1), ui_context());
+	_stripable->presentation_info().PropertyChanged.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_property_changed, this, _1), ui_context());
 
 	// TODO this works when a currently-banked stripable is made inactive, but not
 	// when a stripable is activated which should be currently banked.
 
-	_stripable->DropReferences.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_stripable_deleted, this), ui_context());
+	_stripable->DropReferences.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_stripable_deleted, this), ui_context());
 
 	/* setup legal VPot modes for this stripable */
 
@@ -792,6 +793,7 @@ Strip::setup_trackview_vpot (std::shared_ptr<Stripable> r)
 		return;
 	}
 
+	r->MappedControlsChanged.connect (subview_connections, MISSING_INVALIDATOR, std::bind (&Strip::subview_mode_changed, this), ui_context());
 
 	std::shared_ptr<AutomationControl> pc;
 	std::shared_ptr<Track> track = std::dynamic_pointer_cast<Track> (r);
@@ -816,20 +818,20 @@ Strip::setup_trackview_vpot (std::shared_ptr<Stripable> r)
 		break;
 
 	case 2:
-		pc = r->comp_threshold_controllable();
+		pc = r->mapped_control (Comp_Threshold);
 		break;
 
 	case 3:
-		pc = r->comp_speed_controllable();
+		pc = r->mapped_control (Comp_Attack);
 		break;
 
 	case 4:
-		pc = r->comp_mode_controllable();
+		pc = r->mapped_control (Comp_Mode);
 		_vpot->set_mode(Pot::wrap);
 		break;
 
 	case 5:
-		pc = r->comp_makeup_controllable();
+		pc = r->mapped_control (Comp_Makeup);
 		break;
 
 
@@ -847,68 +849,43 @@ Strip::setup_trackview_vpot (std::shared_ptr<Stripable> r)
 				break;
 
 			case 7:
-				pc = r->tape_drive_controllable();
+				pc = r->mapped_control (TapeDrive_Drive);
 				break;
 
 			case 8:
 			case 9:
 			case 10:
 				eq_band = (global_pos-8);
-				pc = r->eq_gain_controllable (eq_band);
+				pc = r->mapped_control (EQ_BandGain, eq_band);
 				_vpot->set_mode(Pot::boost_cut);
 				break;
 		}
 
 	} else if (r->is_input_strip ()) {
 
-#ifdef MIXBUS32C
 		switch (global_pos) {
 			case 6:
-				pc = r->filter_freq_controllable(true);
+				pc = r->mapped_control (HPF_Freq);
 				break;
 			case 7:
-				pc = r->filter_freq_controllable(false);
+				pc = r->mapped_control (LPF_Freq);
 				break;
 			case 8:
 			case 10:
 			case 12:
 			case 14: {
 				eq_band = (global_pos-8) / 2;
-				pc = r->eq_freq_controllable (eq_band);
+				pc = r->mapped_control (EQ_BandFreq, eq_band);
 				} break;
 			case 9:
 			case 11:
 			case 13:
 			case 15: {
 				eq_band = (global_pos-8) / 2;
-				pc = r->eq_gain_controllable (eq_band);
+				pc = r->mapped_control (EQ_BandGain, eq_band);
 				_vpot->set_mode(Pot::boost_cut);
 				} break;
 		}
-
-#else  //regular Mixbus channel EQ
-
-		switch (global_pos) {
-			case 7:
-				pc = r->filter_freq_controllable(true);
-				break;
-			case 8:
-			case 10:
-			case 12:
-				eq_band = (global_pos-8) / 2;
-				pc = r->eq_gain_controllable (eq_band);
-				_vpot->set_mode(Pot::boost_cut);
-				break;
-			case 9:
-			case 11:
-			case 13:
-				eq_band = (global_pos-8) / 2;
-				pc = r->eq_freq_controllable (eq_band);
-				break;
-		}
-
-
-#endif
 
 		//mixbus sends
 		switch (global_pos) {
@@ -971,7 +948,7 @@ Strip::setup_trackview_vpot (std::shared_ptr<Stripable> r)
 
 	if (pc) {  //control found; set our knob to watch for changes in it
 		_vpot->set_control (pc);
-		pc->Changed.connect (subview_connections, MISSING_INVALIDATOR, boost::bind (&Strip::notify_vpot_change, this), ui_context());
+		pc->Changed.connect (subview_connections, MISSING_INVALIDATOR, std::bind (&Strip::notify_vpot_change, this), ui_context());
 	} else {  //no control, just set the knob to "empty"
 		_vpot->reset_control ();
 	}

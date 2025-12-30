@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_gtk_automation_controller_h__
-#define __ardour_gtk_automation_controller_h__
+#pragma once
 
 #ifdef YES
 #undef YES
@@ -31,7 +30,7 @@
 
 #include <memory>
 
-#include <gtkmm/alignment.h>
+#include <ytkmm/alignment.h>
 
 #include "pbd/signals.h"
 #include "ardour/parameter_descriptor.h"
@@ -88,8 +87,8 @@ private:
 	                      Gtk::Adjustment*                             adj,
 	                      bool                                         use_knob);
 
-	void start_touch();
-	void end_touch();
+	void start_touch(int);
+	void end_touch(int);
 	bool button_press(GdkEventButton*);
 	bool button_release(GdkEventButton*);
 
@@ -108,4 +107,3 @@ private:
 };
 
 
-#endif /* __ardour_gtk_automation_controller_h__ */

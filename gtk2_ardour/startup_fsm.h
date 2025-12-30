@@ -25,6 +25,11 @@
 
 #include "ardour/types.h"
 
+namespace Gtk
+{
+class Window;
+} // namespace Gtk
+
 class ArdourDialog;
 class NewUserWizard;
 class EngineControl;
@@ -45,11 +50,13 @@ class StartupFSM : public sigc::trackable
 
 	enum Result {
 		LoadSession,
+		LoadedSession,
 		ExitProgram,
 		QuitProgram,
 	};
 
 	enum MainState {
+		NotWaiting,
 		WaitingForPreRelease,
 		WaitingForNewUser,
 		WaitingForSessionPath,
@@ -63,13 +70,15 @@ class StartupFSM : public sigc::trackable
 	void start ();
 	void reset ();
 
-	std::string session_path;
-	std::string session_name;
-	std::string session_template;
-	int         session_existing_sample_rate;
-	XMLNode     session_engine_hints;
-	bool        session_is_new;
-	bool        session_name_edited;
+	std::string          session_path;
+	std::string          session_name;
+	std::string          session_template;
+	Temporal::TimeDomain session_domain;
+	int                  session_existing_sample_rate;
+	XMLNode              session_engine_hints;
+	bool                 session_is_new;
+	bool                 session_name_edited;
+	bool                 session_loaded;
 
 	ARDOUR::BusProfile bus_profile;
 
@@ -81,6 +90,9 @@ class StartupFSM : public sigc::trackable
 
 	bool brand_new_user() const { return new_user; }
 	void handle_path (std::string const & path);
+
+	bool complete() const { return _state == NotWaiting; }
+	void set_complete ();
 
   private:
 	bool new_user;
@@ -121,6 +133,8 @@ class StartupFSM : public sigc::trackable
 	PluginScanDialog* plugin_scan_dialog;
 
 	sigc::connection current_dialog_connection;
+	sigc::connection app_quit_connection;
+	sigc::connection hide_quit_connection;
 
 	sigc::signal1<void,Result> _signal_response;
 

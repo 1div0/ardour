@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_processor_h__
-#define __ardour_processor_h__
+#pragma once
 
 #include <vector>
 #include <string>
@@ -45,13 +44,25 @@ namespace ARDOUR {
 class Location;
 class Session;
 
+class LIBARDOUR_API ProcessorException: public std::exception
+{
+public:
+	explicit ProcessorException (const std::string msg) : _message(msg) {}
+	virtual ~ProcessorException () throw() {}
+
+	virtual const char* what() const throw() { return _message.c_str(); }
+
+private:
+	std::string _message;
+};
+
 /** A mixer strip element - plugin, send, meter, etc */
 class LIBARDOUR_API Processor : public SessionObject, public Automatable, public Latent
 {
   public:
 	static const std::string state_node_name;
 
-	Processor(Session&, const std::string& name, Temporal::TimeDomain);
+	Processor(Session&, const std::string& name, Temporal::TimeDomainProvider const &);
 	Processor (const Processor& other);
 
 	virtual ~Processor();
@@ -137,16 +148,16 @@ class LIBARDOUR_API Processor : public SessionObject, public Automatable, public
 	virtual void set_pre_fader (bool);
 	virtual bool get_pre_fader () const { return _pre_fader; }
 
-	PBD::Signal0<void>                     ActiveChanged;
-	PBD::Signal0<void>                     BypassableChanged;
-	PBD::Signal2<void,ChanCount,ChanCount> ConfigurationChanged;
+	PBD::Signal<void()>                     ActiveChanged;
+	PBD::Signal<void()>                     BypassableChanged;
+	PBD::Signal<void(ChanCount,ChanCount)> ConfigurationChanged;
 
 	/* cross-thread signals.
 	 * This allows control-surfaces to show/hide a plugin GUI.
 	 */
-	PBD::Signal0<void> ToggleUI;
-	PBD::Signal0<void> ShowUI;
-	PBD::Signal0<void> HideUI;
+	PBD::Signal<void()> ToggleUI;
+	PBD::Signal<void()> ShowUI;
+	PBD::Signal<void()> HideUI;
 
 	ProcessorWindowProxy * window_proxy () const { return _window_proxy; }
 	void set_window_proxy (ProcessorWindowProxy* wp) { _window_proxy = wp; }
@@ -187,4 +198,3 @@ protected:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_processor_h__ */

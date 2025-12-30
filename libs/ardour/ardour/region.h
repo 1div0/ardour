@@ -21,16 +21,16 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_region_h__
-#define __ardour_region_h__
+#pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include <boost/utility.hpp>
-
+#include "temporal/domain_swap.h"
 #include "temporal/timeline.h"
 #include "temporal/range.h"
+#include "temporal/tempo.h"
 
 #include "pbd/undo.h"
 #include "pbd/signals.h"
@@ -44,6 +44,10 @@
 #include "ardour/types_convert.h"
 
 class XMLNode;
+
+namespace PBD {
+	class Progress;
+}
 
 namespace ARDOUR {
 
@@ -72,13 +76,18 @@ namespace Properties {
 	LIBARDOUR_API extern PBD::PropertyDescriptor<float>             shift;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<uint64_t>          layering_index;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<std::string>       tags;
+	LIBARDOUR_API extern PBD::PropertyDescriptor<uint64_t>          reg_group;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool>              contents; // type doesn't matter here, used for signal only
+	LIBARDOUR_API extern PBD::PropertyDescriptor<bool>              region_fx; // type doesn't matter here, used for signal only
+	LIBARDOUR_API extern PBD::PropertyDescriptor<bool>              region_tempo; // type doesn't matter here, used for signal only
+	LIBARDOUR_API extern PBD::PropertyDescriptor<bool>              region_meter; // type doesn't matter here, used for signal only
 };
 
 class Playlist;
 class Filter;
 class ExportSpecification;
-class Progress;
+class Plugin;
+class RegionFxPlugin;
 
 enum LIBARDOUR_API RegionEditState {
 	EditChangesNothing = 0,
@@ -86,19 +95,29 @@ enum LIBARDOUR_API RegionEditState {
 	EditChangesID      = 2
 };
 
+enum LIBARDOUR_API RegionOperationFlag {
+	LeftOfSplit    = 0,
+	InnerSplit     = 1, // when splitting a Range, there's left/center/right parts of the split
+	RightOfSplit   = 2,
+	Paste          = 4
+};
 
 class LIBARDOUR_API Region
 	: public SessionObject
 	, public std::enable_shared_from_this<Region>
 	, public Trimmable
 	, public Movable
+	, public Temporal::TimeDomainSwapper
 {
 public:
 	typedef std::vector<std::shared_ptr<Source> > SourceList;
+	typedef std::list<std::shared_ptr<RegionFxPlugin>> RegionFxList;
 
 	static void make_property_quarks ();
 
-	static PBD::Signal2<void,std::shared_ptr<RegionList>, const PBD::PropertyChange&> RegionsPropertyChanged;
+	static PBD::Signal<void(std::shared_ptr<RegionList>, const PBD::PropertyChange&)> RegionsPropertyChanged;
+
+	PBD::Signal<void()> RegionFxChanged;
 
 	typedef std::map <PBD::PropertyChange, RegionList> ChangeMap;
 
@@ -111,7 +130,8 @@ public:
 
 	const DataType& data_type () const { return _type; }
 	Temporal::TimeDomain time_domain() const;
-	void globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to);
+	void start_domain_bounce (Temporal::DomainBounceInfo&);
+	void finish_domain_bounce (Temporal::DomainBounceInfo&);
 
 	/** How the region parameters play together:
 	 *
@@ -125,6 +145,8 @@ public:
 	timecnt_t length ()    const { return _length.val(); }
 	timepos_t end()        const;
 	timepos_t nt_last()    const { return end().decrement(); }
+
+	virtual timecnt_t tail () const { return timecnt_t (0); }
 
 	timepos_t source_position () const;
 	timecnt_t source_relative_position (Temporal::timepos_t const &) const;
@@ -150,6 +172,65 @@ public:
 	samplecnt_t ancestral_length_samples () const { return _ancestral_length.val().samples(); }
 	timepos_t ancestral_start ()  const { return _ancestral_start.val(); }
 	timecnt_t ancestral_length () const { return _ancestral_length.val(); }
+
+	/** Region Groups:
+	 * every region has a group-id. regions that have the same group-id (excepting zero) are 'grouped'
+	 * if you select a 'grouped' region, then all other regions in the group will be selected
+	 * operations like Import, Record, and Paste assign a group-id to the new regions they create
+	 * users can explicitly group regions, which implies a stronger connection and gets the 'explicit' flag
+	 * users can explicitly ungroup regions, which prevents ardour from applying equivalent-regions logic
+	 * regions with no flags and no group-id (prior sessions) will revert to equivalent-regions logic */
+
+	/** RegionGroupRetainer is an RAII construct to retain a group-id for the length of an operation that creates regions */
+	struct RegionGroupRetainer {
+		RegionGroupRetainer ()
+		{
+			Glib::Threads::Mutex::Lock lm (_operation_rgroup_mutex);
+			if (_retained_group_id == 0) {
+				_retained_take_cnt = 0;
+				++_next_group_id;
+				_operation_rgroup_map.clear ();              // this is used for split & paste operations that honor the region's prior grouping
+				_retained_group_id    = _next_group_id << 4; // this is used for newly created regions via recording or importing
+				_clear_on_destruction = true;
+			} else {
+				_clear_on_destruction = false;
+			}
+		}
+		~RegionGroupRetainer ()
+		{
+			if (_clear_on_destruction) {
+				Glib::Threads::Mutex::Lock lm (_operation_rgroup_mutex);
+				_retained_group_id = 0;
+				_next_group_id += _retained_take_cnt;
+				_operation_rgroup_map.clear();
+			}
+		}
+		bool _clear_on_destruction;
+	};
+
+	static uint64_t next_group_id () { return _next_group_id; }
+	static void set_next_group_id (uint64_t ngid) { _next_group_id = ngid; }
+
+	/* access the retained group-id for actions like Recording, Import.
+	 *
+	 * Note When a single take creates multiple layered regions (e.g. loop recording)
+	 * then the group id need to be bumped for each take
+	 */
+	static uint64_t get_retained_group_id (uint64_t take = 0) {
+		_retained_take_cnt = std::max (_retained_take_cnt, take);
+		return _retained_group_id + (take << 4);
+	}
+
+	/* access the group-id for an operation on a region, honoring the existing region's group status */
+	static uint64_t get_region_operation_group_id (uint64_t old_region_group, RegionOperationFlag flags);
+
+	uint64_t region_group () const { return _reg_group; }
+	void set_region_group (uint64_t rg, bool explicitly = false) { _reg_group = rg | (explicitly ? Explicit : NoGroup); }
+	void unset_region_group (bool explicitly = false) { _reg_group = (explicitly ? Explicit : NoGroup); }
+
+	bool is_explicitly_grouped()   { return (_reg_group & Explicit) == Explicit; }
+	bool is_implicitly_ungrouped() { return (_reg_group == NoGroup); }
+	bool is_explicitly_ungrouped() { return (_reg_group == Explicit); }
 
 	float stretch () const { return _stretch; }
 	float shift ()   const { return _shift; }
@@ -223,8 +304,8 @@ public:
 	 *  OverlapEnd:      the range overlaps the end of this region.
 	 *  OverlapExternal: the range overlaps all of this region.
 	 */
-	Temporal::OverlapType coverage (timepos_t const & start, timepos_t const & end) const {
-		return Temporal::coverage_exclusive_ends (position(), nt_last(), start, end);
+	Temporal::OverlapType coverage (timepos_t const & start, timepos_t const & end, bool with_tail = false) const {
+		return Temporal::coverage_exclusive_ends (position(), with_tail ? nt_last() + tail() : nt_last(), start, end);
 	}
 
 	bool exact_equivalent (std::shared_ptr<const Region>) const;
@@ -312,9 +393,11 @@ public:
 	/** Convert a timestamp in absolute time to beats measured from source start*/
 	Temporal::Beats absolute_time_to_source_beats(Temporal::timepos_t const &) const;
 
-	Temporal::Beats absolute_time_to_region_beats (Temporal::timepos_t const &) const;
+	Temporal::Beats absolute_time_to_soucre_beats (Temporal::timepos_t const &) const;
 
-	int apply (Filter &, Progress* progress = 0);
+	Temporal::timepos_t absolute_time_to_region_time (Temporal::timepos_t const &) const;
+
+	int apply (Filter &, PBD::Progress* progress = 0);
 
 	std::shared_ptr<ARDOUR::Playlist> playlist () const { return _playlist.lock(); }
 	virtual void set_playlist (std::weak_ptr<ARDOUR::Playlist>);
@@ -335,7 +418,7 @@ public:
 	/* automation */
 
 	virtual std::shared_ptr<Evoral::Control>
-	control (const Evoral::Parameter& id, bool create=false) = 0;
+		control (const Evoral::Parameter& id, bool create=false) = 0;
 
 	virtual std::shared_ptr<const Evoral::Control>
 	control (const Evoral::Parameter& id) const = 0;
@@ -429,6 +512,46 @@ public:
 	void move_cue_marker (CueMarker const &, timepos_t const & region_relative_position);
 	void rename_cue_marker (CueMarker&, std::string const &);
 
+	/* Region Fx */
+	bool load_plugin (ARDOUR::PluginType type, std::string const& name);
+	bool add_plugin (std::shared_ptr<RegionFxPlugin>, std::shared_ptr<RegionFxPlugin> pos = std::shared_ptr<RegionFxPlugin> ());
+	virtual bool remove_plugin (std::shared_ptr<RegionFxPlugin>) { return false; }
+	virtual void reorder_plugins (RegionFxList const&);
+
+	bool has_region_fx () const {
+		Glib::Threads::RWLock::ReaderLock lm (_fx_lock);
+		return !_plugins.empty ();
+	}
+
+	size_t n_region_fx () const {
+		Glib::Threads::RWLock::ReaderLock lm (_fx_lock);
+		return _plugins.size ();
+	}
+
+	std::shared_ptr<RegionFxPlugin> nth_plugin (uint32_t n) const {
+		Glib::Threads::RWLock::ReaderLock lm (_fx_lock);
+		for (auto const& i : _plugins) {
+			if (0 == n--) {
+				return i;
+			}
+		}
+		return std::shared_ptr<RegionFxPlugin> ();
+	}
+
+	void foreach_plugin (std::function<void(std::weak_ptr<RegionFxPlugin>)> method) const {
+		Glib::Threads::RWLock::ReaderLock lm (_fx_lock);
+		for (auto const& i : _plugins) {
+			method (std::weak_ptr<RegionFxPlugin> (i));
+		}
+	}
+
+	std::optional<Temporal::Tempo> tempo() const;
+	void set_tempo (Temporal::Tempo const &);
+	std::optional<Temporal::Meter> meter() const;
+	void set_meter (Temporal::Meter const &);
+
+	std::shared_ptr<Temporal::TempoMap> tempo_map() const;
+
 protected:
 	virtual XMLNode& state () const;
 
@@ -454,14 +577,18 @@ protected:
 	}
 
 protected:
+	virtual bool _add_plugin (std::shared_ptr<RegionFxPlugin>, std::shared_ptr<RegionFxPlugin>, bool) { return false; }
+	virtual void fx_latency_changed (bool no_emit);
+	virtual void fx_tail_changed (bool no_emit);
 
-	void send_change (const PBD::PropertyChange&);
+	virtual void send_change (const PBD::PropertyChange&);
 	virtual int _set_state (const XMLNode&, int version, PBD::PropertyChange& what_changed, bool send_signal);
 	virtual void set_position_internal (timepos_t const & pos);
-	virtual void set_length_internal (timecnt_t const &);
+	void set_length_internal (timecnt_t const &);
 	virtual void set_start_internal (timepos_t const &);
 	bool verify_start_and_length (timepos_t const &, timecnt_t&);
 	void first_edit ();
+	virtual void ensure_length_sanity () {}
 
 	void override_opaqueness (bool yn) {
 		_opaque = yn;
@@ -471,6 +598,11 @@ protected:
 	timepos_t len_as_tpos () const { return timepos_t((samplepos_t)_length.val().samples()); }
 
 	DataType _type;
+
+	mutable Glib::Threads::RWLock _fx_lock;
+	uint32_t                      _fx_latency;
+	uint32_t                      _fx_tail;
+	RegionFxList                  _plugins;
 
 	PBD::Property<bool>      _sync_marked;
 	PBD::Property<bool>      _left_of_split;
@@ -508,6 +640,7 @@ private:
 	void trim_to_internal (timepos_t const & position, timecnt_t const & length);
 
 	void maybe_uncopy ();
+	void subscribe_to_source_drop ();
 
 	bool verify_start (timepos_t const &);
 	bool verify_length (timecnt_t&);
@@ -531,6 +664,7 @@ private:
 	PBD::Property<float>       _shift;
 	PBD::Property<uint64_t>    _layering_index;
 	PBD::Property<std::string> _tags;
+	PBD::Property<uint64_t>    _reg_group;
 	PBD::Property<bool>        _contents; // type is irrelevant
 
 	timecnt_t             _last_length;
@@ -542,8 +676,22 @@ private:
 	void register_properties ();
 
 	void use_sources (SourceList const &);
+
+	enum RegionGroupFlags : uint64_t {
+		NoGroup   = 0x0, // no flag: implicitly grouped if the id is nonzero; or implicitly 'un-grouped' if the group-id is zero
+		Explicit  = 0x1, // the user has explicitly grouped or ungrouped this region. explicitly grouped regions can cross track-group boundaries
+	};
+	static uint64_t _retained_group_id;
+	static uint64_t _retained_take_cnt;
+	static uint64_t _next_group_id;
+
+	static Glib::Threads::Mutex         _operation_rgroup_mutex;
+	static std::map<uint64_t, uint64_t> _operation_rgroup_map;
+
+	std::atomic<int>          _source_deleted;
+	Glib::Threads::Mutex      _source_list_lock;
+	PBD::ScopedConnectionList _source_deleted_connections;
 };
 
 } /* namespace ARDOUR */
 
-#endif /* __ardour_region_h__ */

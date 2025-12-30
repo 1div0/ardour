@@ -16,13 +16,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libpbd_inflater_h__
-#define __libpbd_inflater_h__
+#pragma once
 
 #include <string>
 
 #include "pbd/file_archive.h"
 #include "pbd/libpbd_visibility.h"
+#include "pbd/progress.h"
 
 namespace PBD {
 	class Thread;
@@ -30,7 +30,7 @@ namespace PBD {
 
 namespace PBD {
 
-class LIBPBD_API Inflater : public PBD::FileArchive
+class LIBPBD_API Inflater : public PBD::FileArchive , public PBD::Progress
 {
   public:
 	Inflater (std::string const & archive_path, std::string const & destdir);
@@ -40,15 +40,18 @@ class LIBPBD_API Inflater : public PBD::FileArchive
 	bool running() const { return thread != 0; }
 	int  status() const { return _status; }
 
-  private:
+	PBD::Signal<void(float)> Progress;
+
+private:
 	PBD::Thread* thread;
 	int _status;
 	std::string archive_path;
 	std::string destdir;
 
 	void threaded_inflate ();
+
+	void set_overall_progress (float p);
 };
 
 } /* namespace */
 
-#endif 

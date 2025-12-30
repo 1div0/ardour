@@ -55,7 +55,7 @@ SendUI::SendUI (Gtk::Window* parent, Session* session, std::shared_ptr<Send> s)
 	_panners.set_panner (s->panner_shell (), s->panner ());
 
 	_send->set_metering (true);
-	_send->output ()->changed.connect (_send_connection, invalidator (*this), boost::bind (&SendUI::outs_changed, this, _1, _2), gui_context ());
+	_send->output ()->changed.connect (_send_connection, invalidator (*this), std::bind (&SendUI::outs_changed, this, _1, _2), gui_context ());
 
 	_gpm.setup_meters ();
 	_gpm.set_fader_name (X_("SendUIFader"));
@@ -153,6 +153,15 @@ SendUI::invert_release (GdkEventButton* ev)
 
 SendUIWindow::SendUIWindow (Gtk::Window& parent, ARDOUR::Session* session, std::shared_ptr<Send> send)
 	: ArdourWindow (parent, string_compose (_("Send: %1"), send->name ()))
+	, _ui (this, session, send)
+{
+	set_name ("SendUIWindow");
+	add (_ui);
+	_ui.show ();
+}
+
+SendUIWindow::SendUIWindow (ARDOUR::Session* session, std::shared_ptr<Send> send)
+	: ArdourWindow (string_compose (_("Send: %1"), send->name ()))
 	, _ui (this, session, send)
 {
 	set_name ("SendUIWindow");

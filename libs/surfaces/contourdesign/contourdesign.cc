@@ -38,7 +38,7 @@ using namespace Glib;
 using namespace std;
 using namespace ArdourSurface;
 
-#include "pbd/abstract_ui.cc" // instantiate template
+#include "pbd/abstract_ui.inc.cc" // instantiate template
 
 static const uint16_t ContourDesign = 0x0b33;
 static const uint16_t ShuttlePRO_id = 0x0010;
@@ -88,7 +88,7 @@ ContourDesignControlProtocol::~ContourDesignControlProtocol ()
 }
 
 bool
-ContourDesignControlProtocol::probe ()
+ContourDesignControlProtocol::available ()
 {
 	bool rv = LIBUSB_SUCCESS == libusb_init (0);
 	if (rv) {
@@ -97,15 +97,13 @@ ContourDesignControlProtocol::probe ()
 	return rv;
 }
 
-void*
-ContourDesignControlProtocol::request_factory (uint32_t num_requests)
+bool
+ContourDesignControlProtocol::match_usb (uint16_t vendor, uint16_t p)
 {
-	/* AbstractUI<T>::request_buffer_factory() is a template method only
-	 * instantiated in this source module. To provide something visible for
-	 * use in the interface/descriptor, we have this static method that is
-	 * template-free.
-	 */
-	return request_buffer_factory (num_requests);
+	if (vendor != ContourDesign) {
+		return false;
+	}
+	return (p == ShuttlePRO_id || p == ShuttlePRO_v2_id || p == ShuttleXpress_id);
 }
 
 int
@@ -240,8 +238,6 @@ void
 ContourDesignControlProtocol::thread_init ()
 {
 	DEBUG_TRACE (DEBUG::ContourDesignControl, "thread_init()\n");
-
-	pthread_set_name (X_("contourdesign"));
 	PBD::notify_event_loops_about_thread_creation (pthread_self (), X_("contourdesign"), 2048);
 	ARDOUR::SessionEvent::create_per_thread_pool (X_("contourdesign"), 128);
 

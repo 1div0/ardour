@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libardour_presentation_info_h__
-#define __libardour_presentation_info_h__
+#pragma once
 
 #include <iostream>
 #include <string>
@@ -113,18 +112,16 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 		MasterOut = 0x20,
 		MonitorOut = 0x40,
 		Auditioner = 0x80,
-#ifdef MIXBUS
-		Mixbus = 0x1000,
-#endif
 		/* These are for sharing Stripable states between the GUI and other
 		 * user interfaces/control surfaces
 		 */
 		Hidden = 0x100,
-#ifdef MIXBUS
-		MixbusEditorHidden = 0x800,
-#endif
 		/* single bit indicates that the group order is set */
 		OrderSet = 0x400,
+
+		/* Mixbus specific */
+		MixbusEditorHidden = 0x800,
+		Mixbus = 0x1000,
 
 		/* bus type for monitor mixes */
 		FoldbackBus = 0x2000,
@@ -132,15 +129,35 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 		/* has TriggerBox, show on TriggerUI page */
 		TriggerTrack = 0x4000,
 
-		/* special mask to delect out "state" bits */
-#ifdef MIXBUS
-		StatusMask = (Hidden | MixbusEditorHidden | TriggerTrack),
+#ifndef VBM
+		/* bus is the surround master */
+		SurroundMaster = 0x8000,
 #else
-		StatusMask = (Hidden | TriggerTrack),
+		SurroundMaster = 0, // for compatibility
 #endif
 
-		/* special mask to delect select type bits */
-		TypeMask = (AudioBus|AudioTrack|MidiTrack|MidiBus|VCA|MasterOut|MonitorOut|Auditioner|FoldbackBus)
+		/* VBM */
+		Program     = 0x4000,  // deprecated (conflicts with TriggerTrack)
+		MixMinus    = 0x8000,  // deprecated (conflicts with SurroundMaster)
+		VBMProgram  = 0x10000,
+		VBMMixMinus = 0x20000,
+#ifdef VBM
+		VBMAny      = 0x3c000,
+#else
+		VBMAny      = 0x30000,
+#endif
+
+		/* special mask to detect out "state" bits */
+		StatusMask = (Hidden | MixbusEditorHidden | TriggerTrack),
+
+		/* dedicated [output] busses */
+		MainBus = (MasterOut|MonitorOut|FoldbackBus|SurroundMaster),
+
+		/* These can exist only once and require special attention to be removed */
+		Singleton = (MasterOut|MonitorOut|SurroundMaster),
+
+		/* special mask to detect select type bits */
+		TypeMask = (AudioBus|AudioTrack|MidiTrack|MidiBus|Mixbus|VCA|MasterOut|MonitorOut|Auditioner|FoldbackBus|SurroundMaster|VBMAny)
 	};
 
 	static const Flag AllStripables; /* mask to use for any route or VCA (but not auditioner) */
@@ -178,7 +195,7 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 
 	bool hidden() const { return _flags & Hidden; }
 	bool trigger_track () const { return _flags & TriggerTrack; }
-	bool special(bool with_master = true) const { return _flags & ((with_master ? MasterOut : 0)|MonitorOut|Auditioner); }
+	bool special(bool with_master = true) const { return _flags & ((with_master ? MasterOut : 0)|SurroundMaster|MonitorOut|Auditioner); }
 
 	bool flag_match (Flag f) const {
 		/* no flags, match all */
@@ -254,7 +271,7 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 	/* for things concerned about *any* PresentationInfo.
 	 */
 
-	static PBD::Signal1<void,PBD::PropertyChange const &> Change;
+	static PBD::Signal<void(PBD::PropertyChange const &)> Change;
 	static void send_static_change (const PBD::PropertyChange&);
 
 	static void make_property_quarks ();
@@ -298,4 +315,3 @@ namespace std {
 std::ostream& operator<<(std::ostream& o, ARDOUR::PresentationInfo const& rid);
 }
 
-#endif /* __libardour_presentation_info_h__ */

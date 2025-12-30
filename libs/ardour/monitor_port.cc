@@ -28,8 +28,6 @@
 #include "ardour/runtime_functions.h"
 #include "ardour/session.h"
 
-#define GAIN_COEFF_DELTA (1e-5)
-
 using namespace ARDOUR;
 using namespace std;
 
@@ -84,14 +82,14 @@ MonitorPort::monitor (PortEngine& e, pframes_t n_samples)
 		memset (_input, 0, sizeof (Sample) * _insize);
 		_silent = true;
 	}
-	std::shared_ptr<MonitorPorts> cycle_ports = _monitor_ports.reader ();
+	std::shared_ptr<MonitorPorts const> cycle_ports = _monitor_ports.reader ();
 
-	for (MonitorPorts::iterator i = cycle_ports->begin (); i != cycle_ports->end(); ++i) {
-		if (i->second->remove && i->second->gain == 0) {
+	for (auto const& i : *cycle_ports) {
+		if (i.second->remove && i.second->gain == 0) {
 			continue;
 		}
 
-		PortEngine::PortHandle ph = e.get_port_by_name (i->first);
+		PortEngine::PortHandle ph = e.get_port_by_name (i.first);
 		if (!ph) {
 			continue;
 		}
@@ -99,7 +97,7 @@ MonitorPort::monitor (PortEngine& e, pframes_t n_samples)
 		if (!buf) {
 			continue;
 		}
-		collect (i->second, buf, n_samples, i->first);
+		collect (i.second, buf, n_samples, i.first);
 	}
 	finalize (n_samples);
 }
@@ -183,16 +181,16 @@ MonitorPort::get_audio_buffer (pframes_t n_samples)
 bool
 MonitorPort::monitoring (std::string const& pn) const
 {
-	std::shared_ptr<MonitorPorts> mp = _monitor_ports.reader ();
+	std::shared_ptr<MonitorPorts const> mp = _monitor_ports.reader ();
 	if (pn.empty ()) {
-		for (MonitorPorts::iterator i = mp->begin (); i != mp->end(); ++i) {
-			if (!i->second->remove) {
+		for (auto const& i : *mp) {
+			if (!i.second->remove) {
 				return true;
 			}
 		}
 		return false;
 	}
-	MonitorPorts::iterator i = mp->find (pn);
+	MonitorPorts::const_iterator i = mp->find (pn);
 	if (i == mp->end ()) {
 		return false;
 	}
@@ -202,12 +200,12 @@ MonitorPort::monitoring (std::string const& pn) const
 void
 MonitorPort::active_monitors (std::list<std::string>& portlist) const
 {
-	std::shared_ptr<MonitorPorts> mp = _monitor_ports.reader ();
-	for (MonitorPorts::iterator i = mp->begin (); i != mp->end(); ++i) {
-		if (i->second->remove) {
+	std::shared_ptr<MonitorPorts const> mp = _monitor_ports.reader ();
+	for (auto const& i : *mp) {
+		if (i.second->remove) {
 			continue;
 		}
-		portlist.push_back (i->first);
+		portlist.push_back (i.first);
 	}
 }
 
@@ -327,7 +325,7 @@ MonitorPort::clear_ports (bool instantly)
 		mp->swap (copy);
 		assert (mp->empty ());
 	} else {
-		std::shared_ptr<MonitorPorts> mp = _monitor_ports.reader ();
+		std::shared_ptr<MonitorPorts const> mp = _monitor_ports.reader ();
 		copy = *mp;
 		for (MonitorPorts::iterator i = copy.begin (); i != copy.end(); ++i) {
 			i->second->remove = true;
@@ -336,6 +334,11 @@ MonitorPort::clear_ports (bool instantly)
 
 	for (MonitorPorts::iterator i = copy.begin (); i != copy.end(); ++i) {
 		MonitorInputChanged (i->first, false); /* EMIT SIGNAL */
+	}
+
+	if (instantly) {
+		/* release shared_ptr references */
+		_monitor_ports.flush ();
 	}
 
 	if (!s) {

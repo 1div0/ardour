@@ -84,8 +84,8 @@ public:
 
 	DeviceType device_type() const { return _device_type; }
 
-	static bool probe ();
-	static void* request_factory (uint32_t);
+	static bool available ();
+	static bool match_usb (uint16_t, uint16_t);
 
 	int set_active (bool yn);
 
@@ -126,8 +126,8 @@ public:
 		return _shuttle_speeds[index];
 	}
 
-	PBD::Signal1<void, unsigned short> ButtonPress;
-	PBD::Signal1<void, unsigned short> ButtonRelease;
+	PBD::Signal<void(unsigned short)> ButtonPress;
+	PBD::Signal<void(unsigned short)> ButtonRelease;
 
 	CONTROL_PROTOCOL_THREADS_NEED_TEMPO_MAP_DECL();
 

@@ -22,13 +22,13 @@
 
 #include "pbd/types_convert.h"
 
-#include "ardour/export_channel.h"
 #include "ardour/audio_buffer.h"
 #include "ardour/audio_port.h"
 #include "ardour/audio_track.h"
 #include "ardour/audioengine.h"
 #include "ardour/audioregion.h"
 #include "ardour/capturing_processor.h"
+#include "ardour/export_channel.h"
 #include "ardour/export_failed.h"
 #include "ardour/midi_port.h"
 #include "ardour/session.h"
@@ -102,8 +102,8 @@ PortExportChannel::operator< (ExportChannel const& other) const
 		return this < &other;
 	}
 
-	std::owner_less<std::weak_ptr<AudioPort> > cmp;
-	return std::lexicographical_compare (ports.begin(), ports.end(), pec->ports.begin(), pec->ports.end(), cmp);
+	std::owner_less<std::weak_ptr<AudioPort>> cmp;
+	return std::lexicographical_compare (ports.begin (), ports.end (), pec->ports.begin (), pec->ports.end (), cmp);
 }
 
 void
@@ -112,9 +112,9 @@ PortExportChannel::read (Buffer const*& buf, samplecnt_t samples) const
 	assert (_buffer);
 	assert (samples <= _buffer_size);
 
-	if (ports.size () == 1 && _delaylines.size () == 1 && !ports.begin ()->expired () && _delaylines.front ()->bufsize () == _buffer_size + 1) {
+	if (ports.size () == 1 && _delaylines.size () == 1 && !ports.begin ()->expired () && (samplecnt_t) _delaylines.front ()->bufsize () == _buffer_size + 1) {
 		std::shared_ptr<AudioPort> p = ports.begin ()->lock ();
-		AudioBuffer&                 ab (p->get_audio_buffer (samples)); // unsets AudioBuffer::_written
+		AudioBuffer&               ab (p->get_audio_buffer (samples)); // unsets AudioBuffer::_written
 		ab.set_written (true);
 		buf = &ab;
 		return;
@@ -242,7 +242,7 @@ PortExportMIDI::read (Buffer const*& buf, samplecnt_t samples) const
 void
 PortExportMIDI::get_state (XMLNode* node) const
 {
-	XMLNode*                    port_node;
+	XMLNode*                  port_node;
 	std::shared_ptr<MidiPort> p = _port.lock ();
 	if (p && (port_node = node->add_child ("MIDIPort"))) {
 		port_node->set_property ("name", p->name ());
@@ -291,7 +291,7 @@ RegionExportChannelFactory::RegionExportChannelFactory (Session* session, AudioR
 			throw ExportFailed ("Unhandled type in ExportChannelFactory constructor");
 	}
 
-	session->ProcessExport.connect_same_thread (export_connection, boost::bind (&RegionExportChannelFactory::new_cycle_started, this, _1));
+	session->ProcessExport.connect_same_thread (export_connection, std::bind (&RegionExportChannelFactory::new_cycle_started, this, _1));
 
 	buffers.ensure_buffers (DataType::AUDIO, n_channels, samples_per_cycle);
 	buffers.set_count (ChanCount (DataType::AUDIO, n_channels));
@@ -349,8 +349,8 @@ RegionExportChannelFactory::update_buffers (samplecnt_t samples)
 }
 
 RouteExportChannel::RouteExportChannel (std::shared_ptr<CapturingProcessor> processor,
-                                        DataType                              type,
-                                        size_t                                channel,
+                                        DataType                            type,
+                                        size_t                              channel,
                                         std::shared_ptr<ProcessorRemover>   remover)
 	: _processor (processor)
 	, _type (type)
@@ -367,8 +367,10 @@ void
 RouteExportChannel::create_from_route (std::list<ExportChannelPtr>& result, std::shared_ptr<Route> route)
 {
 	std::shared_ptr<CapturingProcessor> processor = route->add_export_point ();
-	uint32_t                              n_audio   = processor->input_streams ().n_audio ();
-	uint32_t                              n_midi    = processor->input_streams ().n_midi ();
+	uint32_t                            n_audio   = processor->input_streams ().n_audio ();
+	uint32_t                            n_midi    = processor->input_streams ().n_midi ();
+
+	assert (n_audio + n_midi > 0);
 
 	std::shared_ptr<ProcessorRemover> remover (new ProcessorRemover (route, processor));
 	result.clear ();
@@ -383,6 +385,11 @@ RouteExportChannel::create_from_route (std::list<ExportChannelPtr>& result, std:
 void
 RouteExportChannel::create_from_state (std::list<ExportChannelPtr>& result, Session& s, XMLNode* node)
 {
+	uint32_t chn;
+	if (node->get_property ("number", chn) && chn > 1) {
+		/* create_from_route adds ExportChannel for all channels of a given Route */
+		return;
+	}
 	XMLNode* xml_route = node->child ("Route");
 	if (!xml_route) {
 		return;

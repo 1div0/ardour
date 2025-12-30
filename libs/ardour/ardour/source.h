@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_source_h__
-#define __ardour_source_h__
+#pragma once
 
 #include <atomic>
 #include <memory>
@@ -29,8 +28,6 @@
 #include <set>
 
 #include <glibmm/threads.h>
-
-#include <boost/utility.hpp>
 
 #include "pbd/statefuldestructible.h"
 
@@ -86,7 +83,12 @@ public:
 	void mark_for_remove();
 
 	virtual void mark_streaming_write_started (const WriterLock& lock) {}
-	virtual void mark_streaming_write_completed (const WriterLock& lock) = 0;
+	/* The duration argument is ignored for audio data, where length is
+	   implicitly given by the sample data. It matters for MIDI data, where
+	   the file may be intended to be N bars long, but has no events that
+	   occur at that duration.
+	*/
+	virtual void mark_streaming_write_completed (const WriterLock& lock, Temporal::timecnt_t const & duration) = 0;
 
 	virtual void session_saved() {}
 
@@ -97,14 +99,14 @@ public:
 
 	virtual bool length_mutable() const    { return false; }
 
-	static PBD::Signal1<void,Source*>             SourceCreated;
+	static PBD::Signal<void(Source*)>             SourceCreated;
 
 	bool has_been_analysed() const;
 	virtual bool can_be_analysed() const { return false; }
 	virtual void set_been_analysed (bool yn);
 	virtual bool check_for_analysis_data_on_disk();
 
-	PBD::Signal0<void> AnalysisChanged;
+	PBD::Signal<void()> AnalysisChanged;
 
 	AnalysisFeatureList transients;
 	std::string get_transients_path() const;
@@ -121,7 +123,7 @@ public:
 	bool remove_cue_marker (CueMarker const &);
 	bool rename_cue_marker (CueMarker&, std::string const &);
 	bool clear_cue_markers ();
-	PBD::Signal0<void> CueMarkersChanged;
+	PBD::Signal<void()> CueMarkersChanged;
 
 	virtual timepos_t natural_position() const { return _natural_position; }
 	virtual void set_natural_position (timepos_t const & pos);
@@ -152,7 +154,9 @@ public:
 	std::string captured_for() const { return _captured_for; }
 
 	bool get_segment_descriptor (TimelineRange const &, SegmentDescriptor&);
-	int set_segment_descriptor (SegmentDescriptor const &);
+	int set_segment_descriptor (SegmentDescriptor const &, bool replace = false);
+
+	void copy_segment_descriptors (Source const & other);
 
   protected:
 	DataType            _type;
@@ -162,7 +166,7 @@ public:
 	timepos_t           _natural_position;
 	bool                _have_natural_position;
 	bool                _analysed;
-	std::atomic<int> _use_count; /* atomic */
+	std::atomic<int>    _use_count;
 	uint32_t            _level; /* how deeply nested is this source w.r.t a disk file */
 	std::string         _ancestor_name;
 	std::string        _captured_for;
@@ -185,4 +189,3 @@ public:
 
 }
 
-#endif /* __ardour_source_h__ */

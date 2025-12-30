@@ -79,7 +79,7 @@ using ARDOUR::Profile;
 using ARDOUR::AutomationControl;
 using ARDOUR::ChanCount;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 #define ui_context() MackieControlProtocol::instance() /* a UICallback-derived object that specifies the event loop for signal handling */
 
@@ -118,6 +118,9 @@ Surface::Surface (MackieControlProtocol& mcp, const std::string& device_name, ui
 	, _has_master_meter (false)
 	, connection_state (0)
 	, is_qcon (false)
+	, is_v1m (false)
+	, is_p1m (false)
+	, is_p1nano (false)
 	, input_source (0)
 {
 	DEBUG_TRACE (DEBUG::MackieControl, "Surface::Surface init\n");
@@ -131,6 +134,22 @@ Surface::Surface (MackieControlProtocol& mcp, const std::string& device_name, ui
 	//Store Qcon flag
 	is_qcon = mcp.device_info().is_qcon();
 
+	//Store iCON P1-M and V1-M flag
+	is_v1m = _mcp.device_info().is_v1m(); // || device_name.find("V1-M") != std::string::npos;
+	is_p1m = _mcp.device_info().is_p1m(); // || device_name.find("P1-M") != std::string::npos;
+	is_p1nano = _mcp.device_info().is_p1nano();
+
+	/* extenders are not flagged by device_info() — detect by port name */
+	is_v1m |= (device_name.find("V1-M") != std::string::npos);
+	is_p1m |= device_name.find("P1-M") != std::string::npos;
+	is_p1nano |= device_name.find("P1-NANO") != std::string::npos;
+
+	_solid_icon_rgb.fill(0);
+	_current_icon_rgb.fill(0);
+	_pending_icon_rgb.fill(0);
+	_blink_state = false;
+	_last_blink_toggle = 0;
+
 	/* only the first Surface object has global controls */
 	/* lets use master_position instead */
 	uint32_t mp = _mcp.device_info().master_position();
@@ -139,8 +158,13 @@ Surface::Surface (MackieControlProtocol& mcp, const std::string& device_name, ui
 
 		if ( is_qcon ) {
 			_has_master_display = (mcp.device_info().has_master_fader() && mcp.device_info().has_qcon_second_lcd());
-			_has_master_meter = mcp.device_info().has_qcon_master_meters();
 		}
+
+		if ( is_v1m ) {
+			_has_master_display = (mcp.device_info().has_master_fader() && mcp.device_info().has_qcon_second_lcd());
+		}
+
+		_has_master_meter = mcp.device_info().has_qcon_master_meters();
 
 		if (_mcp.device_info().has_global_controls()) {
 			init_controls ();
@@ -366,7 +390,7 @@ Surface::init_controls()
 
 	DEBUG_TRACE (DEBUG::MackieControl, "Surface::init_controls: creating jog wheel\n");
 	if (_mcp.device_info().has_jog_wheel()) {
-		_jog_wheel = new Mackie::JogWheel (_mcp);
+		_jog_wheel = new MACKIE_NAMESPACE::JogWheel (_mcp);
 	}
 
 	DEBUG_TRACE (DEBUG::MackieControl, "Surface::init_controls: creating global controls\n");
@@ -434,7 +458,7 @@ Surface::toggle_master_monitor ()
 	} else { return; }
 
 	_master_fader->set_control (_master_stripable->gain_control());
-	_master_stripable->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, boost::bind (&Surface::master_gain_changed, this), ui_context());
+	_master_stripable->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, std::bind (&Surface::master_gain_changed, this), ui_context());
 	_last_master_gain_written = FLT_MAX;
 	master_gain_changed ();
 }
@@ -483,12 +507,12 @@ Surface::setup_master ()
 	}
 
 	_master_fader->set_control (_master_stripable->gain_control());
-	_master_stripable->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, boost::bind (&Surface::master_gain_changed, this), ui_context());
+	_master_stripable->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, std::bind (&Surface::master_gain_changed, this), ui_context());
 	_last_master_gain_written = FLT_MAX; /* some essentially impossible value */
 	master_gain_changed ();
 
 	if (_has_master_display) {
-		_master_stripable->PropertyChanged.connect (master_connection, MISSING_INVALIDATOR, boost::bind (&Surface::master_property_changed, this, _1), ui_context());
+		_master_stripable->PropertyChanged.connect (master_connection, MISSING_INVALIDATOR, std::bind (&Surface::master_property_changed, this, _1), ui_context());
 		show_master_name();
 	}
 }
@@ -695,20 +719,20 @@ Surface::connect_to_signals ()
 		MIDI::Parser* p = _port->input_port().parser();
 
 		/* Incoming sysex */
-		p->sysex.connect_same_thread (*this, boost::bind (&Surface::handle_midi_sysex, this, _1, _2, _3));
+		p->sysex.connect_same_thread (*this, std::bind (&Surface::handle_midi_sysex, this, _1, _2, _3));
 		/* V-Pot messages are Controller */
-		p->controller.connect_same_thread (*this, boost::bind (&Surface::handle_midi_controller_message, this, _1, _2));
+		p->controller.connect_same_thread (*this, std::bind (&Surface::handle_midi_controller_message, this, _1, _2));
 		/* Button messages are NoteOn */
-		p->note_on.connect_same_thread (*this, boost::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
+		p->note_on.connect_same_thread (*this, std::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
 		/* Button messages are NoteOn but libmidi++ sends note-on w/velocity = 0 as note-off so catch them too */
-		p->note_off.connect_same_thread (*this, boost::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
+		p->note_off.connect_same_thread (*this, std::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
 		/* Fader messages are Pitchbend */
 		uint32_t i;
 		for (i = 0; i < _mcp.device_info().strip_cnt(); i++) {
-			p->channel_pitchbend[i].connect_same_thread (*this, boost::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, i));
+			p->channel_pitchbend[i].connect_same_thread (*this, std::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, i));
 		}
 		// Master fader
-		p->channel_pitchbend[_mcp.device_info().strip_cnt()].connect_same_thread (*this, boost::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, _mcp.device_info().strip_cnt()));
+		p->channel_pitchbend[_mcp.device_info().strip_cnt()].connect_same_thread (*this, std::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, _mcp.device_info().strip_cnt()));
 
 		_connected = true;
 	}
@@ -1155,6 +1179,68 @@ Surface::redisplay (PBD::microseconds_t now, bool force)
 			DEBUG_TRACE (DEBUG::MackieControl, "Surface::redisplay: Updating master display line 1\n");
 			write (master_display (1, pending_display[1]));
 			current_display[1] = pending_display[1];
+		}
+	}
+
+	/* iCON P1-M/P1-NANO/V1-M color update: full RGB SysEx for all 8 strips */
+	if (is_v1m || is_p1m || is_p1nano) {
+		std::array<uint8_t, 24> pending_rgb{};
+
+		// 1-second blink cycle (500 ms on / 500 ms off)
+		uint64_t now = g_get_monotonic_time();
+		if (now - _last_blink_toggle >= 500000) {           // 500000 µs = 500 ms
+			_blink_state = !_blink_state;
+			_last_blink_toggle = now;
+		}
+
+		for (size_t i = 0; i < 8 && i < strips.size(); ++i) {
+			if (auto sp = strips[i]->stripable()) {
+				uint32_t c = sp->presentation_info().color();
+				uint8_t r = ((c >> 24) & 0xFF) >> 1;
+				uint8_t g = ((c >> 16) & 0xFF) >> 1;
+				uint8_t b = ((c >>  8) & 0xFF) >> 1;
+
+				r = (r < 20) ? 0 : std::min(127, r + 20);
+				g = (g < 20) ? 0 : std::min(127, g + 20);
+				b = (b < 20) ? 0 : std::min(127, b + 20);
+
+				const size_t o = i * 3;
+				pending_rgb[o+0] = r;
+				pending_rgb[o+1] = g;
+				pending_rgb[o+2] = b;
+
+				// Save solid color for blinking reference
+				_solid_icon_rgb[o+0] = r;
+				_solid_icon_rgb[o+1] = g;
+				_solid_icon_rgb[o+2] = b;
+
+				// If this strip is selected → apply blink
+				if (sp->is_selected()) {
+					if (!_blink_state) {
+						// Blink OFF phase: dim to ~20% or full black (choose one)
+						pending_rgb[o+0] = r * 0.2f;
+						pending_rgb[o+1] = g * 0.2f;
+						pending_rgb[o+2] = b * 0.2f;
+						// For full black instead, use:
+						// pending_rgb[o+0] = pending_rgb[o+1] = pending_rgb[o+2] = 0;
+					} else {
+						// Blink ON phase: full solid color
+						pending_rgb[o+0] = r;
+						pending_rgb[o+1] = g;
+						pending_rgb[o+2] = b;
+					}
+				} else {
+					// Not selected → always solid
+					pending_rgb[o+0] = r;
+					pending_rgb[o+1] = g;
+					pending_rgb[o+2] = b;
+				}
+			}
+		}
+
+		if (force || pending_rgb != _current_icon_rgb) {
+			_current_icon_rgb = pending_rgb;
+			write(display_colors_on_p1m_v1m(pending_rgb));
 		}
 	}
 
@@ -1639,6 +1725,26 @@ Surface::display_message_for (string const& msg, uint64_t msecs)
 		(*s)->block_screen_display_for (msecs);
 	}
 }
+
+/** display color_values on the 8 scribble strips of the iCON P1-M, P1-NANO and V1-M **/
+MidiByteArray
+Surface::display_colors_on_p1m_v1m (const std::array<uint8_t, 24>& rgb_values) const
+{
+	/* Icon P1-M, P1-NANO and V1-M color SysEx: F0 00 02 4E 16 14 [8×(R G B)] F7
+	 * rgb_values: 24 bytes (8 strips × 3 RGB, each 0-127 / 0x00-0x7F)
+	*/
+	MidiByteArray midi_msg;
+	midi_msg << MIDI::sysex
+		<< 0x00 << 0x02 << 0x4E    // iCON manufacturer
+		<< 0x16 << 0x14;           // color command
+
+	for (uint8_t b : rgb_values) {
+		midi_msg << b;
+ 	}
+
+	midi_msg << MIDI::eox;
+	return midi_msg;
+}
  
 /** display @p color_values on the 8 scribble strips of the X-Touch
  *
@@ -1656,7 +1762,7 @@ Surface::display_colors_on_xtouch (const XTouchColors color_values[]) const
 	for (uint8_t i = 0; i < displaycount; ++i) {
 		midi_msg << color_values[i];
 	}
-	
+
 	midi_msg << MIDI::eox;
 	
 	return midi_msg;

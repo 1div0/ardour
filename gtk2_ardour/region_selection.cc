@@ -39,7 +39,6 @@ using namespace PBD;
  */
 RegionSelection::RegionSelection ()
 {
-	RegionView::RegionViewGoingAway.connect (death_connection, MISSING_INVALIDATOR, boost::bind (&RegionSelection::remove_it, this, _1), gui_context());
 }
 
 /** Copy constructor.
@@ -48,8 +47,6 @@ RegionSelection::RegionSelection ()
 RegionSelection::RegionSelection (const RegionSelection& other)
 	: std::list<RegionView*>()
 {
-	RegionView::RegionViewGoingAway.connect (death_connection, MISSING_INVALIDATOR, boost::bind (&RegionSelection::remove_it, this, _1), gui_context());
-
 	for (RegionSelection::const_iterator i = other.begin(); i != other.end(); ++i) {
 		add (*i);
 	}
@@ -130,15 +127,6 @@ RegionSelection::add (RegionView* rv)
 	add_to_layer (rv);
 
 	return true;
-}
-
-/** Remove a region from the selection.
- *  @param rv Region to remove.
- */
-void
-RegionSelection::remove_it (RegionView *rv)
-{
-	remove (rv);
 }
 
 /** Remove a region from the selection.
@@ -323,10 +311,10 @@ RegionSelection::end_time () const
 }
 
 /** @return the playlists that the regions in the selection are on */
-set<std::shared_ptr<Playlist> >
+PlaylistSet
 RegionSelection::playlists () const
 {
-	set<std::shared_ptr<Playlist> > pl;
+	PlaylistSet pl;
 	for (RegionSelection::const_iterator i = begin(); i != end(); ++i) {
 		pl.insert ((*i)->region()->playlist ());
 	}

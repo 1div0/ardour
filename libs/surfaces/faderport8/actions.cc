@@ -41,20 +41,20 @@ using namespace ArdourSurface::FP_NAMESPACE;
 using namespace ArdourSurface::FP_NAMESPACE::FP8Types;
 
 #define BindMethod(ID, CB) \
-	_ctrls.button (FP8Controls::ID).released.connect_same_thread (button_connections, boost::bind (&FaderPort8:: CB, this));
+	_ctrls.button (FP8Controls::ID).released.connect_same_thread (button_connections, std::bind (&FaderPort8:: CB, this));
 
 #define BindMethod2(ID, ACT, CB) \
-	_ctrls.button (FP8Controls::ID). ACT .connect_same_thread (button_connections, boost::bind (&FaderPort8:: CB, this));
+	_ctrls.button (FP8Controls::ID). ACT .connect_same_thread (button_connections, std::bind (&FaderPort8:: CB, this));
 
 #define BindFunction(ID, ACT, CB, ...) \
-	_ctrls.button (FP8Controls::ID). ACT .connect_same_thread (button_connections, boost::bind (&FaderPort8:: CB, this, __VA_ARGS__));
+	_ctrls.button (FP8Controls::ID). ACT .connect_same_thread (button_connections, std::bind (&FaderPort8:: CB, this, __VA_ARGS__));
 
 #define BindAction(ID, GRP, ITEM) \
-	_ctrls.button (FP8Controls::ID).released.connect_same_thread (button_connections, boost::bind (&FaderPort8::button_action, this, GRP, ITEM));
+	_ctrls.button (FP8Controls::ID).released.connect_same_thread (button_connections, std::bind (&FaderPort8::button_action, this, GRP, ITEM));
 
 #define BindUserAction(ID) \
-	_ctrls.button (ID).pressed.connect_same_thread (button_connections, boost::bind (&FaderPort8::button_user, this, true, ID)); \
-_ctrls.button (ID).released.connect_same_thread (button_connections, boost::bind (&FaderPort8::button_user, this, false, ID));
+	_ctrls.button (ID).pressed.connect_same_thread (button_connections, std::bind (&FaderPort8::button_user, this, true, ID)); \
+_ctrls.button (ID).released.connect_same_thread (button_connections, std::bind (&FaderPort8::button_user, this, false, ID));
 
 
 /* Bind button signals (press, release) to callback methods
@@ -99,11 +99,11 @@ FaderPort8::setup_actions ()
 	BindFunction (BtnAWrite, released, button_automation, ARDOUR::Write);
 	BindFunction (BtnALatch, released, button_automation, ARDOUR::Latch);
 
-	_ctrls.button (FP8Controls::BtnEncoder).pressed.connect_same_thread (button_connections, boost::bind (&FaderPort8::button_encoder, this));
+	_ctrls.button (FP8Controls::BtnEncoder).pressed.connect_same_thread (button_connections, std::bind (&FaderPort8::button_encoder, this));
 #ifdef FADERPORT2
-	_ctrls.button (FP8Controls::BtnParam).pressed.connect_same_thread (button_connections, boost::bind (&FaderPort8::button_encoder, this));
+	_ctrls.button (FP8Controls::BtnParam).pressed.connect_same_thread (button_connections, std::bind (&FaderPort8::button_encoder, this));
 #else
-	_ctrls.button (FP8Controls::BtnParam).pressed.connect_same_thread (button_connections, boost::bind (&FaderPort8::button_parameter, this));
+	_ctrls.button (FP8Controls::BtnParam).pressed.connect_same_thread (button_connections, std::bind (&FaderPort8::button_parameter, this));
 #endif
 
 
@@ -276,7 +276,7 @@ FaderPort8::button_automation (ARDOUR::AutoState as)
 	StripableList all;
 	session->get_stripables (all);
 	for (StripableList::const_iterator i = all.begin(); i != all.end(); ++i) {
-		if ((*i)->is_master() || (*i)->is_monitor()) {
+		if ((*i)->is_singleton ()) {
 			continue;
 		}
 		if (!(*i)->is_selected()) {
@@ -328,7 +328,7 @@ FaderPort8::button_solo_clear ()
 		StripableList all;
 		session->get_stripables (all);
 		for (StripableList::const_iterator i = all.begin(); i != all.end(); ++i) {
-			if ((*i)->is_master() || (*i)->is_auditioner() || (*i)->is_monitor()) {
+			if ((*i)->is_singleton () || (*i)->is_auditioner()) {
 				continue;
 			}
 			std::shared_ptr<SoloControl> sc = (*i)->solo_control();
@@ -339,7 +339,7 @@ FaderPort8::button_solo_clear ()
 		cancel_all_solo (); // AccessAction ("Main", "cancel-solo");
 	} else {
 		/* restore solo */
-		std::shared_ptr<ControlList> cl (new ControlList);
+		std::shared_ptr<AutomationControlList> cl (new AutomationControlList);
 		for (std::vector <std::weak_ptr<AutomationControl> >::const_iterator i = _solo_state.begin(); i != _solo_state.end(); ++i) {
 			std::shared_ptr<AutomationControl> ac = (*i).lock();
 			if (!ac) {
@@ -363,7 +363,7 @@ FaderPort8::button_mute_clear ()
 		_mute_state = session->cancel_all_mute ();
 	} else {
 		/* restore mute */
-		std::shared_ptr<ControlList> cl (new ControlList);
+		std::shared_ptr<AutomationControlList> cl (new AutomationControlList);
 		for (std::vector <std::weak_ptr<AutomationControl> >::const_iterator i = _mute_state.begin(); i != _mute_state.end(); ++i) {
 			std::shared_ptr<AutomationControl> ac = (*i).lock();
 			if (!ac) {

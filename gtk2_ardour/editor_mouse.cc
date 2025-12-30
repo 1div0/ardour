@@ -65,6 +65,7 @@
 #include "audio_time_axis.h"
 #include "audio_region_view.h"
 #include "midi_region_view.h"
+#include "midi_view.h"
 #include "marker.h"
 #include "streamview.h"
 #include "region_gain_line.h"
@@ -82,6 +83,7 @@
 #include "mouse_cursors.h"
 #include "editor_cursors.h"
 #include "region_peak_cursor.h"
+#include "velocity_ghost_region.h"
 #include "verbose_cursor.h"
 #include "note.h"
 
@@ -95,120 +97,6 @@ using namespace Editing;
 using namespace Temporal;
 
 using Gtkmm2ext::Keyboard;
-
-bool
-Editor::mouse_sample (samplepos_t& where, bool& in_track_canvas) const
-{
-	/* gdk_window_get_pointer() has X11's XQueryPointer semantics in that it only
-	 * pays attentions to subwindows. this means that menu windows are ignored, and
-	 * if the pointer is in a menu, the return window from the call will be the
-	 * the regular subwindow *under* the menu.
-	 *
-	 * this matters quite a lot if the pointer is moving around in a menu that overlaps
-	 * the track canvas because we will believe that we are within the track canvas
-	 * when we are not. therefore, we track enter/leave events for the track canvas
-	 * and allow that to override the result of gdk_window_get_pointer().
-	 */
-
-	if (!within_track_canvas) {
-		return false;
-	}
-
-	int x, y;
-	Glib::RefPtr<Gdk::Window> canvas_window = const_cast<Editor*>(this)->_track_canvas->get_window();
-
-	if (!canvas_window) {
-		return false;
-	}
-
-	Glib::RefPtr<const Gdk::Window> pointer_window = Gdk::Display::get_default()->get_window_at_pointer (x, y);
-
-	if (!pointer_window) {
-		return false;
-	}
-
-	if (pointer_window != canvas_window) {
-		in_track_canvas = false;
-		return false;
-	}
-
-	in_track_canvas = true;
-
-	GdkEvent event;
-	event.type = GDK_BUTTON_RELEASE;
-	event.button.x = x;
-	event.button.y = y;
-
-	where = window_event_sample (&event, 0, 0);
-
-	return true;
-}
-
-samplepos_t
-Editor::window_event_sample (GdkEvent const * event, double* pcx, double* pcy) const
-{
-	ArdourCanvas::Duple d;
-
-	if (!gdk_event_get_coords (event, &d.x, &d.y)) {
-		return 0;
-	}
-
-	/* event coordinates are in window units, so convert to canvas
-	 */
-
-	d = _track_canvas->window_to_canvas (d);
-
-	if (pcx) {
-		*pcx = d.x;
-	}
-
-	if (pcy) {
-		*pcy = d.y;
-	}
-
-	return pixel_to_sample (d.x);
-}
-
-timepos_t
-Editor::canvas_event_time (GdkEvent const * event, double* pcx, double* pcy) const
-{
-	timepos_t pos (canvas_event_sample (event, pcx, pcy));
-
-	if (default_time_domain() == Temporal::AudioTime) {
-		return pos;
-	}
-
-	return timepos_t (pos.beats());
-}
-
-samplepos_t
-Editor::canvas_event_sample (GdkEvent const * event, double* pcx, double* pcy) const
-{
-	double x;
-	double y;
-
-	/* event coordinates are already in canvas units */
-
-	if (!gdk_event_get_coords (event, &x, &y)) {
-		cerr << "!NO c COORDS for event type " << event->type << endl;
-		return 0;
-	}
-
-	if (pcx) {
-		*pcx = x;
-	}
-
-	if (pcy) {
-		*pcy = y;
-	}
-
-	/* note that pixel_to_sample_from_event() never returns less than zero, so even if the pixel
-	   position is negative (as can be the case with motion events in particular),
-	   the sample location is always positive.
-	*/
-
-	return pixel_to_sample_from_event (x);
-}
 
 void
 Editor::set_current_trimmable (std::shared_ptr<Trimmable> t)
@@ -233,107 +121,22 @@ Editor::set_current_movable (std::shared_ptr<Movable> m)
 void
 Editor::mouse_mode_object_range_toggled()
 {
-	set_mouse_mode (mouse_mode, true); /* updates set-mouse-mode-range */
-}
-
-bool
-Editor::snap_mode_button_clicked (GdkEventButton* ev)
-{
-	if (ev->button != 3) {
-		cycle_snap_mode();
-		return true;
-	}
-
-	RCOptionEditor* rc_option_editor = ARDOUR_UI::instance()->get_rc_option_editor();
-	if (rc_option_editor) {
-		ARDOUR_UI::instance()->show_tabbable (rc_option_editor);
-		rc_option_editor->set_current_page (_("Editor/Snap"));
-	}
-
-	return true;
-}
-
-
-
-Glib::RefPtr<Action>
-Editor::get_mouse_mode_action(MouseMode m) const
-{
-	switch (m) {
-	case MouseRange:
-		return ActionManager::get_action (X_("MouseMode"), X_("set-mouse-mode-range"));
-	case MouseObject:
-		return ActionManager::get_action (X_("MouseMode"), X_("set-mouse-mode-object"));
-	case MouseCut:
-		return ActionManager::get_action (X_("MouseMode"), X_("set-mouse-mode-cut"));
-	case MouseDraw:
-		return ActionManager::get_action (X_("MouseMode"), X_("set-mouse-mode-draw"));
-	case MouseTimeFX:
-		return ActionManager::get_action (X_("MouseMode"), X_("set-mouse-mode-timefx"));
-	case MouseContent:
-		return ActionManager::get_action (X_("MouseMode"), X_("set-mouse-mode-content"));
-	case MouseAudition:
-		return ActionManager::get_action (X_("MouseMode"), X_("set-mouse-mode-audition"));
-	}
-	return Glib::RefPtr<Action>();
+	set_mouse_mode (current_mouse_mode(), true); /* updates set-mouse-mode-range */
 }
 
 void
-Editor::set_mouse_mode (MouseMode m, bool force)
+Editor::mouse_mode_chosen (MouseMode m)
 {
-	if (_drags->active ()) {
-		return;
-	}
-
-	if (!force && m == mouse_mode) {
-		return;
-	}
-
-	if (ARDOUR::Profile->get_mixbus()) {
-		if (m == MouseAudition) {
-			m = MouseRange;
-		}
-	}
-
-	Glib::RefPtr<Action>       act  = get_mouse_mode_action(m);
-	Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic(act);
-
-	/* go there and back to ensure that the toggled handler is called to set up mouse_mode */
-	tact->set_active (false);
-	tact->set_active (true);
-
-	/* NOTE: this will result in a call to mouse_mode_toggled which does the heavy lifting */
-}
-
-void
-Editor::mouse_mode_toggled (MouseMode m)
-{
-	if (ARDOUR::Profile->get_mixbus()) {
-		if (m == MouseAudition)  {
-			m = MouseRange;
-		}
-	}
-
-	Glib::RefPtr<Action>       act  = get_mouse_mode_action(m);
-	Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic(act);
-
-	if (!tact->get_active()) {
+	if (!mouse_mode_actions[m]->get_active()) {
 		/* this was just the notification that the old mode has been
 		 * left. we'll get called again with the new mode active in a
 		 * jiffy.
 		 */
+		old_mouse_mode = m;
 		return;
 	}
 
-	if (_session && mouse_mode == MouseAudition) {
-		/* stop transport and reset default speed to avoid oddness with
-		   auditioning */
-		_session->request_stop ();
-		_session->reset_transport_speed ();
-	}
-
-	const bool was_internal = internal_editing();
-
-	mouse_mode = m;
+	const bool was_internal = (old_mouse_mode == Editing::MouseDraw || old_mouse_mode == Editing::MouseContent);
 
 	/* Ben ToDo:  once we have a dedicated 'region edit panel', we can store
 	 * one snap mode in the editor canvas and another one in the editor,
@@ -343,14 +146,14 @@ Editor::mouse_mode_toggled (MouseMode m)
 	   this must toggle the actions and not call set_snap_*() directly,
 	   otherwise things get out of sync and the combo box stops working. */
 	if (!UIConfiguration::instance().get_grid_follows_internal()) {
-		grid_type_action(pre_internal_grid_type)->set_active(true);
-		snap_mode_action(pre_internal_snap_mode)->set_active(true);
+		grid_actions[pre_internal_grid_type]->set_active(true);
+		snap_mode_actions[pre_internal_snap_mode]->set_active(true);
 	} else if (!was_internal && internal_editing()) {
-		grid_type_action(internal_grid_type)->set_active(true);
-		snap_mode_action(internal_snap_mode)->set_active(true);
+		grid_actions[internal_grid_type]->set_active(true);
+		snap_mode_actions[internal_snap_mode]->set_active(true);
 	} else if (was_internal && !internal_editing()) {
-		grid_type_action(pre_internal_grid_type)->set_active(true);
-		snap_mode_action(pre_internal_snap_mode)->set_active(true);
+		grid_actions[pre_internal_grid_type]->set_active(true);
+		snap_mode_actions[pre_internal_snap_mode]->set_active(true);
 	}
 
 	instant_save ();
@@ -367,6 +170,8 @@ Editor::mouse_mode_toggled (MouseMode m)
 
 	update_time_selection_display ();
 
+	auto mouse_mode = current_mouse_mode ();
+
 	if (mouse_mode == MouseDraw) {
 		draw_box.show();
 		_draw_box_spacer.show();
@@ -375,6 +180,15 @@ Editor::mouse_mode_toggled (MouseMode m)
 		_draw_box_spacer.hide();
 	}
 
+	if (mouse_mode == MouseGrid) {
+		grid_box.show();
+		_grid_box_spacer.show ();
+		_canvas_grid_zone->set_ignore_events (false);
+	} else {
+		grid_box.hide ();
+		_grid_box_spacer.hide ();
+		_canvas_grid_zone->set_ignore_events (true);
+	}
 
 	if (internal_editing()) {
 
@@ -396,16 +210,11 @@ Editor::mouse_mode_toggled (MouseMode m)
 		*/
 		ActionManager::set_sensitive (_midi_actions, true);
 
-		/* mark "magic widget focus" so that we handle key events
-		 * correctly
-		 */
-		Keyboard::magic_widget_grab_focus ();
 	} else {
 		/* undo some of the above actions, since we're not in internal
 		   edit mode.
 		*/
 		ActionManager::set_sensitive (_midi_actions, false);
-		Keyboard::magic_widget_drop_focus ();
 	}
 
 	if (was_internal && !internal_editing()) {
@@ -417,20 +226,29 @@ Editor::mouse_mode_toggled (MouseMode m)
 		get_selection().clear_regions ();
 	}
 
-	update_all_enter_cursors ();
-
 	MouseModeChanged (); /* EMIT SIGNAL */
+
+	if ((was_internal && !internal_editing()) ||
+	    (!was_internal && internal_editing())) {
+		queue_redisplay_track_views ();
+	}
 }
 
 bool
 Editor::internal_editing() const
 {
+	auto mouse_mode = current_mouse_mode ();
 	return mouse_mode == Editing::MouseContent || mouse_mode == Editing::MouseDraw;
 }
 
 void
 Editor::update_time_selection_display ()
 {
+	if (ARDOUR_UI::instance()->loading_session ()) {
+		/* leave selection alone */
+		return;
+	}
+	auto mouse_mode = current_mouse_mode ();
 	switch (mouse_mode) {
 	case MouseRange:
 		selection->clear_objects ();
@@ -442,10 +260,16 @@ Editor::update_time_selection_display ()
 		break;
 	case MouseDraw:
 		/* Clear regions, but not time or tracks, since that
-		 would destroy the range selection rectangle, which we need to stick
-		 around for AutomationRangeDrag. */
+		 * would destroy the range selection rectangle, which we need to stick
+		 * around for AutomationRangeDrag. */
 		selection->clear_regions ();
 		selection->clear_playlists ();
+		/* .. unless there is no track selection (i.e. arrangement section
+		 * selection). In which case time is cleared too.
+		 */
+		if (selection->tracks.empty ()) {
+			selection->clear_time ();
+		}
 		break;
 	case MouseContent:
 		/* This handles internal edit.
@@ -469,14 +293,7 @@ Editor::update_time_selection_display ()
 		selection->clear_tracks ();
 		break;
 
-	case MouseAudition:
-		/*Don't lose lines or points if no action in this mode */
-		selection->clear_regions ();
-		selection->clear_playlists ();
-		selection->clear_time ();
-		selection->clear_tracks ();
-		break;
-
+	case MouseGrid:
 	default:
 		/*Clear everything */
 		selection->clear_objects();
@@ -515,6 +332,7 @@ Editor::button_selection (ArdourCanvas::Item* item, GdkEvent* event, ItemType it
 	 */
 
 	MouseMode eff_mouse_mode = effective_mouse_mode ();
+	auto mouse_mode = current_mouse_mode ();
 
 	if (eff_mouse_mode == MouseCut) {
 		/* never change selection in cut mode */
@@ -543,7 +361,6 @@ Editor::button_selection (ArdourCanvas::Item* item, GdkEvent* event, ItemType it
 	}
 
 	if (((mouse_mode != MouseObject) &&
-	     (mouse_mode != MouseAudition || item_type != RegionItem) &&
 	     (mouse_mode != MouseTimeFX || item_type != RegionItem) &&
 	     (mouse_mode != MouseDraw) &&
 	     (mouse_mode != MouseContent || item_type == RegionItem)) ||
@@ -565,7 +382,7 @@ Editor::button_selection (ArdourCanvas::Item* item, GdkEvent* event, ItemType it
 		}
 	}
 
-	Selection::Operation op = ArdourKeyboard::selection_type (event->button.state);
+	SelectionOperation op = ArdourKeyboard::selection_type (event->button.state);
 	bool press = (event->type == GDK_BUTTON_PRESS);
 
 	if (press) {
@@ -586,7 +403,7 @@ Editor::button_selection (ArdourCanvas::Item* item, GdkEvent* event, ItemType it
 					 * so, "collapse" the selection to just this track
 					 */
 					if (!selection->selected (clicked_axisview)) {
-						set_selected_track_as_side_effect (Selection::Set);
+						set_selected_track_as_side_effect (SelectionSet);
 					}
 				}
 			} else {
@@ -622,14 +439,14 @@ Editor::button_selection (ArdourCanvas::Item* item, GdkEvent* event, ItemType it
 				if (event->button.button != 3) {
 					_mouse_changed_selection |= set_selected_control_point_from_click (press, op);
 				} else {
-					_mouse_changed_selection |= set_selected_control_point_from_click (press, Selection::Set);
+					_mouse_changed_selection |= set_selected_control_point_from_click (press, SelectionSet);
 				}
 			}
 			break;
 
 		case GainLineItem:
 			if (eff_mouse_mode != MouseRange) {
-				AutomationLine* argl = reinterpret_cast<AutomationLine*> (item->get_data ("line"));
+				EditorAutomationLine* argl = reinterpret_cast<EditorAutomationLine*> (item->get_data ("line"));
 
 				std::list<Selectable*> selectables;
 				uint32_t before, after;
@@ -643,75 +460,38 @@ Editor::button_selection (ArdourCanvas::Item* item, GdkEvent* event, ItemType it
 				selectables.push_back (argl->nth (after));
 
 				switch (op) {
-					case Selection::Set:
-						if (press) {
-							selection->set (selectables);
-							_mouse_changed_selection = true;
-						}
-						break;
-					case Selection::Add:
-						if (press) {
-							selection->add (selectables);
-							_mouse_changed_selection = true;
-						}
-						break;
-					case Selection::Toggle:
-						if (press) {
-							selection->toggle (selectables);
-							_mouse_changed_selection = true;
-						}
-						break;
+				case SelectionSet:
+					if (press) {
+						selection->set (selectables);
+						_mouse_changed_selection = true;
+					}
+					break;
+				case SelectionAdd:
+					if (press) {
+						selection->add (selectables);
+						_mouse_changed_selection = true;
+					}
+					break;
+				case SelectionToggle:
+					if (press) {
+						selection->toggle (selectables);
+						_mouse_changed_selection = true;
+					}
+					break;
 
-					case Selection::Extend:
-						/* XXX */
-						break;
+				case SelectionExtend:
+					/* XXX */
+					break;
+				case SelectionRemove:
+					/* XXX */
+					break;
 				}
 			}
 			break;
 
-		case AutomationLineItem:
-			if (eff_mouse_mode != MouseRange) {
-				AutomationLine* al = reinterpret_cast<AutomationLine*> (item->get_data ("line"));
-				std::list<Selectable*> selectables;
-				double mx = event->button.x;
-				double my = event->button.y;
-
-				al->grab_item().canvas_to_item (mx, my);
-
-				uint32_t before, after;
-				samplecnt_t const  where = (samplecnt_t) floor (mx * samples_per_pixel);
-
-				if (!al || !al->control_points_adjacent (where, before, after)) {
-					break;
-				}
-
-				selectables.push_back (al->nth (before));
-				selectables.push_back (al->nth (after));
-
-				switch (op) {
-					case Selection::Set:
-						if (press) {
-							selection->set (selectables);
-							_mouse_changed_selection = true;
-						}
-						break;
-					case Selection::Add:
-						if (press) {
-							selection->add (selectables);
-							_mouse_changed_selection = true;
-						}
-						break;
-					case Selection::Toggle:
-						if (press) {
-							selection->toggle (selectables);
-							_mouse_changed_selection = true;
-						}
-						break;
-
-					case Selection::Extend:
-						/* XXX */
-						break;
-				}
+		case EditorAutomationLineItem:
+			if (eff_mouse_mode != MouseRange && eff_mouse_mode != MouseDraw) {
+				select_automation_line (&event->button, item, op);
 			}
 			break;
 
@@ -728,7 +508,7 @@ Editor::button_selection (ArdourCanvas::Item* item, GdkEvent* event, ItemType it
 			break;
 
 		case AutomationTrackItem:
-			if (eff_mouse_mode != MouseDraw && op == Selection::Set) {
+			if (eff_mouse_mode != MouseDraw && op == SelectionSet) {
 				set_selected_track_as_side_effect (op);
 			}
 			break;
@@ -737,9 +517,9 @@ Editor::button_selection (ArdourCanvas::Item* item, GdkEvent* event, ItemType it
 			if (press && event->button.button == 3) {
 				NoteBase* cnote = reinterpret_cast<NoteBase*> (item->get_data ("notebase"));
 				assert (cnote);
-				if (cnote->region_view().selection_size() == 0 || !cnote->selected()) {
+				if (cnote->midi_view().selection_size() == 0 || !cnote->selected()) {
 					selection->clear_points();
-					cnote->region_view().unique_select (cnote);
+					cnote->midi_view().unique_select (cnote);
 					/* we won't get the release, so store the selection change now */
 					begin_reversible_selection_op (X_("Button 3 Note Selection"));
 					commit_reversible_selection_op ();
@@ -771,7 +551,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 
 	switch (item_type) {
 	case PlayheadCursorItem:
-		_drags->set (new CursorDrag (this, *_playhead_cursor, true), event);
+		_drags->set (new CursorDrag (*this, *_playhead_cursor, true), event);
 		return true;
 
 	case MarkerItem:
@@ -780,54 +560,50 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 		} else {
 			ArdourMarker* marker = static_cast<ArdourMarker*> (item->get_data ("marker"));
 			if (marker->type() == ArdourMarker::RegionCue) {
-				_drags->set (new RegionMarkerDrag (this, marker->region_view(), item), event);
+				_drags->set (new RegionMarkerDrag (*this, marker->region_view(), item), event);
 			} else {
-				_drags->set (new MarkerDrag (this, item), event);
+				_drags->set (new MarkerDrag (*this, item), event);
 			}
 		}
+		return true;
+	case SceneMarkerItem:
+		_drags->set (new MarkerDrag (*this, item), event);
 		return true;
 
 	case TempoMarkerItem:
 		if (ArdourKeyboard::indicates_constraint (event->button.state)) {
-			_drags->set (new TempoEndDrag (this, item), event);
+			_drags->set (new TempoEndDrag (*this, item), event);
 		} else {
-			_drags->set (new TempoMarkerDrag (this, item), event);
+			_drags->set (new TempoMarkerDrag (*this, item), event);
 		}
 
 		return true;
 
 	case BBTMarkerItem:
-		_drags->set (new BBTMarkerDrag (this, item), event);
+		_drags->set (new BBTMarkerDrag (*this, item), event);
+		return true;
+
+	case SelectionMarkerItem:
+		_drags->set (new SelectionMarkerDrag (*this, item), event);
 		return true;
 
 	case MeterMarkerItem:
 		_drags->set (
-			new MeterMarkerDrag (
-				this,
-				item,
-				ArdourKeyboard::indicates_copy (event->button.state)
-				),
-			event
-			);
+			new MeterMarkerDrag (*this, item, ArdourKeyboard::indicates_copy (event->button.state)), event);
 		return true;
 
 	case VideoBarItem:
-		_drags->set (new VideoTimeLineDrag (this, item), event);
+		_drags->set (new VideoTimeLineDrag (*this, item), event);
 		return true;
 		break;
-
-	case MappingBarItem:
-	case MappingCursorItem:
-		choose_mapping_drag (item, event);
-		return true;
 
 	case TempoBarItem:
 	case TempoCurveItem:
 		if (!Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)
 		    && !ArdourKeyboard::indicates_constraint (event->button.state)) {
-			_drags->set (new CursorDrag (this, *_playhead_cursor, false), event);
+			_drags->set (new CursorDrag (*this, *_playhead_cursor, false), event);
 		} else if (Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)) {
-			_drags->set (new TempoCurveDrag (this, item), event);
+			_drags->set (new TempoCurveDrag (*this, item), event);
 			return true;
 		}
 		return true;
@@ -835,14 +611,14 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 	case MeterBarItem:
 		if (!Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)
 		    && !ArdourKeyboard::indicates_constraint (event->button.state)) {
-			_drags->set (new CursorDrag (this, *_playhead_cursor, false), event);
+			_drags->set (new CursorDrag (*this, *_playhead_cursor, false), event);
 		}
 		return true;
 
 	case BBTRulerItem:
 		if (!Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)
 		    && !ArdourKeyboard::indicates_constraint (event->button.state)) {
-			_drags->set (new CursorDrag (this, *_playhead_cursor, false), event);
+			_drags->set (new CursorDrag (*this, *_playhead_cursor, false), event);
 		}
 		return true;
 
@@ -850,46 +626,36 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 	case SamplesRulerItem:
 	case MinsecRulerItem:
 	case MarkerBarItem:
+	case SectionMarkerBarItem:
 		if (!Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)
 		    && !ArdourKeyboard::indicates_constraint (event->button.state)) {
-			_drags->set (new CursorDrag (this, *_playhead_cursor, false), event);
+			_drags->set (new CursorDrag (*this, *_playhead_cursor, false), event);
 		}
 		return true;
 
 	case RangeMarkerBarItem:
 		if (Keyboard::modifier_state_contains (event->button.state, Keyboard::TertiaryModifier)) {
-			_drags->set (new RangeMarkerBarDrag (this, item, RangeMarkerBarDrag::CreateSkipMarker), event);
+			_drags->set (new RangeMarkerBarDrag (*this, item, RangeMarkerBarDrag::CreateSkipMarker), event);
 		} else if (Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)) {
-			_drags->set (new RangeMarkerBarDrag (this, item, RangeMarkerBarDrag::CreateRangeMarker), event);
+			_drags->set (new RangeMarkerBarDrag (*this, item, RangeMarkerBarDrag::CreateRangeMarker), event);
 		} else {
-			_drags->set (new CursorDrag (this, *_playhead_cursor, false), event);
+			_drags->set (new CursorDrag (*this, *_playhead_cursor, false), event);
 		}
 		return true;
 		break;
 
-	case CdMarkerBarItem:
-		if (!Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)) {
-			_drags->set (new CursorDrag (this, *_playhead_cursor, false), event);
-		} else {
-			_drags->set (new RangeMarkerBarDrag (this, item, RangeMarkerBarDrag::CreateCDMarker), event);
-		}
+	case VelocityItem:
+		_drags->set (new LollipopDrag (*this, item), event);
 		return true;
 		break;
 
-	case CueMarkerBarItem:
-		if (!Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)) {
-			_drags->set (new CursorDrag (this, *_playhead_cursor, false), event);
-		} else {
-			/* no range dragging on this ruler/bar */
-		}
-		return true;
-		break;
-
-	case TransportMarkerBarItem:
-		if (!Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)) {
-			_drags->set (new CursorDrag (this, *_playhead_cursor, false), event);
-		} else {
-			_drags->set (new RangeMarkerBarDrag (this, item, RangeMarkerBarDrag::CreateTransportMarker), event);
+	case VelocityBaseItem:
+		{
+			VelocityDisplay* vd = static_cast<VelocityDisplay*> (item->get_data ("ghostregionview"));
+			VelocityGhostRegion* grv = dynamic_cast<VelocityGhostRegion*> (vd);
+			if (grv) {
+				_drags->set (new VelocityLineDrag (*this, grv->base_item(), true, Temporal::BeatTime), event);
+			}
 		}
 		return true;
 		break;
@@ -906,9 +672,9 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 		 * over a region.
 		 */
 		if (item_type == StartSelectionTrimItem) {
-			_drags->set (new SelectionDrag (this, item, SelectionDrag::SelectionStartTrim), event);
+			_drags->set (new SelectionDrag (*this, item, SelectionDrag::SelectionStartTrim), event);
 		} else if (item_type == EndSelectionTrimItem) {
-			_drags->set (new SelectionDrag (this, item, SelectionDrag::SelectionEndTrim), event);
+			_drags->set (new SelectionDrag (*this, item, SelectionDrag::SelectionEndTrim), event);
 		}
 	}
 
@@ -932,11 +698,11 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 	case MouseRange:
 		switch (item_type) {
 		case StartSelectionTrimItem:
-			_drags->set (new SelectionDrag (this, item, SelectionDrag::SelectionStartTrim), event);
+			_drags->set (new SelectionDrag (*this, item, SelectionDrag::SelectionStartTrim), event);
 			break;
 
 		case EndSelectionTrimItem:
-			_drags->set (new SelectionDrag (this, item, SelectionDrag::SelectionEndTrim), event);
+			_drags->set (new SelectionDrag (*this, item, SelectionDrag::SelectionEndTrim), event);
 			break;
 
 		case SelectionItem:
@@ -945,34 +711,34 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 				return true;
 			} else if (Keyboard::modifier_state_equals (event->button.state, Keyboard::SecondaryModifier)) {
 				/* grab selection for moving */
-				_drags->set (new SelectionDrag (this, item, SelectionDrag::SelectionMove), event);
+				_drags->set (new SelectionDrag (*this, item, SelectionDrag::SelectionMove), event);
 			} else {
 				/* this was debated, but decided the more common action was to make a new selection */
-				_drags->set (new SelectionDrag (this, item, SelectionDrag::CreateSelection), event);
+				_drags->set (new SelectionDrag (*this, item, SelectionDrag::CreateSelection), event);
 			}
 			break;
 
 		case StreamItem:
 			if (Keyboard::modifier_state_equals (event->button.state, Keyboard::RangeSelectModifier) && !selection->time.empty()) {
-				_drags->set (new SelectionDrag (this, item, SelectionDrag::SelectionExtend), event);
+				_drags->set (new SelectionDrag (*this, item, SelectionDrag::SelectionExtend), event);
 			} else {
-				_drags->set (new SelectionDrag (this, item, SelectionDrag::CreateSelection), event);
+				_drags->set (new SelectionDrag (*this, item, SelectionDrag::CreateSelection), event);
 			}
 			return true;
 			break;
 
 		case RegionViewNameHighlight:
 			if (!clicked_regionview->region()->locked()) {
-				_drags->set (new TrimDrag (this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
+				_drags->set (new TrimDrag (*this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
 				return true;
 			}
 			break;
 
 		default:
 			if (Keyboard::modifier_state_equals (event->button.state, Keyboard::RangeSelectModifier) && !selection->time.empty()) {
-				_drags->set (new SelectionDrag (this, item, SelectionDrag::SelectionExtend), event);
+				_drags->set (new SelectionDrag (*this, item, SelectionDrag::SelectionExtend), event);
 			} else {
-				_drags->set (new SelectionDrag (this, item, SelectionDrag::CreateSelection), event);
+				_drags->set (new SelectionDrag (*this, item, SelectionDrag::CreateSelection), event);
 			}
 		}
 		return true;
@@ -990,7 +756,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 		case RegionViewName:
 		case StreamItem:
 		case AutomationTrackItem:
-			_drags->set (new RegionCutDrag (this, item, canvas_event_sample (event)), event, get_canvas_cursor());
+			_drags->set (new RegionCutDrag (*this, item, canvas_event_sample (event)), event, get_canvas_cursor());
 			return true;
 			break;
 		default:
@@ -1004,44 +770,45 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			/* Existing note: allow trimming/motion */
 			if ((note = reinterpret_cast<NoteBase*> (item->get_data ("notebase")))) {
 				if (note->big_enough_to_trim() && note->mouse_near_ends()) {
-					_drags->set (new NoteResizeDrag (this, item), event, get_canvas_cursor());
+					_drags->set (new NoteResizeDrag (*this, item), event, get_canvas_cursor());
 				} else {
-					_drags->set (new NoteDrag (this, item), event);
+					_drags->set (new NoteDrag (*this, item), event);
 				}
 			}
 			return true;
 
 		case GainLineItem:
-			_drags->set (new LineDrag (this, item), event);
+			_drags->set (new LineDrag (*this, item, [&](GdkEvent* ev,timepos_t const & pos, double y) { line_drag_click (ev, pos, y); }), event);
 			return true;
 			break;
 
 		case ControlPointItem:
-			_drags->set (new ControlPointDrag (this, item), event);
+			_drags->set (new ControlPointDrag (*this, item), event);
 			return true;
 			break;
 
-		case AutomationLineItem:
-			_drags->set (new LineDrag (this, item), event);
+		case EditorAutomationLineItem:
+			_drags->set (new LineDrag (*this, item, [&](GdkEvent* ev,timepos_t const & pos, double y) { line_drag_click (ev, pos, y); }), event);
 			return true;
 			break;
 
 		case StreamItem:
 			/* in the past, we created a new midi region here, but perhaps that is best left to the Draw mode */
+			/* .. now we allow for rubberband selection (region gain) */
+			_drags->set (new RubberbandSelectDrag (*this, item, [&](GdkEvent* ev, timepos_t const & pos) { return this->rb_click (ev, pos); }), event);
+			return true;
 			break;
 
 		case AutomationTrackItem:
 			/* rubberband drag to select automation points */
-			_drags->set (new EditorRubberbandSelectDrag (this, item), event);
+			_drags->set (new RubberbandSelectDrag (*this, item, [&](GdkEvent* ev, timepos_t const & pos) { return this->rb_click (ev, pos); }), event);
 			return true;
 			break;
 
 		case RegionItem:
-			if (dynamic_cast<AutomationRegionView*>(clicked_regionview)) {
-				/* rubberband drag to select automation points */
-				_drags->set (new EditorRubberbandSelectDrag (this, item), event);
-				return true;
-			}
+			/* rubberband drag to select region gain points */
+			_drags->set (new RubberbandSelectDrag (*this, item, [&](GdkEvent* ev, timepos_t const & pos) { return this->rb_click (ev, pos); }), event);
+			return true;
 			break;
 
 		default:
@@ -1053,7 +820,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 		if (Keyboard::modifier_state_contains (event->button.state, Keyboard::ModifierMask(Keyboard::PrimaryModifier|Keyboard::SecondaryModifier)) &&
 		    event->type == GDK_BUTTON_PRESS) {
 
-			_drags->set (new EditorRubberbandSelectDrag (this, item), event);
+			_drags->set (new RubberbandSelectDrag (*this, get_trackview_group(), [&](GdkEvent* ev, timepos_t const & pos) { return this->rb_click (ev, pos); }), event);
 
 		} else if (event->type == GDK_BUTTON_PRESS) {
 
@@ -1062,7 +829,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			{
 				RegionView* rv = reinterpret_cast<RegionView*> (item->get_data("regionview"));
 				assert (rv);
-				_drags->set (new FadeInDrag (this, item, rv, selection->regions, drag_time_domain (rv->region())), event, _cursors->fade_in);
+				_drags->set (new FadeInDrag (*this, item, rv, selection->regions, drag_time_domain (rv->region())), event, _cursors->fade_in);
 				return true;
 			}
 
@@ -1070,7 +837,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			{
 				RegionView* rv = reinterpret_cast<RegionView*> (item->get_data("regionview"));
 				assert (rv);
-				_drags->set (new FadeOutDrag (this, item, rv, selection->regions,  drag_time_domain (rv->region())), event, _cursors->fade_out);
+				_drags->set (new FadeOutDrag (*this, item, rv, selection->regions,  drag_time_domain (rv->region())), event, _cursors->fade_out);
 				return true;
 			}
 
@@ -1080,7 +847,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			 * For not this is not fully implemented */
 #if 0
 			if (!clicked_regionview->region()->locked()) {
-				_drags->set (new TrimDrag (this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region()), true), event);
+				_drags->set (new TrimDrag (*this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region()), true), event);
 				return true;
 			}
 #endif
@@ -1093,7 +860,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 					return true;
 				}
 
-				_drags->set (new FeatureLineDrag (this, item), event);
+				_drags->set (new FeatureLineDrag (*this, item), event);
 				return true;
 				break;
 			}
@@ -1114,7 +881,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 
 				if (Keyboard::modifier_state_equals (event->button.state, ArdourKeyboard::slip_contents_modifier ())) {
 					if (!clicked_regionview->region()->locked() && (Config->get_edit_mode() != Lock)) {
-						_drags->add (new RegionSlipContentsDrag (this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())));
+						_drags->add (new RegionSlipContentsDrag (*this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())));
 					}
 				} else if (ArdourKeyboard::indicates_copy (event->button.state)) {
 					add_region_drag (item, event, clicked_regionview, true);
@@ -1133,7 +900,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			case LeftFrameHandle:
 			case RightFrameHandle:
 				if (!clicked_regionview->region()->locked()) {
-					_drags->set (new TrimDrag (this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region()), false), event);
+					_drags->set (new TrimDrag (*this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region()), false), event);
 					return true;
 				}
 				break;
@@ -1141,7 +908,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			case FadeInTrimHandleItem:
 			case FadeOutTrimHandleItem:
 				if (!clicked_regionview->region()->locked()) {
-					_drags->set (new TrimDrag (this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region()), true), event);
+					_drags->set (new TrimDrag (*this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region()), true), event);
 					return true;
 				}
 				break;
@@ -1150,24 +917,24 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			{
 				/* rename happens on edit clicks */
 				if (clicked_regionview->get_name_highlight()) {
-					_drags->set (new TrimDrag (this, clicked_regionview->get_name_highlight(), clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
+					_drags->set (new TrimDrag (*this, clicked_regionview->get_name_highlight(), clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
 					return true;
 				}
 				break;
 			}
 
 			case ControlPointItem:
-				_drags->set (new ControlPointDrag (this, item), event);
+				_drags->set (new ControlPointDrag (*this, item), event);
 				return true;
 				break;
 
-			case AutomationLineItem:
-				_drags->set (new LineDrag (this, item), event);
+			case EditorAutomationLineItem:
+				_drags->set (new LineDrag (*this, item, [&](GdkEvent* ev,timepos_t const & pos, double y) { line_drag_click (ev, pos, y); }), event);
 				return true;
 				break;
 
 			case StreamItem:
-				_drags->set (new EditorRubberbandSelectDrag (this, item), event);
+				_drags->set (new RubberbandSelectDrag (*this, item, [&](GdkEvent* ev, timepos_t const & pos) { return this->rb_click (ev, pos); }), event);
 				return true;
 
 			case AutomationTrackItem:
@@ -1182,20 +949,20 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 					std::shared_ptr<Playlist> pl = p->track()->playlist ();
 					if (pl->n_regions() == 0) {
 						/* Parent has no regions; create one so that we have somewhere to put automation */
-						_drags->set (new RegionCreateDrag (this, item, parent), event);
+						_drags->set (new RegionCreateDrag (*this, item, parent), event);
 					} else {
 						/* See if there's a region before the click that we can extend, and extend it if so */
 						timepos_t const t (canvas_event_sample (event));
 						std::shared_ptr<Region> prev = pl->find_next_region (t, End, -1);
 						if (!prev) {
-							_drags->set (new RegionCreateDrag (this, item, parent), event);
+							_drags->set (new RegionCreateDrag (*this, item, parent), event);
 						} else {
 							prev->set_length (prev->position ().distance (t));
 						}
 					}
 				} else {
 					/* rubberband drag to select automation points */
-					_drags->set (new EditorRubberbandSelectDrag (this, item), event);
+					_drags->set (new RubberbandSelectDrag (*this, item, [&](GdkEvent* ev, timepos_t const & pos) { return this->rb_click (ev, pos); }), event);
 				}
 				break;
 			}
@@ -1216,14 +983,20 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 		return true;
 		break;
 
+	case MouseGrid:
+		/* MouseGrid clicks are handled by _canvas_grid_zone */
+		assert (0);
+		abort(); /*NOTREACHED*/
+		break;
+
 	case MouseDraw:
 		switch (item_type) {
 		case GainLineItem:
-			_drags->set (new LineDrag (this, item), event);
+			_drags->set (new LineDrag (*this, item, [&](GdkEvent* ev,timepos_t const & pos, double y) { line_drag_click (ev, pos, y); }), event);
 			return true;
 
 		case ControlPointItem:
-			_drags->set (new ControlPointDrag (this, item), event);
+			_drags->set (new ControlPointDrag (*this, item), event);
 			return true;
 			break;
 
@@ -1244,14 +1017,14 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 					/* if there's no line yet, AutomationRangeDrag will need to be told what the initial value of this control is */
 					float init_value = atv->control()->get_value();
 
-					_drags->set (new AutomationRangeDrag (this, atv, init_value, selection->time), event, _cursors->up_down);
+					_drags->set (new AutomationRangeDrag (*this, atv, init_value, selection->time), event, _cursors->up_down);
 					return true;
 				}
 				if (dynamic_cast<AutomationRegionView*>(clicked_regionview)) {
 					/* MIDI CC or similar -- TODO handle multiple? */
 					list<RegionView*> rvl;
 					rvl.push_back (clicked_regionview);
-					_drags->set (new AutomationRangeDrag (this, rvl, selection->time,
+					_drags->set (new AutomationRangeDrag (*this, rvl, selection->time,
 								clicked_regionview->get_time_axis_view().y_position(),
 								clicked_regionview->get_time_axis_view().current_height()),
 							event, _cursors->up_down);
@@ -1266,7 +1039,7 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 					list<RegionView*> rvl;
 					rvl.push_back (clicked_regionview);
 					// TODO: handle layer_display() == Stacked
-					_drags->set (new AutomationRangeDrag (this, rvl, selection->time,
+					_drags->set (new AutomationRangeDrag (*this, rvl, selection->time,
 								clicked_regionview->get_time_axis_view().y_position(),
 								clicked_regionview->get_time_axis_view().current_height()),
 							event, _cursors->up_down);
@@ -1308,25 +1081,32 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 						double yy = event->button.y - _trackview_group->canvas_origin().y;
 						y_pos += floor ((yy - y_pos) / height) * height;
 					}
-					_drags->set (new AutomationRangeDrag (this, rvl, selection->time, y_pos, height),
+					_drags->set (new AutomationRangeDrag (*this, rvl, selection->time, y_pos, height),
 							event, _cursors->up_down);
 				}
 				return true;
 				break;
 			}
 
-		case AutomationLineItem:
-			_drags->set (new LineDrag (this, item), event);
+		case EditorAutomationLineItem:
+			/* fallthrough */
+		case AutomationTrackItem:
+			{
+				AutomationTimeAxisView* atv = static_cast<AutomationTimeAxisView*> (item->get_data ("trackview"));
+				if (atv) {
+					_drags->set (new AutomationDrawDrag (*this, nullptr, atv->base_item(), false, Temporal::AudioTime), event);
+				}
+			}
 			break;
 
 		case NoteItem:
 			if ((note = reinterpret_cast<NoteBase*>(item->get_data ("notebase")))) {
 				if (note->big_enough_to_trim() && note->mouse_near_ends()) {
 					/* Note is big and pointer is near the end, trim */
-					_drags->set (new NoteResizeDrag (this, item), event, get_canvas_cursor());
+					_drags->set (new NoteResizeDrag (*this, item), event, get_canvas_cursor());
 				} else {
 					/* Drag note */
-					_drags->set (new NoteDrag (this, item), event);
+					_drags->set (new NoteDrag (*this, item), event);
 				}
 				return true;
 			}
@@ -1334,9 +1114,17 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 
 		case StreamItem:
 			if (dynamic_cast<MidiTimeAxisView*> (clicked_axisview)) {
-				_drags->set (new RegionCreateDrag (this, item, clicked_axisview), event);
+				_drags->set (new RegionCreateDrag (*this, item, clicked_axisview), event);
 			}
 			return true;
+		case RegionItem: {
+			RegionView* rv;
+			if ((rv = dynamic_cast<RegionView*> (clicked_regionview))) {
+				ArdourCanvas::Rectangle* r = dynamic_cast<ArdourCanvas::Rectangle*> (rv->get_canvas_frame());
+				_drags->set (new AutomationDrawDrag (*this, rv->get_canvas_group(), *r, true, Temporal::AudioTime), event);
+			}
+		}
+			break;
 
 		default:
 			break;
@@ -1349,24 +1137,15 @@ Editor::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			/* resize-drag notes */
 			if ((note = reinterpret_cast<NoteBase*>(item->get_data ("notebase")))) {
 				if (note->big_enough_to_trim()) {
-					_drags->set (new NoteResizeDrag (this, item), event, get_canvas_cursor());
+					_drags->set (new NoteResizeDrag (*this, item), event, get_canvas_cursor());
 				}
 			}
 			return true;
 		} else if (clicked_regionview) {
 			/* do time-FX  */
-			_drags->set (new TimeFXDrag (this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
+			_drags->set (new TimeFXDrag (*this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
 			return true;
 		}
-		break;
-
-	case MouseAudition:
-		_drags->set (new ScrubDrag (this, item), event, _cursors->transparent);
-		scrub_reversals = 0;
-		scrub_reverse_distance = 0;
-		last_scrub_x = event->button.x;
-		scrubbing_direction = 0;
-		return true;
 		break;
 
 	default:
@@ -1396,7 +1175,7 @@ Editor::button_press_handler_2 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			return true;
 			break;
 		case ControlPointItem:
-			_drags->set (new ControlPointDrag (this, item), event);
+			_drags->set (new ControlPointDrag (*this, item), event);
 			return true;
 			break;
 
@@ -1406,18 +1185,18 @@ Editor::button_press_handler_2 (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 
 		switch (item_type) {
 		case RegionViewNameHighlight:
-			_drags->set (new TrimDrag (this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
+			_drags->set (new TrimDrag (*this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
 			return true;
 			break;
 
 		case LeftFrameHandle:
 		case RightFrameHandle:
-			_drags->set (new TrimDrag (this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
+			_drags->set (new TrimDrag (*this, item, clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
 			return true;
 			break;
 
 		case RegionViewName:
-			_drags->set (new TrimDrag (this, clicked_regionview->get_name_highlight(), clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
+			_drags->set (new TrimDrag (*this, clicked_regionview->get_name_highlight(), clicked_regionview, selection->regions.by_layer(), drag_time_domain (clicked_regionview->region())), event);
 			return true;
 			break;
 
@@ -1536,8 +1315,6 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 	timepos_t where (canvas_event_time (event));
 	AutomationTimeAxisView* atv = 0;
 
-	_press_cursor_ctx.reset();
-
 	/* no action if we're recording */
 
 	if (_session && _session->actively_recording()) {
@@ -1551,6 +1328,7 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 		/* see if we're finishing a drag */
 
 		if (_drags->active ()) {
+
 			bool const r = _drags->end_grab (event);
 			if (r) {
 				/* grab dragged, so do nothing else */
@@ -1568,7 +1346,7 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 	if (!_drags->active () && Keyboard::is_edit_event (&event->button)) {
 		switch (item_type) {
 		case RegionItem:
-			show_region_properties ();
+			edit_region_in_dedicated_window ();
 			break;
 		case TempoMarkerItem: {
 			ArdourMarker* marker;
@@ -1688,11 +1466,8 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 
 			case MarkerBarItem:
 			case RangeMarkerBarItem:
-			case TransportMarkerBarItem:
-			case CdMarkerBarItem:
+			case SectionMarkerBarItem:
 			case TempoBarItem:
-			case MappingBarItem:
-			case MappingCursorItem:
 			case TempoCurveItem:
 			case MeterBarItem:
 			case VideoBarItem:
@@ -1700,15 +1475,16 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			case SamplesRulerItem:
 			case MinsecRulerItem:
 			case BBTRulerItem:
-				popup_ruler_menu (where, item_type);
-				break;
-
-			case CueMarkerBarItem:
-				snap_to (where, Temporal::RoundNearest, SnapToGrid_Scaled, true);
+			case SelectionMarkerItem:
+				snap_to (where, Temporal::RoundNearest, SnapToGrid_Scaled, false);
 				popup_ruler_menu (where, item_type);
 				break;
 
 			case MarkerItem:
+				marker_context_menu (&event->button, item);
+				break;
+
+			case SceneMarkerItem:
 				marker_context_menu (&event->button, item);
 				break;
 
@@ -1732,6 +1508,7 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 				}
 				break;
 
+			case GridZoneItem:
 			default:
 				break;
 			}
@@ -1791,36 +1568,27 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 		case PlayheadCursorItem:
 		case MarkerItem:
 		case GainLineItem:
-		case AutomationLineItem:
+		case EditorAutomationLineItem:
 		case StartSelectionTrimItem:
 		case EndSelectionTrimItem:
+		case SelectionMarkerItem:
 			return true;
 
 		case MarkerBarItem:
 			if (!_dragging_playhead) {
 				snap_to_with_modifier (where, event, Temporal::RoundNearest, SnapToGrid_Scaled);
-				mouse_add_new_marker (where);
+				add_location_mark (where);
 			}
 			return true;
 
-		case CdMarkerBarItem:
-			if (!_dragging_playhead) {
-				/* if we get here then a dragged range wasn't done */
+		case SectionMarkerBarItem:
+			if (!_dragging_playhead && Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)) {
 				snap_to_with_modifier (where, event, Temporal::RoundNearest, SnapToGrid_Scaled);
-				mouse_add_new_marker (where, Location::IsCDMarker);
+				add_location_mark (where, Location::Flags (Location::IsMark | Location::IsSection));
 			}
 			return true;
 
-		case CueMarkerBarItem:
-			if (!_dragging_playhead) {
-				/* if we get here then a dragged range wasn't done */
-				snap_to_with_modifier (where, event, Temporal::RoundNearest, SnapToGrid_Scaled);  //TODO: force to-measure?
-				mouse_add_new_marker (where, Location::IsCueMarker);
-			}
-			return true;
-
-		case MappingBarItem:
-		case MappingCursorItem:
+		case GridZoneItem:
 			return true;
 
 		case TempoBarItem:
@@ -1854,15 +1622,23 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			switch (item_type) {
 			case RegionItem:
 			{
-				/* check that we didn't drag before releasing, since
-				   its really annoying to create new control
-				   points when doing this.
-				*/
-				AudioRegionView* arv = dynamic_cast<AudioRegionView*> (clicked_regionview);
-				if (!were_dragging && arv) {
+				/* since we have FreehandLineDrag we can only get here after a drag, when no movement has happened.
+				 * Except when a drag was aborted by pressing Esc.
+				 */
+				if (!were_dragging) {
+					return true;
+				}
+
+				AudioRegionView*      arv = dynamic_cast<AudioRegionView*> (clicked_regionview);
+				AutomationRegionView* atv = dynamic_cast<AutomationRegionView*> (clicked_regionview);
+
+				if (arv) {
 					bool with_guard_points = Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier);
 					arv->add_gain_point_event (item, event, with_guard_points);
+				} else if (atv) {
+					atv->add_automation_event (event);
 				}
+
 				return true;
 				break;
 			}
@@ -1881,20 +1657,11 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 			}
 			break;
 
-		case MouseAudition:
-			if (scrubbing_direction == 0) {
-				/* no drag, just a click */
-				switch (item_type) {
-				case RegionItem:
-					play_selected_region ();
-					break;
-				default:
-					break;
-				}
-			} else if (_session) {
-				/* make sure we stop */
-				_session->request_stop ();
-			}
+		case MouseGrid:
+			/* MouseGrid clicks are handled by _canvas_grid_zone ,
+			 * We can still get here by single-click on a Tempo, Meter or BBT Marker in the ruler.
+			 */
+			return true;
 			break;
 
 		default:
@@ -1964,338 +1731,33 @@ Editor::button_release_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemT
 	return false;
 }
 
-bool
-Editor::enter_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemType item_type)
+
+GridType
+Editor::determine_mapping_grid_snap (timepos_t t)
 {
-	ControlPoint* cp;
-	ArdourMarker * marker;
-	MeterMarker* m_marker = 0;
-	TempoMarker* t_marker = 0;
-	double fraction;
-	bool ret = true;
+	timepos_t snapped          = snap_to_bbt_via_grid (t, RoundNearest, SnapToGrid_Unscaled, GridTypeBeat);
+	timepos_t snapped_to_bar   = snap_to_bbt_via_grid (t, RoundNearest, SnapToGrid_Unscaled, GridTypeBar);
+	const double unsnapped_pos = time_to_pixel_unrounded (t);
+	const double snapped_pos   = time_to_pixel_unrounded (snapped);
 
-	/* by the time we reach here, entered_regionview and entered trackview
-	 * will have already been set as appropriate. Things are done this
-	 * way because this method isn't passed a pointer to a variable type of
-	 * thing that is entered (which may or may not be canvas item).
-	 * (e.g. the actual entered regionview)
-	 */
+	double ruler_line_granularity = UIConfiguration::instance().get_ruler_granularity () * UIConfiguration::instance().get_ui_scale(); // in pixels
 
-	choose_canvas_cursor_on_entry (item_type);
-
-	switch (item_type) {
-	case MappingCursorItem:
-		/* nothing to do ??? */
-		break;
-
-	case MappingBarItem:
-		mapping_cursor->show ();
-		mapping_cursor->raise_to_top ();
-		break;
-
-	case ControlPointItem:
-		if (mouse_mode == MouseDraw || mouse_mode == MouseObject || mouse_mode == MouseContent) {
-			cp = static_cast<ControlPoint*>(item->get_data ("control_point"));
-			cp->show ();
-
-			fraction = 1.0 - (cp->get_y() / cp->line().height());
-
-			_verbose_cursor->set (cp->line().get_verbose_cursor_string (fraction));
-			_verbose_cursor->show ();
-		}
-		break;
-
-	case GainLineItem:
-		if (mouse_mode == MouseDraw) {
-			ArdourCanvas::Line *line = dynamic_cast<ArdourCanvas::Line *> (item);
-			if (line) {
-				line->set_outline_color (UIConfiguration::instance().color ("entered gain line"));
-			}
-		}
-		break;
-
-	case AutomationLineItem:
-		if (mouse_mode == MouseDraw || mouse_mode == MouseObject) {
-			ArdourCanvas::Line *line = dynamic_cast<ArdourCanvas::Line *> (item);
-			if (line) {
-				line->set_outline_color (UIConfiguration::instance().color ("entered automation line"));
-			}
-		}
-		break;
-
-	case AutomationTrackItem:
-		AutomationTimeAxisView* atv;
-		if ((atv = static_cast<AutomationTimeAxisView*>(item->get_data ("trackview"))) != 0) {
-			clear_entered_track = false;
-			set_entered_track (atv);
-		}
-		break;
-
-	case MarkerItem:
-		if ((marker = static_cast<ArdourMarker *> (item->get_data ("marker"))) == 0) {
-			break;
-		}
-		entered_marker = marker;
-		marker->set_entered (true);
-		break;
-
-	case MeterMarkerItem:
-		if ((m_marker = static_cast<MeterMarker *> (item->get_data ("marker"))) == 0) {
-			break;
-		}
-		entered_marker = m_marker;
-		/* "music" currently serves as a stand-in for "entered". */
-		m_marker->set_color_rgba (UIConfiguration::instance().color ("meter marker music"));
-		break;
-
-	case TempoMarkerItem:
-		if ((t_marker = static_cast<TempoMarker *> (item->get_data ("marker"))) == 0) {
-			break;
-		}
-		entered_marker = t_marker;
-		/* "music" currently serves as a stand-in for "entered". */
-		t_marker->set_color_rgba (UIConfiguration::instance().color ("tempo marker music"));
-		break;
-
-	case FadeInHandleItem:
-	case FadeInTrimHandleItem:
-		if (mouse_mode == MouseObject) {
-			ArdourCanvas::Rectangle *rect = dynamic_cast<ArdourCanvas::Rectangle *> (item);
-			if (rect) {
-				RegionView* rv = static_cast<RegionView*>(item->get_data ("regionview"));
-				rect->set_fill_color (rv->get_fill_color());
-			}
-		}
-		break;
-
-	case FadeOutHandleItem:
-	case FadeOutTrimHandleItem:
-		if (mouse_mode == MouseObject) {
-			ArdourCanvas::Rectangle *rect = dynamic_cast<ArdourCanvas::Rectangle *> (item);
-			if (rect) {
-				RegionView* rv = static_cast<RegionView*>(item->get_data ("regionview"));
-				rect->set_fill_color (rv->get_fill_color ());
-			}
-		}
-		break;
-
-	case FeatureLineItem:
-	{
-		ArdourCanvas::Line *line = dynamic_cast<ArdourCanvas::Line *> (item);
-		line->set_outline_color (0xFF0000FF);
-	}
-	break;
-
-	case SelectionItem:
-		break;
-
-	case WaveItem:
-	{
-		if (entered_regionview) {
-			entered_regionview->entered();
-		}
-	}
-	break;
-
-	default:
-		break;
-	}
-
-	/* third pass to handle entered track status in a comprehensible way.
-	 */
-
-	switch (item_type) {
-	case GainLineItem:
-	case AutomationLineItem:
-	case ControlPointItem:
-		/* these do not affect the current entered track state */
-		clear_entered_track = false;
-		break;
-
-	case AutomationTrackItem:
-		/* handled above already */
-		break;
-
-	default:
-
-		break;
-	}
-
-	return ret;
-}
-
-bool
-Editor::leave_handler (ArdourCanvas::Item* item, GdkEvent*, ItemType item_type)
-{
-	AutomationLine* al;
-	ArdourMarker *marker;
-	TempoMarker *t_marker;
-	MeterMarker *m_marker;
-	bool ret = true;
-
-	if (!_enter_stack.empty()) {
-		_enter_stack.pop_back();
-	}
-
-	switch (item_type) {
-	case MappingCursorItem:
-		/* ignore */
-		break;
-
-	case MappingBarItem:
-		mapping_cursor->hide ();
-		break;
-
-	case ControlPointItem:
-		_verbose_cursor->hide ();
-		break;
-
-	case GainLineItem:
-	case AutomationLineItem:
-		al = reinterpret_cast<AutomationLine*> (item->get_data ("line"));
-		{
-			ArdourCanvas::Line *line = dynamic_cast<ArdourCanvas::Line *> (item);
-			if (line) {
-				line->set_outline_color (al->get_line_color());
-			}
-		}
-		break;
-
-	case MarkerItem:
-		if ((marker = static_cast<ArdourMarker *> (item->get_data ("marker"))) == 0) {
-			break;
-		}
-		entered_marker = 0;
-		marker->set_entered (false);
-		break;
-
-	case MeterMarkerItem:
-		if ((m_marker = static_cast<MeterMarker *> (item->get_data ("marker"))) == 0) {
-			break;
-		}
-		m_marker->set_color_rgba (UIConfiguration::instance().color ("meter marker"));
-		entered_marker = 0;
-		break;
-
-	case TempoMarkerItem:
-		if ((t_marker = static_cast<TempoMarker *> (item->get_data ("marker"))) == 0) {
-			break;
-		}
-		t_marker->set_color_rgba (UIConfiguration::instance().color ("tempo marker"));
-		entered_marker = 0;
-		break;
-
-	case FadeInTrimHandleItem:
-	case FadeOutTrimHandleItem:
-	case FadeInHandleItem:
-	case FadeOutHandleItem:
-	{
-		ArdourCanvas::Rectangle *rect = dynamic_cast<ArdourCanvas::Rectangle *> (item);
-		if (rect) {
-			rect->set_fill_color (UIConfiguration::instance().color ("inactive fade handle"));
-		}
-	}
-	break;
-
-	case AutomationTrackItem:
-		break;
-
-	case FeatureLineItem:
-	{
-		ArdourCanvas::Line *line = dynamic_cast<ArdourCanvas::Line *> (item);
-		line->set_outline_color (UIConfiguration::instance().color ("zero line"));
-	}
-	break;
-
-	default:
-		break;
-	}
-
-	return ret;
-}
-
-void
-Editor::scrub (samplepos_t sample, double current_x)
-{
-	double delta;
-
-	if (scrubbing_direction == 0) {
-		/* first move */
-		_session->request_locate (sample, false, MustStop);
-		_session->request_transport_speed (0.1);
-		scrubbing_direction = 1;
-
-	} else {
-
-		if (last_scrub_x > current_x) {
-
-			/* pointer moved to the left */
-
-			if (scrubbing_direction > 0) {
-
-				/* we reversed direction to go backwards */
-
-				scrub_reversals++;
-				scrub_reverse_distance += (int) (last_scrub_x - current_x);
-
-			} else {
-
-				/* still moving to the left (backwards) */
-
-				scrub_reversals = 0;
-				scrub_reverse_distance = 0;
-
-				delta = 0.01 * (last_scrub_x - current_x);
-				_session->request_transport_speed_nonzero (_session->actual_speed() - delta);
-			}
-
+	if (std::abs (snapped_pos - unsnapped_pos) < ruler_line_granularity) {
+		if (snapped == snapped_to_bar) {
+			return GridTypeBar;
 		} else {
-			/* pointer moved to the right */
-
-			if (scrubbing_direction < 0) {
-				/* we reversed direction to go forward */
-
-				scrub_reversals++;
-				scrub_reverse_distance += (int) (current_x - last_scrub_x);
-
-			} else {
-				/* still moving to the right */
-
-				scrub_reversals = 0;
-				scrub_reverse_distance = 0;
-
-				delta = 0.01 * (current_x - last_scrub_x);
-				_session->request_transport_speed_nonzero (_session->actual_speed() + delta);
-			}
+			return GridTypeBeat;
 		}
-
-		/* if there have been more than 2 opposite motion moves detected, or one that moves
-		   back more than 10 pixels, reverse direction
-		*/
-
-		if (scrub_reversals >= 2 || scrub_reverse_distance > 10) {
-
-			if (scrubbing_direction > 0) {
-				/* was forwards, go backwards */
-				_session->request_transport_speed (-0.1);
-				scrubbing_direction = -1;
-			} else {
-				/* was backwards, go forwards */
-				_session->request_transport_speed (0.1);
-				scrubbing_direction = 1;
-			}
-
-			scrub_reverse_distance = 0;
-			scrub_reversals = 0;
-		}
+	} else {
+		return GridTypeNone;
 	}
-
-	last_scrub_x = current_x;
 }
 
 bool
 Editor::motion_handler (ArdourCanvas::Item* item, GdkEvent* event, bool from_autoscroll)
 {
+	auto mouse_mode = current_mouse_mode ();
+
 	_last_motion_y = event->motion.y;
 
 	if (event->motion.is_hint) {
@@ -2327,6 +1789,7 @@ Editor::motion_handler (ArdourCanvas::Item* item, GdkEvent* event, bool from_aut
 	update_join_object_range_location (event->motion.y);
 
 	if (_drags->active ()) {
+		_region_peak_cursor->hide ();
 		//drags change the snapped_cursor location, because we are snapping the thing being dragged, not the actual mouse cursor
 		return _drags->motion_handler (event, from_autoscroll);
 	} else {
@@ -2346,48 +1809,24 @@ Editor::motion_handler (ArdourCanvas::Item* item, GdkEvent* event, bool from_aut
 				}
 			}
 
+			/* show snapped cursor */
 			timepos_t t (where);
 			bool move_snapped_cursor = true;
-
-			if (item == mapping_bar || item == mapping_cursor) {
-
-				/* Snap to the nearest beat, and figure out how
-				 * many pixels from the pointer cursor that is.
-				 */
-
-				timepos_t snapped = _snap_to_bbt (t, RoundNearest, SnapToGrid_Unscaled, GridTypeBeat);
-				const double unsnapped_pos = time_to_pixel_unrounded (t);
-				const double snapped_pos = time_to_pixel_unrounded (snapped);
-
-				if (std::abs (snapped_pos - unsnapped_pos) < 10 * UIConfiguration::instance().get_ui_scale()) {
-
-					/* Close to a beat, so snap the mapping
-					 * cursor *and* the snapped cursor to
-					 * the beat.
-					 */
-
-					mapping_cursor->show ();
-					mapping_cursor->raise_to_top ();
-
-					mapping_cursor->set_position (ArdourCanvas::Duple (snapped_pos, mapping_cursor->position().y));
-					set_snapped_cursor_position (snapped);
-
-					move_snapped_cursor = false;
-
-				} else {
-
-					/* Not close to a beat, hide the
-					 * mapping cursor, then move the
-					 * snapped cursor as normal.
-					 */
-
-					mapping_cursor->hide ();
-				}
-			}
-
 			if (move_snapped_cursor) {
 				snap_to_with_modifier (t, event);
 				set_snapped_cursor_position (t);
+			}
+
+			/* if tempo-mapping, set a cursor to indicate whether we are close to a bar line, beat line, or neither */
+			if (mouse_mode == MouseGrid && item == _canvas_grid_zone) {
+				GridType gt = determine_mapping_grid_snap (t);
+				if (gt == GridTypeBar) {
+					set_canvas_cursor (cursors()->time_fx);
+				} else if (gt == GridTypeBeat) {
+					set_canvas_cursor (cursors()->expand_left_right);
+				} else {
+					set_canvas_cursor (cursors()->grabber);
+				}
 			}
 		}
 
@@ -2409,8 +1848,8 @@ Editor::can_remove_control_point (ArdourCanvas::Item* item)
 		abort(); /*NOTREACHED*/
 	}
 
-	AutomationLine& line = control_point->line ();
-	if (dynamic_cast<AudioRegionGainLine*> (&line)) {
+	AutomationLine& line (control_point->line());
+	if (dynamic_cast<RegionFxLine*> (&line)) {
 		/* we shouldn't remove the first or last gain point in region gain lines */
 		if (line.is_last_point(*control_point) || line.is_first_point(*control_point)) {
 			return false;
@@ -2447,35 +1886,29 @@ Editor::edit_control_point (ArdourCanvas::Item* item)
 		abort(); /*NOTREACHED*/
 	}
 
-	ControlPointDialog d (p);
+	std::vector<ControlPoint*> cps;
+
+	for (auto const& cp : selection->points) {
+		if (&cp->line() == &p->line ()) {
+			cps.push_back (cp);
+		}
+	}
+
+	assert (cps.size() > 0);
+
+	ControlPointDialog d (p, cps.size() > 1);
 
 	if (d.run () != RESPONSE_ACCEPT) {
 		return;
 	}
 
-	p->line().modify_point_y (*p, d.get_y_fraction ());
-}
-
-void
-Editor::edit_notes (MidiRegionView* mrv)
-{
-	MidiRegionView::Selection const & s = mrv->selection();
-
-	if (s.empty ()) {
-		return;
+	if (d.all_selected_points ()) {
+		p->line().modify_points_y (cps, d.get_y_fraction ());
+	} else {
+		cps.clear ();
+		cps.push_back (p);
+		p->line().modify_points_y (cps, d.get_y_fraction ());
 	}
-
-	EditNoteDialog* d = new EditNoteDialog (mrv, s);
-	d->show_all ();
-
-	d->signal_response().connect (sigc::bind (sigc::mem_fun (*this, &Editor::note_edit_done), d));
-}
-
-void
-Editor::note_edit_done (int r, EditNoteDialog* d)
-{
-	d->done (r);
-	delete d;
 }
 
 void
@@ -2483,8 +1916,33 @@ Editor::edit_region (RegionView* rv)
 {
 	if (UIConfiguration::instance().get_use_double_click_to_zoom_to_selection()) {
 		temporal_zoom_selection (Both);
-	} else {
+		return;
+	}
+
+	switch (UIConfiguration::instance().get_region_edit_disposition()) {
+	case Editing::BottomPaneOnly:
+		maybe_edit_region_in_bottom_pane (*rv);
+		break;
+	case Editing::OpenBottomPane:
+		if (!att_bottom_visible()) {
+			Glib::RefPtr<Gtk::Action> act = bottom_attachment_button.get_related_action();
+			Glib::RefPtr<Gtk::ToggleAction> tact = Glib::RefPtr<Gtk::ToggleAction>::cast_dynamic(act);
+			if (tact) {
+				tact->set_active (true);
+			}
+		}
+		maybe_edit_region_in_bottom_pane (*rv);
+		break;
+	case Editing::PreferBottomPane:
+		if (att_bottom_visible()) {
+			maybe_edit_region_in_bottom_pane (*rv);
+		} else {
+			rv->show_region_editor ();
+		}
+		break;
+	case Editing::NeverBottomPane:
 		rv->show_region_editor ();
+		break;
 	}
 }
 
@@ -2682,7 +2140,7 @@ void
 Editor::mouse_brush_insert_region (RegionView* rv, timepos_t const & pos)
 {
 	/* no brushing without a useful quantize setting */
-	if (_grid_type == GridTypeNone)
+	if (grid_type() == GridTypeNone)
 		return;
 
 	/* don't brush a copy over the original */
@@ -2730,7 +2188,7 @@ Editor::add_region_drag (ArdourCanvas::Item* item, GdkEvent*, RegionView* region
 
 	assert (!_drags->active ());
 
-	_drags->add (new RegionMoveDrag (this, item, region_view, selection->regions.by_layer(), copy, drag_time_domain (region_view->region())));
+	_drags->add (new RegionMoveDrag (*this, item, region_view, selection->regions.by_layer(), copy, drag_time_domain (region_view->region())));
 }
 
 void
@@ -2749,7 +2207,7 @@ Editor::add_region_brush_drag (ArdourCanvas::Item* item, GdkEvent*, RegionView* 
 	}
 
 	std::list<RegionView*> empty;
-	_drags->add (new RegionBrushDrag (this, item, region_view, empty, drag_time_domain (region_view->region())));
+	_drags->add (new RegionBrushDrag (*this, item, region_view, empty, drag_time_domain (region_view->region())));
 }
 
 /** Start a grab where a time range is selected, track(s) are selected, and the
@@ -2813,7 +2271,7 @@ Editor::start_selection_grab (ArdourCanvas::Item* /*item*/, GdkEvent* event)
 
 	commit_reversible_command ();
 
-	_drags->set (new RegionMoveDrag (this, latest_regionviews.front()->get_canvas_group(), latest_regionviews.front(), latest_regionviews, false, drag_time_domain (latest_regionviews.front()->region())), event);
+	_drags->set (new RegionMoveDrag (*this, latest_regionviews.front()->get_canvas_group(), latest_regionviews.front(), latest_regionviews, false, drag_time_domain (latest_regionviews.front()->region())), event);
 }
 
 void
@@ -2848,6 +2306,8 @@ Editor::escape ()
 void
 Editor::update_join_object_range_location (double y)
 {
+	auto mouse_mode = current_mouse_mode ();
+
 	if (!get_smart_mode()) {
 		_join_object_range_state = JOIN_OBJECT_RANGE_NONE;
 		return;
@@ -2863,6 +2323,11 @@ Editor::update_join_object_range_location (double y)
 
 	if (entered_regionview) {
 
+		if (dynamic_cast<AutomationRegionView*> (entered_regionview)) {
+			_join_object_range_state = JOIN_OBJECT_RANGE_NONE;
+			return;
+		}
+
 		/* TODO: there is currently a bug here(?)
 		 * when we are inside a region fade handle, it acts as though we are in range mode because it is in the top half of the region
 		 * can it be fixed here?
@@ -2873,9 +2338,8 @@ Editor::update_join_object_range_location (double y)
 
 		_join_object_range_state = c <= 0.5 ? JOIN_OBJECT_RANGE_RANGE : JOIN_OBJECT_RANGE_OBJECT;
 
-		Editor::EnterContext* ctx = get_enter_context(RegionItem);
-		if (_join_object_range_state != old && ctx) {
-			ctx->cursor_ctx->change(which_track_cursor());
+		if (_join_object_range_state != old) {
+			set_canvas_cursor (which_track_cursor());
 		}
 
 	} else if (entered_track) {
@@ -2907,9 +2371,8 @@ Editor::update_join_object_range_location (double y)
 			_join_object_range_state = JOIN_OBJECT_RANGE_OBJECT;
 		}
 
-		Editor::EnterContext* ctx = get_enter_context(StreamItem);
-		if (_join_object_range_state != old && ctx) {
-			ctx->cursor_ctx->change(which_track_cursor());
+		if (_join_object_range_state != old) {
+			set_canvas_cursor (which_track_cursor());
 		}
 	}
 }
@@ -2923,7 +2386,39 @@ Editor::effective_mouse_mode () const
 		return MouseRange;
 	}
 
-	return mouse_mode;
+	return current_mouse_mode ();
+}
+
+void
+Editor::use_appropriate_mouse_mode_for_sections ()
+{
+	Glib::RefPtr<ToggleAction> tact;
+
+	switch (current_mouse_mode ()) {
+		case Editing::MouseRange:
+			/* OK, no need to change mouse mode */
+			break;
+		case Editing::MouseObject:
+			/* "object-range" mode is not a distinct mouse mode, so
+			   we cannot use get_mouse_mode_action() here
+			*/
+			tact = ActionManager::get_toggle_action (X_("Editor"), "set-mouse-mode-object-range");
+			if (!tact) {
+				/* missing action */
+				fatal << X_("programming error: missing mouse-mode-object-range action") << endmsg;
+				/*NOTREACHED*/
+				break;
+			}
+			if (tact->get_active()) {
+				/* smart mode; OK, leave things as they are */
+				break;
+			}
+			/*fallthrough*/
+		default:
+			/* switch to range mode */
+			mouse_mode_actions[Editing::MouseRange]->set_active (true);
+			break;
+	}
 }
 
 void
@@ -2932,7 +2427,7 @@ Editor::remove_midi_note (ArdourCanvas::Item* item, GdkEvent *)
 	NoteBase* e = reinterpret_cast<NoteBase*> (item->get_data ("notebase"));
 	assert (e);
 
-	e->region_view().delete_note (e->note ());
+	e->midi_view().delete_note (e->note ());
 }
 
 /** Obtain the pointer position in canvas coordinates */
@@ -2947,59 +2442,101 @@ Editor::get_pointer_position (double& x, double& y) const
 void
 Editor::choose_mapping_drag (ArdourCanvas::Item* item, GdkEvent* event)
 {
-	if (item != mapping_cursor && item != mapping_bar) {
+
+	/* In a departure from convention, this event is not handled by a widget
+	 * 'on' the ruler-bar, like a tempo marker, but is instead handled by the
+	 * whole canvas. The intent is for the user to feel that they
+	 * are manipulating the 'beat and bar grid' which may or may not have tempo
+	 * markers already assigned at the point under the mouse.
+	 */
+
+	bool ignored;
+	samplepos_t where;
+
+	if (!mouse_sample (where, ignored)) {
 		return;
 	}
 
-	Temporal::TempoMap::WritableSharedPtr map = begin_tempo_mapping ();
+	/* if tempo-mapping, set a cursor to indicate whether we are close to a bar line, beat line, or neither */
+	bool ramped = false;
+	auto mouse_mode = current_mouse_mode ();
 
-	if (item == mapping_bar) {
-		/* Drag on the bar, not the cursor: just adjust tempo up or
-		 * down.
-		 */
-		_drags->set (new MappingLinearDrag (this, item, map), event);
-		std::cerr << ":Linear\n";
-		return;
+	if (mouse_mode == MouseGrid && item ==_canvas_grid_zone) {
+		GridType gt = determine_mapping_grid_snap (timepos_t (where));
+		if (gt == GridTypeBar) {
+			ramped = false;
+		} else if (gt == GridTypeBeat) {
+			ramped = true;
+		} else {
+			return; // neither a bar nor a beat; don't start a drag
+		}
 	}
 
-	/* Decide between a tempo twist drag, which we do if the
-	 * pointer is between two tempo markers, and a tempo stretch
-	 * drag, which we do if the pointer is after the last tempo
+	/* The reversible command starts here, must be ended/aborted in drag */
+	begin_reversible_command ("");
+	domain_bounce_info = new Temporal::DomainBounceInfo (Temporal::BeatTime, Temporal::AudioTime, should_stretch_markers());
+	Temporal::TempoMap::WritableSharedPtr map = begin_tempo_mapping (*domain_bounce_info);
+
+	/* Decide between a mid-twist, which we do if the
+	 * pointer is between two tempo markers, and an end-stretch,
+	 * which we do if the pointer is after the last tempo
 	 * marker before the end of the map or a BBT Marker.
 	 */
 
 	timepos_t pointer_time (canvas_event_sample (event, nullptr, nullptr));
-	Temporal::TempoPoint& tempo = const_cast<Temporal::TempoPoint&>(map->tempo_at (pointer_time));
+	TempoPoint& tempo = const_cast<TempoPoint&>(map->tempo_at (pointer_time));
 
+	TempoPoint* before = const_cast<TempoPoint*> (map->previous_tempo (tempo));
 	TempoPoint* after = const_cast<TempoPoint*> (map->next_tempo (tempo));
 
-	if (!after || dynamic_cast<MusicTimePoint*>(after)) {
-		/* This is the final tempo, or the next one is a BBT marker.
-		 * No twisting, just stretch this one.
-		*/
-		std::cerr << "stretch!\n";
-		_drags->set (new MappingStretchDrag (this, item, map), event);
-		std::cerr << ":Stretch\n";
-		return;
-	}
-
-	std::cerr << "Pointer time: " << pointer_time << std::endl;
-
-	BBT_Argument bbt = map->bbt_at (pointer_time);
-	std::cerr << " bbt " << bbt << std::endl;
-	bbt = BBT_Argument (bbt.reference(), bbt.round_to_beat ());
-	std::cerr << "rounded to " << bbt << " vs. " << tempo.bbt() << std::endl;
-
-	TempoPoint* before;
+	XMLNode* before_state = &map->get_state();
 	TempoPoint* focus;
 
-	/* Reversible command starts here, must be ended/aborted in drag */
+	bool at_end = false;
+	if (!after || dynamic_cast<MusicTimePoint*>(after)) {
+		at_end = true;
+	}
 
-	begin_reversible_command (_("map tempo/twist"));
-	XMLNode* before_state = &map->get_state();
+	BBT_Argument bbt = map->bbt_at (pointer_time);
+	Meter const & m = map->meter_at (pointer_time);
+	bbt = BBT_Argument (bbt.reference(), m.round_to_beat (bbt));
 
-	if (tempo.bbt() < bbt) {
+	/* Create a new marker, or use the one under the mouse */
 
+	if (tempo.bbt() == bbt) {
+
+		/* special case 1: we are on the right side of the FIRST marker: do not allow the user to manipulate the very first (session global) tempo */
+		if (!before) {
+			abort_tempo_mapping ();
+			abort_reversible_command ();
+			return;
+		}
+
+		focus = &tempo;
+
+		/* special case 2: if we are on the right side of the LAST marker: behave as if we clicked the marker prior*/
+		if (at_end) {
+			focus = before;
+		}
+
+	} else if ((after && after->bbt() == bbt )) {
+		before = const_cast<TempoPoint*> (&tempo);
+		focus = after;
+
+		/* special case 3: if we are on the left side of the LAST marker: behave as if we clicked the marker prior*/
+		TempoPoint* after_after = const_cast<TempoPoint*> (map->next_tempo (*focus));
+		if (after_after) {
+			after = after_after;
+		} else {
+			at_end = true;
+		}
+
+	} else if (ramped) {
+
+		/* User is dragging on a BEAT line (not a bar line) ... try to implement a tempo twist on the prior marker */
+		focus = &tempo;
+
+	} else {
 		/* Add a new tempo marker at the nearest beat point
 		   (essentially the snapped grab point for the drag), so that
 		   it becomes the middle one of three used by the twist tempo
@@ -3011,18 +2548,71 @@ Editor::choose_mapping_drag (ArdourCanvas::Item* item, GdkEvent* event)
 		TempoPoint& added = const_cast<TempoPoint&> (map->set_tempo (copied_no_ramp, bbt));
 		focus = &added;
 		reset_tempo_marks ();
-
-	} else {
-
-		before = const_cast<TempoPoint*> (map->previous_tempo (tempo));
-
-		if (!before) {
-			return;
-		}
-
-		focus = &tempo;
+		reset_bbt_marks ();
 	}
 
-	_drags->set (new MappingTwistDrag (this, item, map, *before, *focus, *after, *before_state), event);
+	/* Reversible commands get named here, now that we understand what we're doing */
 
+	if (at_end) {
+		_session->current_reversible_command()->set_name (_("tempo mapping: end-stretch"));
+		_drags->set (new MappingEndDrag (*this, item, map, tempo, *focus, *before_state), event);
+		return;
+	}
+
+	if (before && focus && after) {
+		_session->current_reversible_command()->set_name (_("tempo mapping: mid-twist"));
+		_drags->set (new MappingTwistDrag (*this, item, map, *before, *focus, *after, *before_state, ramped), event);
+	} else if (ramped && focus && after) {
+		/* special case 4: user is manipulating a beat line after the INITIAL tempo marker, so there is no prior marker*/
+		_session->current_reversible_command()->set_name (_("tempo mapping: mid-twist"));
+		before = focus; /* this is unused in MappingTwistDrag, when ramped is true, but let's not pass in garbage */
+		_drags->set (new MappingTwistDrag (*this, item, map, *before, *focus, *after, *before_state, ramped), event);
+	} else {
+		abort_tempo_mapping ();  /* NOTREACHED */
+	}
+}
+
+bool
+Editor::rb_click (GdkEvent* event, timepos_t const & where)
+{
+	bool                    do_deselect = true;
+	MidiTimeAxisView*       mtv;
+	AutomationTimeAxisView* atv;
+
+	if ((mtv = dynamic_cast<MidiTimeAxisView*> (clicked_axisview)) != 0) {
+		/* MIDI track */
+		if (get_selection().empty () && current_mouse_mode() == MouseDraw) {
+
+			/* nothing selected */
+
+			const timepos_t pos (where.beats ());
+			const timecnt_t len = pos.distance (max (timepos_t::zero (Temporal::BeatTime), timepos_t (pos.beats () + Beats (1, 0))));
+			mtv->add_region (pos, len, true);
+			do_deselect = false;
+		}
+	} else if ((atv = dynamic_cast<AutomationTimeAxisView*> (clicked_axisview)) != 0) {
+		atv->add_automation_event (event, where, event->button.y, false);
+		do_deselect = false;
+	}
+
+	return do_deselect;
+}
+
+void
+Editor::line_drag_click (GdkEvent* event, timepos_t const & where, double y)
+{
+	AutomationTimeAxisView* atv;
+
+	if ((atv = dynamic_cast<AutomationTimeAxisView*> (clicked_axisview)) != 0) {
+
+		atv->add_automation_event (event, where, y, false);
+
+	} else if (dynamic_cast<AudioTimeAxisView*> (clicked_axisview) != 0) {
+
+		AudioRegionView* arv;
+
+		if ((arv = dynamic_cast<AudioRegionView*> (clicked_regionview)) != 0) {
+			arv->add_gain_point_event (&arv->fx_line ()->grab_item (), event, false);
+		}
+	}
 }

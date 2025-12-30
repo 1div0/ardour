@@ -25,6 +25,7 @@
 
 #include <sstream>
 #include <algorithm>
+#include <regex>
 
 #ifdef COMPILER_MSVC
 #include <io.h> // Microsoft's nearest equivalent to <unistd.h>
@@ -59,13 +60,14 @@
 #include "ardour/rc_configuration.h"
 #include "ardour/midiport_manager.h"
 #include "ardour/debug.h"
+#include "ardour/well_known_enum.h"
 
 #include "generic_midi_control_protocol.h"
 #include "midicontrollable.h"
 #include "midifunction.h"
 #include "midiaction.h"
 
-#include "pbd/abstract_ui.cc" // instantiate template
+#include "pbd/abstract_ui.inc.cc" // instantiate template
 
 #include "pbd/i18n.h"
 
@@ -124,23 +126,23 @@ GenericMidiControlProtocol::GenericMidiControlProtocol (Session& s)
 	 * thread
 	 */
 
-	Controllable::StartLearning.connect_same_thread (*this, boost::bind (&GenericMidiControlProtocol::start_learning, this, _1));
-	Controllable::StopLearning.connect_same_thread (*this, boost::bind (&GenericMidiControlProtocol::stop_learning, this, _1));
+	Controllable::StartLearning.connect_same_thread (*this, std::bind (&GenericMidiControlProtocol::start_learning, this, _1));
+	Controllable::StopLearning.connect_same_thread (*this, std::bind (&GenericMidiControlProtocol::stop_learning, this, _1));
 
 	/* this signal is emitted by the process() callback, and if
 	 * send_feedback() is going to do anything, it should do it in the
 	 * context of the process() callback itself.
 	 */
 
-	Session::SendFeedback.connect_same_thread (*this, boost::bind (&GenericMidiControlProtocol::send_feedback, this));
+	Session::SendFeedback.connect_same_thread (*this, std::bind (&GenericMidiControlProtocol::send_feedback, this));
 
 	/* this one is cross-thread */
 
-	PresentationInfo::Change.connect (*this, MISSING_INVALIDATOR, boost::bind (&GenericMidiControlProtocol::reset_controllables, this), this);
+	PresentationInfo::Change.connect (*this, MISSING_INVALIDATOR, std::bind (&GenericMidiControlProtocol::reset_controllables, this), this);
 
 	/* Catch port connections and disconnections (cross-thread) */
 	ARDOUR::AudioEngine::instance()->PortConnectedOrDisconnected.connect (_port_connection, MISSING_INVALIDATOR,
-	                                                                      boost::bind (&GenericMidiControlProtocol::connection_handler, this, _1, _2, _3, _4, _5),
+	                                                                      std::bind (&GenericMidiControlProtocol::connection_handler, this, _1, _2, _3, _4, _5),
 	                                                                      this);
 
 	reload_maps ();
@@ -166,7 +168,6 @@ GenericMidiControlProtocol::~GenericMidiControlProtocol ()
 	}
 
 	drop_all ();
-	tear_down_gui ();
 }
 
 list<std::shared_ptr<ARDOUR::Bundle> >
@@ -299,6 +300,7 @@ GenericMidiControlProtocol::do_request (GenericMIDIRequest* req)
 int
 GenericMidiControlProtocol::stop ()
 {
+	tear_down_gui ();
 	BaseUI::quit ();
 
 	return 0;
@@ -307,8 +309,6 @@ GenericMidiControlProtocol::stop ()
 void
 GenericMidiControlProtocol::thread_init ()
 {
-	pthread_set_name (event_loop_name().c_str());
-
 	PBD::notify_event_loops_about_thread_creation (pthread_self(), event_loop_name(), 2048);
 	ARDOUR::SessionEvent::create_per_thread_pool (event_loop_name(), 128);
 
@@ -327,6 +327,7 @@ GenericMidiControlProtocol::set_active (bool yn)
 	if (yn) {
 		BaseUI::run ();
 	} else {
+		tear_down_gui ();
 		BaseUI::quit ();
 	}
 
@@ -463,7 +464,7 @@ GenericMidiControlProtocol::start_learning (std::weak_ptr <Controllable> wc)
 		Glib::Threads::Mutex::Lock lm (pending_lock);
 
 		MIDIPendingControllable* element = new MIDIPendingControllable (mc, own_mc);
-		c->LearningFinished.connect_same_thread (element->connection, boost::bind (&GenericMidiControlProtocol::learning_stopped, this, mc));
+		c->LearningFinished.connect_same_thread (element->connection, std::bind (&GenericMidiControlProtocol::learning_stopped, this, mc));
 
 		pending_controllables.push_back (element);
 	}
@@ -979,7 +980,7 @@ GenericMidiControlProtocol::reset_controllables ()
 }
 
 std::shared_ptr<Controllable>
-GenericMidiControlProtocol::lookup_controllable (const string & str) const
+GenericMidiControlProtocol::lookup_controllable (const string & str, MIDIControllable& mc) const
 {
 	std::shared_ptr<Controllable> c;
 
@@ -1029,24 +1030,13 @@ GenericMidiControlProtocol::lookup_controllable (const string & str) const
 	int id = 1;
 	string name;
 
-	static regex_t compiled_pattern;
-	static bool compiled = false;
-
-	if (!compiled) {
-		const char * const pattern = "^[BS]?[0-9]+";
-		/* this pattern compilation is not going to fail */
-		regcomp (&compiled_pattern, pattern, REG_EXTENDED|REG_NOSUB);
-		/* leak compiled pattern */
-		compiled = true;
-	}
-
 	/* Step 3: identify what "rest" looks like - name, or simple nueric, or
 	 * banked/selection specifier
 	 */
 
-	bool matched = (regexec (&compiled_pattern, rest[0].c_str(), 0, 0, 0) == 0);
+	static const std::regex pattern ("^[BS]?[0-9]+", std::regex::extended);
 
-	if (matched) {
+	if (std::regex_search (rest[0], pattern)) {
 		bool banked = false;
 
 		if (rest[0][0] == 'B') {
@@ -1238,7 +1228,7 @@ GenericMidiControlProtocol::lookup_controllable (const string & str) const
 		if (path.size() == 3) {
 
 			if (path[2] == X_("enable")) {
-				c = s->eq_enable_controllable ();
+				c = s->mapped_control (EQ_Enable);
 			}
 
 		} else if (path.size() == 4) {
@@ -1246,13 +1236,13 @@ GenericMidiControlProtocol::lookup_controllable (const string & str) const
 			int band = atoi (path[3]); /* band number */
 
 			if (path[2] == X_("gain")) {
-				c = s->eq_gain_controllable (band);
+				c = s->mapped_control (EQ_BandGain, band);
 			} else if (path[2] == X_("freq")) {
-				c = s->eq_freq_controllable (band);
+				c = s->mapped_control (EQ_BandFreq, band);
 			} else if (path[2] == X_("q")) {
-				c = s->eq_q_controllable (band);
+				c = s->mapped_control (EQ_BandQ, band);
 			} else if (path[2] == X_("shape")) {
-				c = s->eq_shape_controllable (band);
+				c = s->mapped_control (EQ_BandShape, band);
 			}
 		}
 
@@ -1271,34 +1261,129 @@ GenericMidiControlProtocol::lookup_controllable (const string & str) const
 			}
 
 			if (path[3] == X_("enable")) {
-				c = s->filter_enable_controllable (filter);
+				c = s->mapped_control (filter ? HPF_Enable : LPF_Enable);
 			} else if (path[3] == X_("freq")) {
-				c = s->filter_freq_controllable (filter);
+				c = s->mapped_control (filter ? HPF_Freq : LPF_Freq);
 			} else if (path[3] == X_("slope")) {
-				c = s->filter_slope_controllable (filter);
+				c = s->mapped_control (filter ? HPF_Slope : LPF_Slope);
 			}
 
 		}
-
-	} else if (path[1] == X_("compressor")) {
-
-		if (path.size() == 3) {
-			if (path[2] == X_("enable")) {
-				c = s->comp_enable_controllable ();
-			} else if (path[2] == X_("threshold")) {
-				c = s->comp_threshold_controllable ();
-			} else if (path[2] == X_("mode")) {
-				c = s->comp_mode_controllable ();
-			} else if (path[2] == X_("speed")) {
-				c = s->comp_speed_controllable ();
-			} else if (path[2] == X_("makeup")) {
-				c = s->comp_makeup_controllable ();
+	}
+	else if (path[1] == X_("compressor"))
+	{
+		if (path.size() == 3)
+		{
+			if (path[2] == X_("enable"))
+			{
+				c = s->mapped_control (Comp_Enable);
+			}
+			else if (path[2] == X_("threshold"))
+			{
+				c = s->mapped_control (Comp_Threshold);
+			}
+			else if (path[2] == X_("mode"))
+			{
+				c = s->mapped_control (Comp_Mode);
+			}
+			else if (path[2] == X_("attack"))
+			{
+				c = s->mapped_control (Comp_Attack);
+			}
+			else if (path[2] == X_("release"))
+			{
+				c = s->mapped_control (Comp_Release);
+			}
+			else if (path[2] == X_("makeup"))
+			{
+				c = s->mapped_control (Comp_Makeup);
+			}
+			else if (path[2] == X_("ratio"))
+			{
+				c = s->mapped_control (Comp_Ratio);
+			}
+			else if (path[2] == X_("key_filter_freq"))
+			{
+				c = s->mapped_control (Comp_KeyFilterFreq);
+			}
+		}
+	}
+	else if (path[1] == X_("gate"))
+	{
+		if (path.size() == 3)
+		{
+			if (path[2] == X_("enable"))
+			{
+				c = s->mapped_control (Gate_Enable);
+			}
+			else if (path[2] == X_("threshold"))
+			{
+				c = s->mapped_control (Gate_Threshold);
+			}
+			else if (path[2] == X_("mode"))
+			{
+				c = s->mapped_control (Gate_Mode);
+			}
+			else if (path[2] == X_("ratio"))
+			{
+				c = s->mapped_control (Gate_Ratio);
+			}
+			else if (path[2] == X_("knee"))
+			{
+				c = s->mapped_control (Gate_Knee);
+			}
+			else if (path[2] == X_("depth"))
+			{
+				c = s->mapped_control (Gate_Depth);
+			}
+			else if (path[2] == X_("hysteresis"))
+			{
+				c = s->mapped_control (Gate_Hysteresis);
+			}
+			else if (path[2] == X_("hold"))
+			{
+				c = s->mapped_control (Gate_Hold);
+			}
+			else if (path[2] == X_("attack"))
+			{
+				c = s->mapped_control (Gate_Attack);
+			}
+			else if (path[2] == X_("release"))
+			{
+				c = s->mapped_control (Gate_Release);
+			}
+			else if (path[2] == X_("key_listen"))
+			{
+				c = s->mapped_control (Gate_KeyListen);
+			}
+			else if (path[2] == X_("key_filter_enable"))
+			{
+				c = s->mapped_control (Gate_KeyFilterEnable);
+			}
+			else if (path[2] == X_("key_filter_freq"))
+			{
+				c = s->mapped_control (Gate_KeyFilterFreq);
+			}
+		}
+	}
+	else if (path[1] == X_("tape"))
+	{
+		if (path.size() == 3)
+		{
+			if (path[2] == X_("drive"))
+			{
+				c = s->mapped_control (TapeDrive_Drive);
+			}
+			else if (path[2] == X_("mode"))
+			{
+				c = s->mapped_control (TapeDrive_Mode);
 			}
 		}
 	}
 
 	if (c) {
 		DEBUG_TRACE (DEBUG::GenericMidi, string_compose ("found controllable \"%1\"\n", c->name()));
+		mc.bind_remap (r);
 	} else {
 		DEBUG_TRACE (DEBUG::GenericMidi, "no controllable found\n");
 	}

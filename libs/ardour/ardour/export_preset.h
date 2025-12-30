@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_export_preset_h__
-#define __ardour_export_preset_h__
+#pragma once
 
 #include <string>
 
@@ -35,7 +34,7 @@ class Session;
 
 class LIBARDOUR_API ExportPreset {
   public:
-	ExportPreset (std::string filename, Session & s);
+	ExportPreset (Session&, std::string const& filename = "");
 	~ExportPreset ();
 
 	PBD::UUID const & id () const { return _id; }
@@ -72,4 +71,3 @@ class LIBARDOUR_API ExportPreset {
 
 } // namespace ARDOUR
 
-#endif // __ardour_export_preset_h__

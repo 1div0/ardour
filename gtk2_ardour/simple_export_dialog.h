@@ -19,10 +19,10 @@
 #ifndef _gtkardour_simple_export_dialog_h_
 #define _gtkardour_simple_export_dialog_h_
 
-#include <gtkmm/button.h>
-#include <gtkmm/combobox.h>
-#include <gtkmm/label.h>
-#include <gtkmm/progressbar.h>
+#include <ytkmm/button.h>
+#include <ytkmm/combobox.h>
+#include <ytkmm/label.h>
+#include <ytkmm/progressbar.h>
 
 #include "ardour/simple_export.h"
 
@@ -39,7 +39,7 @@ namespace ARDOUR {
 class SimpleExportDialog : public ArdourDialog, virtual public ARDOUR::SimpleExport
 {
 public:
-	SimpleExportDialog (PublicEditor&);
+	SimpleExportDialog (PublicEditor&, bool vapor_export = false);
 
 	void set_session (ARDOUR::Session*);
 
@@ -84,6 +84,7 @@ private:
 	Gtk::ComboBoxText    _post_export_combo;
 	Gtk::Label           _error_label;
 	Gtk::ProgressBar     _progress_bar;
+	bool                 _vapor_export;
 
 	ExportRangeCols              _range_cols;
 	Glib::RefPtr<Gtk::ListStore> _range_list;

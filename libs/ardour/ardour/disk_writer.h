@@ -17,15 +17,15 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_disk_writer_h__
-#define __ardour_disk_writer_h__
+#pragma once
 
 #include <atomic>
 #include <list>
 #include <vector>
-#include <boost/optional.hpp>
+#include <optional>
 
 #include "ardour/disk_io.h"
+#include "ardour/event_ring_buffer.h"
 #include "ardour/midi_buffer.h"
 
 namespace ARDOUR
@@ -63,7 +63,7 @@ public:
 	std::string write_source_name () const;
 
 	std::shared_ptr<AudioFileSource> audio_write_source (uint32_t n = 0) {
-		std::shared_ptr<ChannelList> c = channels.reader ();
+		std::shared_ptr<ChannelList const> c = channels.reader ();
 		if (n < c->size ()) {
 			return (*c)[n]->write_source;
 		}
@@ -74,16 +74,18 @@ public:
 
 	std::string steal_write_source_name ();
 	int use_new_write_source (DataType, uint32_t n = 0);
-	void reset_write_sources (bool, bool force = false);
+	void reset_write_sources (bool mark_write_complete);
 
 	AlignStyle alignment_style () const { return _alignment_style; }
 	void       set_align_style (AlignStyle, bool force = false);
 
-	PBD::Signal0<void> AlignmentStyleChanged;
+	PBD::Signal<void()> AlignmentStyleChanged;
 
 	bool configure_io (ChanCount in, ChanCount out);
+	bool can_support_io_configuration (const ChanCount& in, ChanCount& out);
 
-	std::list<std::shared_ptr<Source> >& last_capture_sources () { return _last_capture_sources; }
+	std::list<std::shared_ptr<Source>>& last_capture_sources ();
+	void reset_last_capture_sources ();
 
 	bool record_enabled () const { return _record_enabled.load(); }
 	bool record_safe () const { return _record_safe.load(); }
@@ -103,7 +105,7 @@ public:
 
 	int seek (samplepos_t sample, bool complete_refill);
 
-	static PBD::Signal0<void> Overrun;
+	static PBD::Signal<void()> Overrun;
 
 	void set_note_mode (NoteMode m);
 
@@ -111,10 +113,10 @@ public:
 	 *  Parameter is the source that it is destined for.
 	 *  A caller can get a copy of the data with get_gui_feed_buffer ()
 	 */
-	PBD::Signal1<void, std::weak_ptr<MidiSource> > DataRecorded;
+	PBD::Signal<void(std::weak_ptr<MidiSource> )> DataRecorded;
 
-	PBD::Signal0<void> RecordEnableChanged;
-	PBD::Signal0<void> RecordSafeChanged;
+	PBD::Signal<void()> RecordEnableChanged;
+	PBD::Signal<void()> RecordSafeChanged;
 
 	void transport_looped (samplepos_t transport_sample);
 	void transport_stopped_wallclock (struct tm&, time_t, bool abort);
@@ -161,7 +163,7 @@ private:
 	                             samplecnt_t& rec_offset);
 
 	void check_record_status (samplepos_t transport_sample, double speed, bool can_record);
-	void finish_capture (std::shared_ptr<ChannelList> c);
+	void finish_capture (std::shared_ptr<ChannelList const> c);
 	void reset_capture ();
 
 	void loop (samplepos_t);
@@ -169,7 +171,9 @@ private:
 	CaptureInfos                 capture_info;
 	mutable Glib::Threads::Mutex capture_info_lock;
 
-	boost::optional<samplepos_t> _capture_start_sample;
+	samplepos_t get_capture_start_sample_locked (uint32_t n = 0) const;
+
+	std::optional<samplepos_t> _capture_start_sample;
 
 	samplecnt_t   _capture_captured;
 	bool          _was_recording;
@@ -190,6 +194,7 @@ private:
 	std::atomic<int> _record_safe;
 	std::atomic<int> _samples_pending_write;
 	std::atomic<int> _num_captured_loops;
+	std::atomic<int> _reset_last_capture_sources;
 
 	std::shared_ptr<SMFSource> _midi_write_source;
 
@@ -199,10 +204,9 @@ private:
 	/** A buffer that we use to put newly-arrived MIDI data in for
 	 * the GUI to read (so that it can update itself).
 	 */
-	MidiBuffer                   _gui_feed_buffer;
-	mutable Glib::Threads::Mutex _gui_feed_buffer_mutex;
+	mutable EventRingBuffer<samplepos_t> _gui_feed_fifo;
+	mutable Glib::Threads::Mutex         _gui_feed_reset_mutex;
 };
 
 } // namespace
 
-#endif /* __ardour_disk_writer_h__ */

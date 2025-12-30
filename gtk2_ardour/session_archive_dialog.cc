@@ -16,8 +16,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "ardour/filename_extensions.h"
 
@@ -34,14 +34,12 @@ using namespace ARDOUR;
 SessionArchiveDialog::SessionArchiveDialog ()
 	: ArdourDialog (_("Zip/Archive Current Session"))
 	, ProgressReporter ()
+	, format_Label (ARDOUR::session_archive_suffix)
 	, only_used_checkbox (_("Exclude unused audio sources"))
 {
 	VBox* vbox = get_vbox();
 
 	vbox->set_spacing (6);
-
-	format_selector.append (ARDOUR::session_archive_suffix);
-	format_selector.set_active_text (ARDOUR::session_archive_suffix);
 
 	encode_selector.append (_("None"));
 	encode_selector.append (_("FLAC 16bit"));
@@ -66,7 +64,7 @@ SessionArchiveDialog::SessionArchiveDialog ()
 	HBox* hbox = manage (new HBox);
 	hbox->set_spacing (6);
 	hbox->pack_start (name_entry, true, true);
-	hbox->pack_start (format_selector, false, false);
+	hbox->pack_start (format_Label, false, false);
 	table->attach (*hbox, 1, 2, row, row + 1, Gtk::FILL | Gtk::EXPAND, Gtk::SHRINK);
 
 	++row;
@@ -110,7 +108,6 @@ SessionArchiveDialog::SessionArchiveDialog ()
 	target_folder_selector.set_action (FILE_CHOOSER_ACTION_SELECT_FOLDER);
 	target_folder_selector.set_current_folder (Config->get_default_session_parent_dir ()); // TODO get/set default_archive_dir
 	name_entry.signal_changed().connect (sigc::mem_fun (*this, &SessionArchiveDialog::name_entry_changed));
-	target_folder_selector.signal_current_folder_changed().connect (sigc::mem_fun (*this, &SessionArchiveDialog::name_entry_changed));
 	target_folder_selector.signal_selection_changed().connect (sigc::mem_fun (*this, &SessionArchiveDialog::name_entry_changed));
 	set_response_sensitive (RESPONSE_OK, false);
 }
@@ -124,7 +121,7 @@ SessionArchiveDialog::name_entry_changed ()
 		return;
 	}
 
-	std::string dir = Glib::build_filename (target_folder(), name_entry.get_text() + format_selector.get_active_text ());
+	std::string dir = Glib::build_filename (target_folder(), name_entry.get_text() + ARDOUR::session_archive_suffix);
 
 	if (Glib::file_test (dir, Glib::FILE_TEST_EXISTS)) {
 		set_response_sensitive (RESPONSE_OK, false);
@@ -230,10 +227,20 @@ SessionArchiveDialog::set_compression_level (PBD::FileArchive::CompressionLevel 
 }
 
 void
-SessionArchiveDialog::update_progress_gui (float p)
+SessionArchiveDialog::on_response (int response_id)
 {
 	set_response_sensitive (RESPONSE_OK, false);
-	set_response_sensitive (RESPONSE_CANCEL, false);
+	if (response_id != Gtk::RESPONSE_OK) {
+		set_response_sensitive (RESPONSE_CANCEL, false);
+		cancel ();
+	}
+	Gtk::Dialog::on_response (response_id);
+}
+
+void
+SessionArchiveDialog::update_progress_gui (float p)
+{
+
 	progress_bar.show ();
 	if (p < 0) {
 		progress_bar.set_text (_("Archiving Session"));

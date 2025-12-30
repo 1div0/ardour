@@ -151,7 +151,7 @@ CueLayout::CueLayout (Push2& p, Session & s, std::string const & name)
 		_clip_label_text.push_back (t);
 	}
 
-	_session.RouteAdded.connect (_session_connections, invalidator(*this), boost::bind (&CueLayout::viewport_changed, this), &_p2);
+	_session.RouteAdded.connect (_session_connections, invalidator(*this), std::bind (&CueLayout::viewport_changed, this), &_p2);
 }
 
 CueLayout::~CueLayout ()
@@ -289,7 +289,7 @@ CueLayout::button_lower (uint32_t n)
 		tb->stop_all_quantized ();
 	} else {
 		/* select track */
-		_session.selection().set (_route[n], std::shared_ptr<AutomationControl>());
+		_session.selection().select_stripable_and_maybe_group (_route[n], SelectionSet);
 	}
 }
 
@@ -375,8 +375,8 @@ CueLayout::viewport_changed ()
 		std::shared_ptr<Push2::Button> lower_button = _p2.lower_button_by_column (n);
 
 		if (r) {
-			_route[n]->DropReferences.connect (_route_connections, invalidator (*this), boost::bind (&CueLayout::viewport_changed, this), &_p2);
-			_route[n]->presentation_info().PropertyChanged.connect (_route_connections, invalidator (*this), boost::bind (&CueLayout::route_property_change, this, _1, n), &_p2);
+			_route[n]->DropReferences.connect (_route_connections, invalidator (*this), std::bind (&CueLayout::viewport_changed, this), &_p2);
+			_route[n]->presentation_info().PropertyChanged.connect (_route_connections, invalidator (*this), std::bind (&CueLayout::route_property_change, this, _1, n), &_p2);
 
 			std::string shortname = short_version (r->name(), 10);
 			_lower_text[n]->set (shortname);
@@ -425,17 +425,17 @@ CueLayout::viewport_changed ()
 			std::shared_ptr<TriggerBox> tb = r->triggerbox ();
 
 			if (tb) {
-				tb->PropertyChanged.connect (_route_connections, invalidator (*this), boost::bind (&CueLayout::triggerbox_property_change, this, _1, n), &_p2);
+				tb->PropertyChanged.connect (_route_connections, invalidator (*this), std::bind (&CueLayout::triggerbox_property_change, this, _1, n), &_p2);
 			}
 
 			for (int y = 0; y < 8; ++y) {
 				std::shared_ptr<Push2::Pad> pad = _p2.pad_by_xy (n, y);
 				if (tb && tb->active()) {
 					TriggerPtr tp = tb->trigger (y);
-					if (tp && tp->region()) {
+					if (tp && tp->playable()) {
 						/* trigger in slot */
 						pad->set_color (color);
-						tp->PropertyChanged.connect (_trig_connections[n * 8 + y], invalidator (*this), boost::bind (&CueLayout::trigger_property_change, this, _1, n, y), &_p2);
+						tp->PropertyChanged.connect (_trig_connections[n * 8 + y], invalidator (*this), std::bind (&CueLayout::trigger_property_change, this, _1, n, y), &_p2);
 
 					} else {
 						/* no trigger */
@@ -569,7 +569,7 @@ CueLayout::show_running_boxen (bool yn)
 }
 
 void
-CueLayout::pad_press (int y, int x) /* fix coordinate order one day */
+CueLayout::pad_press (int y, int x, int velocity) /* fix coordinate order one day */
 {
 	if (!_route[x]) {
 		return;
@@ -582,7 +582,7 @@ CueLayout::pad_press (int y, int x) /* fix coordinate order one day */
 		return;
 	}
 
-	tb->bang_trigger_at (y + scene_base);
+	tb->bang_trigger_at (y + scene_base, velocity / 127.0f);
 }
 
 void
@@ -780,7 +780,7 @@ CueLayout::set_pad_color_from_trigger_state (int col, std::shared_ptr<Push2::Pad
 		return;
 	}
 
-	if (trig->region()) {
+	if (trig->playable()) {
 
 		if (trig->active()) {
 

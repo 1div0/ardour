@@ -22,9 +22,7 @@
 
 #include <vector>
 
-#include <sys/time.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
 
@@ -56,7 +54,7 @@ using namespace ARDOUR;
 using namespace PBD;
 using namespace Glib;
 
-PBD::Signal2<int,std::string,std::vector<std::string> > FileSource::AmbiguousFileName;
+PBD::Signal<int(std::string,std::vector<std::string> )> FileSource::AmbiguousFileName;
 
 FileSource::FileSource (Session& session, DataType type, const string& path, const string& origin, Source::Flag flag)
 	: Source(session, type, path, flag)
@@ -530,6 +528,12 @@ FileSource::mark_nonremovable ()
 }
 
 void
+FileSource::mark_removable ()
+{
+        _flags = Flag (_flags | (Removable|RemovableIfEmpty|RemoveAtDestroy));
+}
+
+void
 FileSource::set_within_session_from_path (const std::string& path)
 {
 	_within_session = _session.path_is_within_session (path);
@@ -555,12 +559,6 @@ FileSource::replace_file (const std::string& newpath)
 	close ();
 	_path = newpath;
 	_name = Glib::path_get_basename (newpath);
-}
-
-void
-FileSource::inc_use_count ()
-{
-        Source::inc_use_count ();
 }
 
 bool

@@ -14,18 +14,7 @@ EVORAL_VERSION = '0.0.0'
 #   0.0.0 = 0,0,0
 EVORAL_LIB_VERSION = '0.0.0'
 
-# Variables for 'waf dist'
-APPNAME = 'evoral'
-VERSION = EVORAL_VERSION
-
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    opt.load('compiler_c')
-    opt.load('compiler_cxx')
-    autowaf.set_options(opt)
     opt.add_option('--test', action='store_true', default=False, dest='build_tests',
                     help="Build unit tests")
     opt.add_option('--test-coverage', action='store_true', default=False, dest='test_coverage',
@@ -73,7 +62,7 @@ def build(bld):
     libsmf.uselib       = 'GLIB'
     libsmf.use          = [ 'libtemporal' ]
     libsmf.install_path = None
-    if bld.env['build_target'] != 'mingw':
+    if bld.env['build_target'] != 'mingw' and bld.env['build_target'] != 'msvc':
         libsmf.cxxflags     = [ bld.env['compiler_flags_dict']['pic'] ]
         libsmf.cflags       = [ bld.env['compiler_flags_dict']['pic'] ]
 
@@ -151,8 +140,8 @@ def build(bld):
             obj.cxxflags       = ['--coverage']
 
 def test(ctx):
-    autowaf.pre_test(ctx, APPNAME)
+    autowaf.pre_test(ctx, 'evoral')
     print(os.getcwd())
     os.environ['EVORAL_TEST_PATH'] = os.path.abspath('../test/testdata/')
-    autowaf.run_tests(ctx, APPNAME, ['./run-tests'])
-    autowaf.post_test(ctx, APPNAME)
+    autowaf.run_tests(ctx, 'evoral', ['./run-tests'])
+    autowaf.post_test(ctx, 'evoral')

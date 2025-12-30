@@ -30,6 +30,7 @@
 #include <glibmm/miscutils.h>
 
 #include "pbd/error.h"
+#include "pbd/memento_command.h"
 
 #include "temporal/timeline.h"
 
@@ -45,6 +46,7 @@
 #include "ardour/plugin_insert.h"
 #include "ardour/record_enable_control.h"
 #include "ardour/session.h"
+#include "ardour/surround_pannable.h"
 #include "ardour/uri_map.h"
 #include "ardour/value_as_string.h"
 
@@ -59,19 +61,20 @@ bool Automatable::skip_saving_automation = false;
 
 const string Automatable::xml_node_name = X_("Automation");
 
-Automatable::Automatable(Session& session, Temporal::TimeDomain td)
+Automatable::Automatable(Session& session, Temporal::TimeDomainProvider const & tdp)
 	: ControlSet ()
+	, TimeDomainProvider (tdp)
 	, _a_session(session)
-	, _automated_controls (new ControlList ())
-	, _time_domain (td)
+	, _automated_controls (new AutomationControlList ())
 {
 }
 
 Automatable::Automatable (const Automatable& other)
 	: ControlSet (other)
 	, Slavable ()
+	, TimeDomainProvider (other.time_domain(), other._a_session)
 	, _a_session (other._a_session)
-	, _automated_controls (new ControlList)
+	, _automated_controls (new AutomationControlList)
 {
 	Glib::Threads::Mutex::Lock lm (other._control_lock);
 
@@ -84,8 +87,8 @@ Automatable::Automatable (const Automatable& other)
 Automatable::~Automatable ()
 {
 	{
-		RCUWriter<ControlList> writer (_automated_controls);
-		std::shared_ptr<ControlList> cl = writer.get_copy ();
+		RCUWriter<AutomationControlList> writer (_automated_controls);
+		std::shared_ptr<AutomationControlList> cl = writer.get_copy ();
 		cl->clear ();
 	}
 	_automated_controls.flush ();
@@ -170,7 +173,7 @@ Automatable::add_control(std::shared_ptr<Evoral::Control> ac)
 	if ((!actl || !(actl->flags() & Controllable::NotAutomatable)) && al) {
 		al->automation_state_changed.connect_same_thread (
 			_list_connections,
-			boost::bind (&Automatable::automation_list_automation_state_changed,
+			std::bind (&Automatable::automation_list_automation_state_changed,
 			             this, ac->parameter(), _1));
 	}
 
@@ -193,6 +196,8 @@ Automatable::describe_parameter (Evoral::Parameter param)
 		return _("Fader");
 	} else if (param.type() == BusSendLevel) {
 		return _("Send");
+	} else if (param.type() == SurroundSendLevel) {
+		return _("Send");
 	} else if (param.type() == InsertReturnLevel) {
 		return _("Return");
 	} else if (param.type() == TrimAutomation) {
@@ -207,8 +212,28 @@ Automatable::describe_parameter (Evoral::Parameter param)
 		return _("Width");
 	} else if (param.type() == PanElevationAutomation) {
 		return _("Elevation");
+	} else if (param.type() == PanSurroundX) {
+		return _("Left/Right");
+	} else if (param.type() == PanSurroundY) {
+		return _("Front/Back");
+	} else if (param.type() == PanSurroundZ) {
+		return _("Elevation");
+	} else if (param.type() == PanSurroundSize) {
+		return _("Object Size");
+	} else if (param.type() == PanSurroundSnap) {
+		return _("Snap to Speaker");
+	} else if (param.type() == BinauralRenderMode) {
+		return _("Binaural Render mode");
+	} else if (param.type() == PanSurroundElevationEnable) {
+		return X_("hidden");
+	} else if (param.type() == PanSurroundZones) {
+		return X_("hidden");
+	} else if (param.type() == PanSurroundRamp) {
+		return X_("hidden");
 	} else if (param.type() == PhaseAutomation) {
 		return _("Polarity Invert");
+	} else if (param.type() == MidiVelocityAutomation) {
+		return _("Velocity");
 	} else if (param.type() == MidiCCAutomation) {
 		return string_compose("Controller %1 [%2]", param.id(), int(param.channel()) + 1);
 	} else if (param.type() == MidiPgmChangeAutomation) {
@@ -322,6 +347,10 @@ Automatable::get_automation_xml_state () const
 	}
 
 	for (Controls::const_iterator li = controls().begin(); li != controls().end(); ++li) {
+		std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl>(li->second);
+		if (ac && (ac->flags() & Controllable::NotAutomatable)) {
+			continue;
+		}
 		std::shared_ptr<AutomationList> l = std::dynamic_pointer_cast<AutomationList>(li->second->list());
 		if (l) {
 			node->add_child_nocopy (l->get_state ());
@@ -476,8 +505,8 @@ void
 Automatable::automation_run (samplepos_t start, pframes_t nframes, bool only_active)
 {
 	if (only_active) {
-		std::shared_ptr<ControlList> cl = _automated_controls.reader ();
-		for (ControlList::const_iterator ci = cl->begin(); ci != cl->end(); ++ci) {
+		std::shared_ptr<AutomationControlList const> cl = _automated_controls.reader ();
+		for (AutomationControlList::const_iterator ci = cl->begin(); ci != cl->end(); ++ci) {
 			(*ci)->automation_run (start, nframes);
 		}
 		return;
@@ -500,10 +529,10 @@ Automatable::automation_list_automation_state_changed (Evoral::Parameter const& 
 		std::shared_ptr<AutomationControl> c (automation_control(param));
 		assert (c && c->list());
 
-		RCUWriter<ControlList> writer (_automated_controls);
-		std::shared_ptr<ControlList> cl = writer.get_copy ();
+		RCUWriter<AutomationControlList> writer (_automated_controls);
+		std::shared_ptr<AutomationControlList> cl = writer.get_copy ();
 
-		ControlList::iterator fi = std::find (cl->begin(), cl->end(), c);
+		AutomationControlList::iterator fi = std::find (cl->begin(), cl->end(), c);
 		if (fi != cl->end()) {
 			cl->erase (fi);
 		}
@@ -525,7 +554,7 @@ Automatable::automation_list_automation_state_changed (Evoral::Parameter const& 
 std::shared_ptr<Evoral::Control>
 Automatable::control_factory(const Evoral::Parameter& param)
 {
-	Evoral::Control*                  control   = NULL;
+	Evoral::Control*                  control   = nullptr;
 	bool                              make_list = true;
 	ParameterDescriptor               desc(param);
 	std::shared_ptr<AutomationList> list;
@@ -540,7 +569,7 @@ Automatable::control_factory(const Evoral::Parameter& param)
 		PluginInsert* pi = dynamic_cast<PluginInsert*>(this);
 		if (pi) {
 			pi->plugin(0)->get_parameter_descriptor(param.id(), desc);
-			control = new PluginInsert::PluginControl(pi, param, desc);
+			control = new PluginInsert::PIControl (_a_session, pi, param, desc);
 		} else {
 			warning << "PluginAutomation for non-Plugin" << endl;
 		}
@@ -552,9 +581,9 @@ Automatable::control_factory(const Evoral::Parameter& param)
 				if (!Variant::type_is_numeric(desc.datatype)) {
 					make_list = false;  // Can't automate non-numeric data yet
 				} else {
-					list = std::shared_ptr<AutomationList>(new AutomationList(param, desc, Temporal::AudioTime));
+					list = std::shared_ptr<AutomationList>(new AutomationList(param, desc, Temporal::TimeDomainProvider (Temporal::AudioTime)));
 				}
-				control = new PluginInsert::PluginPropertyControl(pi, param, desc, list);
+				control = new PluginInsert::PluginPropertyControl (_a_session, pi, param, desc, list);
 			}
 		} else {
 			warning << "PluginPropertyAutomation for non-Plugin" << endl;
@@ -569,38 +598,43 @@ Automatable::control_factory(const Evoral::Parameter& param)
 		control = new GainControl(_a_session, param);
 	} else if (param.type() == BusSendLevel) {
 		control = new GainControl(_a_session, param);
+	} else if (param.type() == SurroundSendLevel) {
+		control = new GainControl(_a_session, param);
+	} else if (param.type() == PanSurroundX || param.type() == PanSurroundY || param.type() == PanSurroundZ || param.type() == PanSurroundSize || param.type() == PanSurroundSnap || param.type() == BinauralRenderMode) {
+		assert (0);
+		control = new SurroundControllable (_a_session, param.type(), *this);
 	} else if (param.type() == PanAzimuthAutomation || param.type() == PanWidthAutomation || param.type() == PanElevationAutomation) {
 		Pannable* pannable = dynamic_cast<Pannable*>(this);
 		if (pannable) {
-			control = new PanControllable (_a_session, describe_parameter (param), pannable, param, time_domain());
+			control = new PanControllable (_a_session, describe_parameter (param), pannable, param, *this);
 		} else {
 			warning << "PanAutomation for non-Pannable" << endl;
 		}
 	} else if (param.type() == RecEnableAutomation) {
 		Recordable* re = dynamic_cast<Recordable*> (this);
 		if (re) {
-			control = new RecordEnableControl (_a_session, X_("recenable"), *re, time_domain());
+			control = new RecordEnableControl (_a_session, X_("recenable"), *re, *this);
 		}
 	} else if (param.type() == MonitoringAutomation) {
 		Monitorable* m = dynamic_cast<Monitorable*>(this);
 		if (m) {
-			control = new MonitorControl (_a_session, X_("monitor"), *m, time_domain());
+			control = new MonitorControl (_a_session, X_("monitor"), *m, *this);
 		}
 	} else if (param.type() == SoloAutomation) {
 		Soloable* s = dynamic_cast<Soloable*>(this);
 		Muteable* m = dynamic_cast<Muteable*>(this);
 		if (s && m) {
-			control = new SoloControl (_a_session, X_("solo"), *s, *m, time_domain());
+			control = new SoloControl (_a_session, X_("solo"), *s, *m, *this);
 		}
 	} else if (param.type() == MuteAutomation) {
 		Muteable* m = dynamic_cast<Muteable*>(this);
 		if (m) {
-			control = new MuteControl (_a_session, X_("mute"), *m, time_domain());
+			control = new MuteControl (_a_session, X_("mute"), *m, *this);
 		}
 	}
 
 	if (make_list && !list) {
-		list = std::shared_ptr<AutomationList>(new AutomationList(param, desc, time_domain()));
+		list = std::shared_ptr<AutomationList>(new AutomationList(param, desc, *this));
 	}
 
 	if (!control) {
@@ -661,8 +695,8 @@ Automatable::find_next_event (timepos_t const & start, timepos_t const & end, Ev
 	next_event.when = start <= end ? timepos_t::max (start.time_domain()) : timepos_t (start.time_domain());
 
 	if (only_active) {
-		std::shared_ptr<ControlList> cl = _automated_controls.reader ();
-		for (ControlList::const_iterator ci = cl->begin(); ci != cl->end(); ++ci) {
+		std::shared_ptr<AutomationControlList const> cl = _automated_controls.reader ();
+		for (AutomationControlList::const_iterator ci = cl->begin(); ci != cl->end(); ++ci) {
 			if ((*ci)->automation_playback()) {
 				if (start <= end) {
 					find_next_ac_event (*ci, start, end, next_event);
@@ -684,11 +718,11 @@ Automatable::find_next_event (timepos_t const & start, timepos_t const & end, Ev
 			}
 		}
 	}
-	return next_event.when != (start <= end ? timepos_t::max (start.time_domain()) : timepos_t (start.time_domain()));
+	return next_event.when != (start <= end ? timepos_t::max (next_event.when.time_domain ()) : timepos_t (next_event.when.time_domain ()));
 }
 
 void
-Automatable::find_next_ac_event (std::shared_ptr<AutomationControl> c, timepos_t const & start, timepos_t const & end, Evoral::ControlEvent& next_event) const
+Automatable::find_next_ac_event (std::shared_ptr<AutomationControl> c, timepos_t const & start, timepos_t const & end, Evoral::ControlEvent& next_event)
 {
 	assert (start <= end);
 
@@ -715,7 +749,7 @@ Automatable::find_next_ac_event (std::shared_ptr<AutomationControl> c, timepos_t
 }
 
 void
-Automatable::find_prev_ac_event (std::shared_ptr<AutomationControl> c, timepos_t const & start, timepos_t const & end, Evoral::ControlEvent& next_event) const
+Automatable::find_prev_ac_event (std::shared_ptr<AutomationControl> c, timepos_t const & start, timepos_t const & end, Evoral::ControlEvent& next_event)
 {
 	assert (start > end);
 	std::shared_ptr<SlavableAutomationControl> sc
@@ -738,5 +772,32 @@ Automatable::find_prev_ac_event (std::shared_ptr<AutomationControl> c, timepos_t
 			next_event.when = (*i)->when;
 		}
 		++i;
+	}
+}
+
+void
+Automatable::start_domain_bounce (Temporal::DomainBounceInfo& cmd)
+{
+	for (auto & c : _controls) {
+		std::shared_ptr<Evoral::ControlList> cl = c.second->list();
+		if (cl && cl->time_domain() != cmd.to) {
+			std::shared_ptr<AutomationList> al (std::dynamic_pointer_cast<AutomationList> (cl));
+			_a_session.add_command (new MementoCommand<AutomationList> (*(al.get()), &al->get_state(), nullptr));
+		}
+	}
+	ControlSet::start_domain_bounce (cmd);
+}
+
+void
+Automatable::finish_domain_bounce (Temporal::DomainBounceInfo& cmd)
+{
+	ControlSet::finish_domain_bounce (cmd);
+
+	for (auto & c : _controls) {
+		std::shared_ptr<Evoral::ControlList> cl = c.second->list();
+		if (cl && cl->time_domain() != cmd.to) {
+			std::shared_ptr<AutomationList> al (std::dynamic_pointer_cast<AutomationList> (cl));
+			_a_session.add_command (new MementoCommand<AutomationList> (*(al.get()), nullptr, &al->get_state()));
+		}
 	}
 }

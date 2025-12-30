@@ -19,16 +19,15 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_time_fx_dialog_h__
-#define __ardour_time_fx_dialog_h__
+#pragma once
 
-#include <gtkmm/adjustment.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/progressbar.h>
-#include <gtkmm/box.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/label.h>
-#include <gtkmm/button.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/progressbar.h>
+#include <ytkmm/box.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/label.h>
+#include <ytkmm/button.h>
 
 #include "ardour/timefx_request.h"
 
@@ -42,7 +41,7 @@ class TimeFXDialog : public ArdourDialog, public ProgressReporter
 {
 public:
 	/* We need a position so that BBT mode in the clock can function */
-	TimeFXDialog (Editor& e, bool for_pitch, Temporal::timecnt_t const & old_length, Temporal::timecnt_t const & new_length, Temporal::ratio_t const &, Temporal::timepos_t const & position);
+	TimeFXDialog (Editor& e, bool for_pitch, Temporal::timecnt_t const & old_length, Temporal::timecnt_t const & new_length, Temporal::ratio_t const &, Temporal::timepos_t const & position, bool fixed_end);
 
 	ARDOUR::TimeFXRequest request;
 	Editor&               editor;
@@ -50,14 +49,15 @@ public:
 	Gtk::ProgressBar      progress_bar;
 	ARDOUR::RegionList    regions;
 
+	Gtk::ComboBoxText     stretch_opts_selector;
+	Gtk::Label            stretch_opts_label;
+	Gtk::VBox             upper_button_box;
+
 	/* SoundTouch */
 	Gtk::CheckButton      quick_button;
 	Gtk::CheckButton      antialias_button;
-	Gtk::VBox             upper_button_box;
 
 	/* RubberBand */
-	Gtk::ComboBoxText     stretch_opts_selector;
-	Gtk::Label            stretch_opts_label;
 	Gtk::CheckButton      precise_button;
 	Gtk::CheckButton      preserve_formants_button;
 
@@ -65,6 +65,7 @@ public:
 	Gtk::Button*          action_button;
 	Gtk::VBox             packer;
 	int                   status;
+	bool                  fixed_end;
 
 	sigc::connection first_cancel;
 	sigc::connection first_delete;
@@ -105,6 +106,6 @@ private:
 	void duration_clock_changed ();
 	void duration_adjustment_changed ();
 	void timer_update ();
+	void options_changed ();
 };
 
-#endif /* __ardour_time_fx_dialog_h__ */

@@ -33,13 +33,13 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 
-#include <gtkmm/accelkey.h>
-#include <gtkmm/accelmap.h>
-#include <gtkmm/label.h>
-#include <gtkmm/separator.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/treemodelsort.h>
-#include <gtkmm/uimanager.h>
+#include <ytkmm/accelkey.h>
+#include <ytkmm/accelmap.h>
+#include <ytkmm/label.h>
+#include <ytkmm/separator.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/treemodelsort.h>
+#include <ytkmm/uimanager.h>
 
 #include "gtkmm2ext/bindings.h"
 #include "gtkmm2ext/utils.h"
@@ -47,6 +47,7 @@
 #include "pbd/error.h"
 #include "pbd/openuri.h"
 #include "pbd/strsplit.h"
+#include "pbd/unwind.h"
 
 #include "ardour/filesystem_paths.h"
 #include "ardour/profile.h"
@@ -492,22 +493,38 @@ KeyEditor::Tab::visible_func(const Gtk::TreeModel::const_iterator& iter) const
 	}
 
 	// never filter when search string is empty or item is a category
-	if (owner.filter_string.empty () || !(*iter)[columns.bindable]) {
+	if (owner.filter_string.empty ()) {
 		return true;
 	}
 
-	// search name
-	std::string name = (*iter)[columns.name];
-	boost::to_lower (name);
-	if (name.find (owner.filter_string) != std::string::npos) {
-		return true;
+	if (!(*iter)[columns.bindable]) {
+
+		for (auto const & c : iter->children()) {
+			if (visible_func (c)) {
+				TreeModel::Path p (data_model->get_path (iter));
+				view.expand_row (p, false);
+				return true;
+			}
+		}
+
+		return false;
 	}
 
-	// search binding
-	std::string binding = (*iter)[columns.binding];
-	boost::to_lower (binding);
-	if (binding.find (owner.filter_string) != std::string::npos) {
-		return true;
+	if (owner.filter_string.find ("k:") == string::npos) {
+		// search name
+		std::string name = (*iter)[columns.name];
+		boost::to_lower (name);
+		if (name.find (owner.filter_string) != std::string::npos) {
+			return true;
+		}
+	} else {
+		string s = owner.filter_string.substr (2);
+		// search binding
+		std::string binding = (*iter)[columns.binding];
+		boost::to_lower (binding);
+		if (binding.find (s) != std::string::npos) {
+			return true;
+		}
 	}
 
 	return false;

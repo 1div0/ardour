@@ -23,7 +23,7 @@ class Rx1
 public:
 	Rx1 (Tx& sender)
 	{
-		sender.sig1.connect_same_thread (_connection, boost::bind (&Rx1::cb, this, _1));
+		sender.sig1.connect_same_thread (_connection, std::bind (&Rx1::cb, this, _1));
 	}
 
 private:
@@ -46,7 +46,7 @@ public:
 		run_loop_thread = Glib::Threads::Thread::self ();
 	}
 
-	void call_slot (InvalidationRecord* ir, const boost::function<void ()>& f)
+	void call_slot (InvalidationRecord* ir, const std::function<void ()>& f)
 	{
 		if (Glib::Threads::Thread::self () == run_loop_thread) {
 			f ();
@@ -62,14 +62,14 @@ public:
 		; // process Events, if any
 	}
 
-	Glib::Threads::Mutex& slot_invalidation_mutex ()
+	Glib::Threads::RWlock& slot_invalidation_rwlock ()
 	{
 		return request_buffer_map_lock;
 	}
 
 private:
 	Glib::Threads::Thread* run_loop_thread;
-	Glib::Threads::Mutex   request_buffer_map_lock;
+	Glib::Threads::RWLock  request_buffer_map_lock;
 };
 
 struct MyInvalidationRecord : public PBD::EventLoop::InvalidationRecord {
@@ -87,7 +87,7 @@ class Rx2 : public PBD::ScopedConnectionList
 public:
 	Rx2 (Tx& sender)
 	{
-		sender.sig1.connect (*this, &_ir, boost::bind (&Rx2::cb, this, _1), &event_loop);
+		sender.sig1.connect (*this, &_ir, std::bind (&Rx2::cb, this, _1), &event_loop);
 	}
 
 private:

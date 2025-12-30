@@ -23,8 +23,6 @@
 #include <cstdint>
 #include <memory>
 
-#include <boost/shared_array.hpp>
-
 #include "canvas/visibility.h"
 #include "canvas/item.h"
 
@@ -54,7 +52,7 @@ public:
 		if (destroy_callback) {
 			destroy_callback(data, destroy_arg);
 		} else {
-			free(data);
+			delete [] data;
 		}
 	}
 
@@ -105,7 +103,7 @@ private:
     mutable Cairo::RefPtr<Cairo::Surface> _surface;
 
     void accept_data ();
-    PBD::Signal0<void> DataReady;
+    PBD::Signal<void()> DataReady;
     PBD::ScopedConnectionList data_connections;
 };
 

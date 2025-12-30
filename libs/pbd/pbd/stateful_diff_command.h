@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __pbd_stateful_diff_command_h__
-#define __pbd_stateful_diff_command_h__
+#pragma once
 
 #include <memory>
 
@@ -33,7 +32,7 @@ class PropertyList;
 /** A Command which stores its action as the differences between the before and after
  *  state of a Stateful object.
  */
-class LIBPBD_API StatefulDiffCommand : public Command
+class LIBPBD_API StatefulDiffCommand : public PBD::Command
 {
 public:
 	StatefulDiffCommand (std::shared_ptr<StatefulDestructible>);
@@ -54,4 +53,3 @@ private:
 
 }; // namespace PBD
 
-#endif /* __pbd_stateful_diff_command_h__ */

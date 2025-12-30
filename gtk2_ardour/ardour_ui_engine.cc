@@ -65,7 +65,7 @@ ARDOUR_UI::audioengine_became_silent ()
 
 	msg.set_title (string_compose (_("%1 is now silent"), PROGRAM_NAME));
 
-	Gtk::Label pay_label (string_compose (_("Please consider paying for a copy of %1 - you can pay whatever you want."), PROGRAM_NAME));
+	Gtk::Label pay_label (string_compose (_("Please consider paying for a copy of %1 - you can pay whatever you want.\nDownload the unrestricted build after paying..."), PROGRAM_NAME));
 	Gtk::Label subscribe_label (_("Better yet become a subscriber - subscriptions start at US$1 per month."));
 	Gtk::Button pay_button (_("Pay for a copy (via the web)"));
 	Gtk::Button subscribe_button (_("Become a subscriber (via the web)"));
@@ -79,6 +79,7 @@ ARDOUR_UI::audioengine_became_silent ()
 
 	pay_button.signal_clicked().connect (sigc::hide_return (sigc::bind (sigc::ptr_fun (openuri), (const char*) "https://ardour.org/download")));
 	subscribe_button.signal_clicked().connect (sigc::hide_return (sigc::bind (sigc::ptr_fun (openuri), (const char*) "https://ardour.org/subscribe")));
+
 
 	msg.get_vbox()->pack_start (pay_label);
 	msg.get_vbox()->pack_start (pay_button_box);
@@ -114,7 +115,7 @@ void
 ARDOUR_UI::create_xrun_marker (samplepos_t where)
 {
 	if (_session) {
-		Location *location = new Location (*_session, timepos_t (where), timepos_t (where), _("xrun"), Location::IsMark);
+		Location *location = new Location (*_session, timepos_t (where), timepos_t (where), _("xrun"), Location::Flags(Location::IsMark | Location::IsXrun));
 		_session->locations()->add (location);
 	}
 }
@@ -122,7 +123,6 @@ ARDOUR_UI::create_xrun_marker (samplepos_t where)
 void
 ARDOUR_UI::halt_on_xrun_message ()
 {
-	cerr << "HALT on xrun\n";
 	ArdourMessageDialog msg (_main_window, _("Recording was stopped because your system could not keep up."));
 	msg.run ();
 }

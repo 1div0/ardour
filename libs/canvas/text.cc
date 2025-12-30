@@ -18,11 +18,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gdk/gdk.h>
+#include <ydk/gdk.h>
 
 #include <cairomm/cairomm.h>
-#include <gtkmm/window.h>
-#include <gtkmm/label.h>
+#include <ytkmm/window.h>
+#include <ytkmm/label.h>
 
 #include "pbd/i18n.h"
 
@@ -292,6 +292,7 @@ Text::set_font_description (Pango::FontDescription font_description)
 {
 	begin_change ();
 
+	delete _font_description;
 	_font_description = new Pango::FontDescription (font_description);
 	_need_redraw = true;
         _width_correction = -1.0;
@@ -325,7 +326,7 @@ Text::dump (ostream& o) const
 	Item::dump (o);
 
 	o << _canvas->indent() << '\t' << " text = " << _text << endl
-	  << _canvas->indent() << " color = 0x" << hex << _color << dec;
+	  << _canvas->indent() << "\tcolor = 0x" << hex << _color << dec;
 
 	o << endl;
 }

@@ -27,16 +27,16 @@
 #include <string>
 #include <vector>
 
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/buttonbox.h>
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/expander.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/buttonbox.h>
+#include <ytkmm/checkbutton.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/expander.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
 
 #include "pbd/signals.h"
 #include "pbd/xml++.h"
@@ -271,6 +271,7 @@ private:
 		StateStruct ()
 		    : sample_rate (48000)
 		    , buffer_size (1024)
+		    , n_periods (0)
 		    , input_latency (0)
 		    , output_latency (0)
 		    , active (false)
@@ -281,8 +282,8 @@ private:
 	};
 
 	typedef std::shared_ptr<StateStruct> State;
-	typedef std::list<State>               StateList;
-	static bool                            state_sort_cmp (const State& a, const State& b);
+	typedef std::list<State>             StateList;
+	static bool                          state_sort_cmp (const State& a, const State& b);
 
 	StateList states;
 
@@ -290,11 +291,13 @@ private:
 
 	State get_matching_state (const std::string& backend,
 	                          const std::string& driver,
-	                          const std::string& device);
+	                          const std::string& device,
+	                          const float        sample_rate = 0);
 	State get_matching_state (const std::string& backend,
 	                          const std::string& driver,
 	                          const std::string& input_device,
-	                          const std::string& output_device);
+	                          const std::string& output_device,
+	                          const float        sample_rate = 0);
 
 	State get_saved_state_for_currently_displayed_backend_and_device ();
 	void  maybe_display_saved_state ();

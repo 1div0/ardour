@@ -23,14 +23,12 @@
 //#define USE_TLSF // use TLSF instead of ReallocPool
 //#define USE_MALLOC // or plain OS provided realloc (no mlock) -- if USE_TLSF isn't defined
 
-#ifndef __ardour_luaproc_h__
-#define __ardour_luaproc_h__
+#pragma once
 
 #include <set>
 #include <vector>
 #include <string>
 
-#define USE_TLSF
 #ifdef USE_TLSF
 #  include "pbd/tlsf.h"
 #else
@@ -87,6 +85,7 @@ public:
 	void cleanup () { }
 
 	int set_block_size (pframes_t /*nframes*/) { return 0; }
+	bool requires_fixed_sized_buffers () const { return _requires_fixed_sized_buffers; }
 	bool connect_all_audio_outputs () const { return _connect_all_audio_outputs; }
 
 	int connect_and_run (BufferSet& bufs,
@@ -129,6 +128,13 @@ public:
 	DSP::DspShm* instance_shm () { return &lshm; }
 	LuaTableRef* instance_ref () { return &lref; }
 
+	struct FactoryPreset {
+		std::string               name;
+		std::map<uint32_t, float> param;
+	};
+
+	std::map<std::string, FactoryPreset> _factory_presets;
+
 private:
 	samplecnt_t plugin_latency() const { return _signal_latency; }
 	void find_presets ();
@@ -156,7 +162,9 @@ private:
 	std::string _docs;
 	bool _lua_does_channelmapping;
 	bool _lua_has_inline_display;
+	bool _requires_fixed_sized_buffers;
 	bool _connect_all_audio_outputs;
+	bool _set_time_info;
 
 	void queue_draw () { QueueDraw(); /* EMIT SIGNAL */ }
 	DSP::DspShm lshm;
@@ -168,6 +176,9 @@ private:
 	void init ();
 	bool load_script ();
 	void lua_print (std::string s);
+
+	bool load_user_preset (PresetRecord const&);
+	bool load_factory_preset (PresetRecord const&);
 
 	std::string preset_name_to_uri (const std::string&) const;
 	std::string presets_file () const;
@@ -220,12 +231,17 @@ class LIBARDOUR_API LuaPluginInfo : public PluginInfo
 		return _max_outputs;
 	}
 
+	void set_factory_presets (std::vector<Plugin::PresetRecord> const& p) {
+		_factory_presets = p;
+	}
+
 	private:
 	uint32_t _max_outputs;
+
+	std::vector<Plugin::PresetRecord> _factory_presets;
 };
 
 typedef std::shared_ptr<LuaPluginInfo> LuaPluginInfoPtr;
 
 } // namespace ARDOUR
 
-#endif // __ardour_luaproc_h__

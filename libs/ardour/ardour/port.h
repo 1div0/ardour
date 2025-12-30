@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_port_h__
-#define __ardour_port_h__
+#pragma once
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -29,7 +28,6 @@
 #include <set>
 #include <string>
 #include <vector>
-#include <boost/utility.hpp>
 #include "pbd/signals.h"
 
 #include "ardour/data_type.h"
@@ -42,9 +40,11 @@ namespace ARDOUR {
 class AudioEngine;
 class Buffer;
 
-class LIBARDOUR_API Port : public boost::noncopyable
+class LIBARDOUR_API Port
 {
 public:
+	Port (const Port&) = delete;
+	Port& operator= (const Port&) = delete;
 	virtual ~Port ();
 
 	static void set_connecting_blocked( bool yn ) {
@@ -128,25 +128,28 @@ public:
 	virtual void realtime_locate (bool for_loop_end) {}
 	virtual void set_buffer_size (pframes_t) {}
 
+	bool has_ext_connection () const;
 	bool physically_connected () const;
 	bool in_cycle () const { return _in_cycle; }
 
 	uint32_t externally_connected () const { return _externally_connected; }
 	uint32_t internally_connected () const { return _internally_connected; }
 
-	void increment_external_connections() { _externally_connected++; }
-	void decrement_external_connections() { if (_externally_connected) _externally_connected--; }
+	void rename_connected_port (std::string const&, std::string const&);
 
-	void increment_internal_connections() { _internally_connected++; }
-	void decrement_internal_connections() { if (_internally_connected) _internally_connected--; }
+	void increment_external_connections ();
+	void decrement_external_connections ();
+
+	void increment_internal_connections ();
+	void decrement_internal_connections ();
 
 
-	PBD::Signal1<void,bool> MonitorInputChanged;
-	PBD::Signal3<void,std::shared_ptr<Port>,std::shared_ptr<Port>, bool > ConnectedOrDisconnected;
+	PBD::Signal<void(bool)> MonitorInputChanged;
+	PBD::Signal<void(std::shared_ptr<Port>,std::shared_ptr<Port>, bool )> ConnectedOrDisconnected;
 
-	static PBD::Signal0<void> PortDrop;
-	static PBD::Signal0<void> PortSignalDrop;
-	static PBD::Signal0<void> ResamplerQualityChanged;
+	static PBD::Signal<void()> PortDrop;
+	static PBD::Signal<void()> PortSignalDrop;
+	static PBD::Signal<void()> ResamplerQualityChanged;
 
 	static void set_varispeed_ratio (double s); //< varispeed playback
 	static bool set_engine_ratio (double session, double engine); //< SR mismatch
@@ -201,15 +204,23 @@ private:
 	uint32_t    _externally_connected;
 	uint32_t    _internally_connected;
 
-	/** ports that we are connected to, kept so that we can
-	    reconnect to the backend when required
-	*/
-	std::set<std::string> _connections;
+	typedef std::set<std::string> ConnectionSet;
+	/* ports that we are connected to, kept so that we can
+	 * reconnect to the backend when required
+	 */
+	mutable Glib::Threads::RWLock        _connections_lock;
+	ConnectionSet                        _int_connections;
+	std::map<std::string, ConnectionSet> _ext_connections;
 
 	static uint32_t _resampler_quality; // 8 <= q <= 96
 	static uint32_t _resampler_latency; // = _resampler_quality - 1
 
-	void port_connected_or_disconnected (std::weak_ptr<Port>, std::weak_ptr<Port>, bool);
+	void port_connected_or_disconnected (std::weak_ptr<Port>, std::string, std::weak_ptr<Port>, std::string, bool);
+
+	int  connect_internal (std::string const &);
+	void insert_connection (std::string const&);
+	void erase_connection (std::string const&);
+
 	void signal_drop ();
 	void session_global_drop ();
 	void drop ();
@@ -219,4 +230,3 @@ private:
 
 }
 
-#endif /* __ardour_port_h__ */

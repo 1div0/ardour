@@ -7,7 +7,10 @@ ardour {
 }
 
 function factory() return function()
-	local sp_radio_buttons = {Bypass="bypass", Remove="remove", Nothing=false}
+	-- cannot use "Remove" that may remove_processor ..  route_processors_changed .. resort_routes
+	-- which may drop route(s) and/or invalidates the routelist iterator
+	--local sp_radio_buttons = {Bypass="bypass", Remove="remove", Nothing=false}
+	local sp_radio_buttons = {Bypass="bypass", Nothing=false}
 	local dlg = {
 		{type="label", align="left", colspan="3", title="Please select below the items you want to reset:" },
 		{type="label", align="left", colspan="3", title="(Warning: this cannot be undone!)\n" },
@@ -22,6 +25,7 @@ function factory() return function()
 		{type="checkbox", key="sends", default=true, title="Sends"      },
 		{type="checkbox", key="eq",    default=true, title="EQ"         },
 		{type="checkbox", key="comp",  default=true, title="Compressor" },
+		{type="checkbox", key="gate",  default=true, title="Gate"       },
 
 		{type="heading", align="center", colspan="3", title="Processors:" },
 		{type="radio", key="plugins", title="Plug-ins",      values=sp_radio_buttons, default="Bypass" },
@@ -56,19 +60,27 @@ function factory() return function()
 
 		local disp = disp or PBD.GroupControlDisposition.NoGroup
 
-		reset(route:eq_enable_controllable(), disp, auto)
+		reset(route:mapped_control(ARDOUR.WellKnownCtrl.EQ_Enable, 0), disp, auto)
+
+		reset(route:mapped_control(ARDOUR.WellKnownCtrl.LPF_Freq, 0), disp, auto)
+		reset(route:mapped_control(ARDOUR.WellKnownCtrl.LPF_Slope, 0), disp, auto)
+		reset(route:mapped_control(ARDOUR.WellKnownCtrl.LPF_Enable, 0), disp, auto)
+
+		reset(route:mapped_control(ARDOUR.WellKnownCtrl.HPF_Freq, 0), disp, auto)
+		reset(route:mapped_control(ARDOUR.WellKnownCtrl.HPF_Slope, 0), disp, auto)
+		reset(route:mapped_control(ARDOUR.WellKnownCtrl.HPF_Enable, 0), disp, auto)
 
 		local i = 0
 		repeat
 			for _,ctrl in pairs({
-				route:eq_freq_controllable(i),
-				route:eq_gain_controllable(i),
-				route:eq_q_controllable(i),
+				route:mapped_control (ARDOUR.WellKnownCtrl.EQ_BandFreq, i),
+				route:mapped_control (ARDOUR.WellKnownCtrl.EQ_BandGain, i),
+				route:mapped_control (ARDOUR.WellKnownCtrl.EQ_BandQ, i),
 			}) do
 				reset(ctrl, disp, auto)
 			end
 			i = i + 1
-		until route:eq_freq_controllable(i):isnil()
+		until route:mapped_control (ARDOUR.WellKnownCtrl.EQ_BandFreq, i):isnil()
 	end
 
 	function reset_comp_controls(route, disp, auto)
@@ -79,11 +91,46 @@ function factory() return function()
 		local disp = disp or PBD.GroupControlDisposition.NoGroup
 
 		for _,ctrl in pairs({
-			route:comp_enable_controllable(),
-			route:comp_makeup_controllable(),
-			route:comp_mode_controllable(),
-			route:comp_speed_controllable(),
-			route:comp_threshold_controllable(),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Mode, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Mix, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_RMSPeak, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Attack, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Release, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_KeyFilterFreq, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Ratio, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Makeup, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Threshold, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Enable, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_Lookahead, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Comp_FastAttack, 0),
+		}) do
+			reset(ctrl, disp, auto)
+		end
+	end
+
+	function reset_gate_controls(route, disp, auto)
+		if route:isnil() then
+			return
+		end
+
+		local disp = disp or PBD.GroupControlDisposition.NoGroup
+
+		for _,ctrl in pairs({
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Depth, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Mode, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Attack, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Release, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_KeyFilterFreq, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_KeyFilterEnable, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_KeyListen, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Hysteresis, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Knee, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Hold, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Ratio, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Threshold, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Enable, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_FastAttack, 0),
+			route:mapped_control (ARDOUR.WellKnownCtrl.Gate_Lookahead, 0),
 		}) do
 			reset(ctrl, disp, auto)
 		end
@@ -195,6 +242,7 @@ function factory() return function()
 
 		if pref["eq"]    then reset_eq_controls(route, disp, auto) end
 		if pref["comp"]  then reset_comp_controls(route, disp, auto) end
+		if pref["gate"]  then reset_gate_controls(route, disp, auto) end
 		if pref["sends"] then 
 			reset_send_controls(route, disp, auto)
 
@@ -227,6 +275,7 @@ function factory() return function()
 
 		if pref["trim"] then
 			reset(route:trim_control(), disp, auto)
+			reset(route:mapped_control(ARDOUR.WellKnownCtrl.TapeDrive_Mode, 0), disp, auto)
 		end
 
 		if pref["mute"] then

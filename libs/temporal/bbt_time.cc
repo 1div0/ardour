@@ -20,6 +20,7 @@
 #include <cassert>
 
 #include "temporal/bbt_time.h"
+#include "temporal/bbt_argument.h"
 
 using namespace Temporal;
 
@@ -39,20 +40,6 @@ BBT_Time::from_integer (int64_t v)
 	int32_t b = (v>>12) & 0xff;
 	int32_t t= v & 0xfff;
 	return BBT_Time (B, b, t);
-}
-
-BBT_Time
-BBT_Time::round_up_to_bar() const
-{
-	if (ticks == 0 && beats == 1) {
-		return *this;
-	}
-	BBT_Time b = round_up_to_beat ();
-	if (b.beats > 1) {
-		b.bars += 1;
-		b.beats = 1;
-	}
-	return b;
 }
 
 BBT_Offset::BBT_Offset (double dbeats)
@@ -116,3 +103,13 @@ std::operator>>(std::istream& i, Temporal::BBT_Time& bbt)
 
 	return i;
 }
+
+/* define this here to avoid adding another .cc file for just this operator */
+
+std::ostream&
+std::operator<< (std::ostream& o, Temporal::BBT_Argument const & bbt)
+{
+	o << '@' << bbt.reference() << ':' << bbt.bars << '|' << bbt.beats << '|' << bbt.ticks;
+	return o;
+}
+

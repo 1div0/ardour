@@ -49,38 +49,42 @@ MidiNoteTracker::reset ()
 void
 MidiNoteTracker::add (uint8_t note, uint8_t chn)
 {
-	if (_active_notes[note+128 * chn] == 0) {
+	const int coff = chn << 7;
+	if (_active_notes[note + coff] == 0) {
 		++_on;
 	}
-	++_active_notes[note + 128 * chn];
+	++_active_notes[note + coff];
 
-	if (_active_notes[note+128 * chn] > 1) {
-		//cerr << this << " note " << (int) note << '/' << (int) chn << " was already on, now at " << (int) _active_notes[note+128*chn] << endl;
+#if 0
+	if (_active_notes[note + coff] > 1) {
+		cerr << this << " note " << (int) note << '/' << (int) chn << " was already on, now at " << (int) _active_notes[note + coff] << endl;
 	}
+#endif
 
 	DEBUG_TRACE (PBD::DEBUG::MidiTrackers, string_compose ("%1 ON %2/%3 voices %5 total on %4\n",
 							       this, (int) note, (int) chn, _on,
-							       (int) _active_notes[note+128 * chn]));
+							       (int) _active_notes[note + coff]));
 }
 
 void
 MidiNoteTracker::remove (uint8_t note, uint8_t chn)
 {
-	switch (_active_notes[note + 128 * chn]) {
+	const int coff = chn << 7;
+	switch (_active_notes[note + coff]) {
 	case 0:
 		break;
 	case 1:
 		--_on;
-		_active_notes [note + 128 * chn] = 0;
+		_active_notes [note + coff] = 0;
 		break;
 	default:
-		--_active_notes [note + 128 * chn];
+		--_active_notes [note + coff];
 		break;
 
 	}
 	DEBUG_TRACE (PBD::DEBUG::MidiTrackers, string_compose ("%1 OFF %2/%3 current voices = %5 total on %4\n",
 							       this, (int) note, (int) chn, _on,
-							       (int) _active_notes[note+128 * chn]));
+							       (int) _active_notes[note + coff]));
 }
 
 void
@@ -131,15 +135,16 @@ MidiNoteTracker::push_notes (MidiBuffer &dst, samplepos_t time, bool reset, int 
 	}
 
 	for (int channel = 0; channel < 16; ++channel) {
+		const int coff = channel << 7;
 		for (int note = 0; note < 128; ++note) {
-			while (_active_notes[note + 128 * channel]) {
+			while (_active_notes[note + coff]) {
 				uint8_t buffer[3] = { ((uint8_t) (cmd | channel)), uint8_t (note), (uint8_t) velocity };
 				Evoral::Event<MidiBuffer::TimeType> ev (Evoral::MIDI_EVENT, time, 3, buffer, false);
 				/* note that we do not care about failure from
 				   push_back() ... should we warn someone ?
 				*/
 				dst.push_back (ev);
-				_active_notes[note + 128 * channel]--;
+				_active_notes[note + coff]--;
 				DEBUG_TRACE (PBD::DEBUG::MidiTrackers, string_compose ("%1: MB-push note %2/%3 at %4\n", this, (int) note, (int) channel, time));
 			}
 		}
@@ -161,8 +166,9 @@ MidiNoteTracker::resolve_notes (Evoral::EventSink<samplepos_t> &dst, samplepos_t
 	}
 
 	for (int channel = 0; channel < 16; ++channel) {
+		const int coff = channel << 7;
 		for (int note = 0; note < 128; ++note) {
-			while (_active_notes[note + 128 * channel]) {
+			while (_active_notes[note + coff]) {
 				buf[0] = MIDI_CMD_NOTE_OFF|channel;
 				buf[1] = note;
 				buf[2] = 0;
@@ -170,7 +176,7 @@ MidiNoteTracker::resolve_notes (Evoral::EventSink<samplepos_t> &dst, samplepos_t
 				   write() ... should we warn someone ?
 				*/
 				dst.write (time, Evoral::MIDI_EVENT, 3, buf);
-				_active_notes[note + 128 * channel]--;
+				_active_notes[note + coff]--;
 				DEBUG_TRACE (PBD::DEBUG::MidiTrackers, string_compose ("%1: EVS-resolved note %2/%3 at %4\n",
 										       this, (int) note, (int) channel, time));
 			}
@@ -192,8 +198,9 @@ MidiNoteTracker::resolve_notes (MidiSource& src, const MidiSource::WriterLock& l
 	/* NOTE: the src must be locked */
 
 	for (int channel = 0; channel < 16; ++channel) {
+		const int coff = channel << 7;
 		for (int note = 0; note < 128; ++note) {
-			while (_active_notes[note + 128 * channel]) {
+			while (_active_notes[note + coff]) {
 				Evoral::Event<Temporal::Beats> ev (Evoral::MIDI_EVENT, time, 3, 0, true);
 				ev.set_type (MIDI_CMD_NOTE_OFF);
 				ev.set_channel (channel);
@@ -202,7 +209,7 @@ MidiNoteTracker::resolve_notes (MidiSource& src, const MidiSource::WriterLock& l
 				src.append_event_beats (lock, ev);
 				DEBUG_TRACE (PBD::DEBUG::MidiTrackers, string_compose ("%1: MS-resolved note %2/%3 at %4\n",
 										       this, (int) note, (int) channel, time));
-				_active_notes[note + 128 * channel]--;
+				_active_notes[note + coff]--;
 				/* don't stack events up at the same time */
 				time += Temporal::Beats::one_tick();
 			}
@@ -213,14 +220,15 @@ MidiNoteTracker::resolve_notes (MidiSource& src, const MidiSource::WriterLock& l
 }
 
 void
-MidiNoteTracker::dump (ostream& o)
+MidiNoteTracker::dump (ostream& o) const
 {
 	o << "****** NOTES\n";
 	for (int c = 0; c < 16; ++c) {
+		const int coff = c << 7;
 		for (int x = 0; x < 128; ++x) {
-			if (_active_notes[c * 128 + x]) {
+			if (_active_notes[coff + x]) {
 				o << "Channel " << c+1 << " Note " << x << " is on ("
-				  << (int) _active_notes[c*128+x] <<  " times)\n";
+				  << (int) _active_notes[coff+x] <<  " times)\n";
 			}
 		}
 	}
@@ -255,7 +263,7 @@ MidiStateTracker::reset ()
 }
 
 void
-MidiStateTracker::dump (ostream& o)
+MidiStateTracker::dump (ostream& o) const
 {
 	const size_t n_channels = 16;
 	const size_t n_controls = 127;
@@ -340,8 +348,6 @@ MidiStateTracker::track (const uint8_t* evbuf)
 void
 MidiStateTracker::flush (MidiBuffer& dst, samplepos_t time, bool reset)
 {
-	/* XXX implement me */
-
 	uint8_t buf[3];
 	const size_t n_channels = 16;
 	const size_t n_controls = 127;
@@ -369,6 +375,9 @@ MidiStateTracker::flush (MidiBuffer& dst, samplepos_t time, bool reset)
 				program[chn] = 0x80;
 			}
 		}
+
+		/* XXX bender */
+		/* XXX pressure */
 	}
 }
 
@@ -502,6 +511,65 @@ MidiStateTracker::resolve_state (Evoral::EventSink<samplepos_t>& dst, Evoral::Ev
 			if (reset) {
 				bender[chn] = 0x8000;
 			}
+		}
+	}
+}
+
+void
+MidiStateTracker::resolve_diff (MidiStateTracker const & other, Evoral::EventSink<samplepos_t>& dst, samplepos_t time, bool reset)
+{
+	/* This fills @param dst with the messages required to get the MIDI
+	 * receiver's state (assumed to match ours) into the condition
+	 * indicated by @param other
+	 */
+
+	uint8_t buf[3];
+
+	std::cerr << "MST::rd\n";
+	dump (std::cerr);
+	std::cerr << "MST::rd other\n";
+	other.dump (std::cerr);
+
+	for (int channel = 0; channel < 16; ++channel) {
+
+		for (int n = 0; n < 128; ++n) {
+
+			bool on;
+
+			if ((on = active (n, channel)) != other.active (n, channel)) {
+				buf[0] = (on ? MIDI_CMD_NOTE_OFF : MIDI_CMD_NOTE_ON) | channel;
+				buf[1] = n;
+				buf[2] = 64; /* not good, needs nuance */
+				dst.write (time, Evoral::MIDI_EVENT, 3, buf);
+				std::cerr << "MST:rd note " << n << " turned " << (on ? "off" : "on") << std::endl;
+			}
+
+			if (control[channel][n] != other.control[channel][n]) {
+				buf[0] = MIDI_CMD_CONTROL | channel;
+				buf[1] = n;
+				buf[2] = other.control[channel][n];
+				dst.write (time, Evoral::MIDI_EVENT, 3, buf);
+				std::cerr << "MST:rd control" << n << " set to " << (int) other.control[channel][n] << std::endl;
+			}
+		}
+
+		if (program[channel] != other.program[channel]) {
+			buf[0] = MIDI_CMD_PGM_CHANGE | channel;
+			buf[1] = other.program[channel];
+			dst.write (time, Evoral::MIDI_EVENT, 2, buf);
+		}
+
+
+		if (pressure[channel] != other.pressure[channel]) {
+			buf[0] = MIDI_CMD_CHANNEL_PRESSURE | channel;
+			buf[1] = other.pressure[channel];;
+			dst.write (0, Evoral::MIDI_EVENT, 2, buf);
+		}
+
+		if (bender[channel] != other.bender[channel]) {
+			buf[0] = MIDI_CMD_BENDER | channel;
+			buf[1] = other.bender[channel];
+			dst.write (0, Evoral::MIDI_EVENT, 2, buf);
 		}
 	}
 }

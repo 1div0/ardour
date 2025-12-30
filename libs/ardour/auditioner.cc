@@ -84,7 +84,7 @@ Auditioner::init ()
 		lookup_fallback_synth ();
 	}
 
-	_output->changed.connect_same_thread (*this, boost::bind (&Auditioner::output_changed, this, _1, _2));
+	_output->changed.connect_same_thread (*this, std::bind (&Auditioner::output_changed, this, _1, _2));
 
 	return 0;
 }
@@ -153,7 +153,7 @@ Auditioner::load_synth ()
 
 	std::shared_ptr<Plugin> p = audition_synth_info->load (_session);
 	if (p) {
-		asynth = std::shared_ptr<Processor> (new PluginInsert (_session, time_domain(), p));
+		asynth = std::shared_ptr<Processor> (new PluginInsert (_session, *this, p));
 	}
 
 	if (asynth) {
@@ -285,16 +285,16 @@ Auditioner::roll (pframes_t nframes, samplepos_t start_sample, samplepos_t end_s
 
 	BufferSet& bufs = _session.get_route_buffers (n_process_buffers());
 
-	if (_queue_panic) {
-		MidiBuffer& mbuf (bufs.get_midi (0));
+	if (_queue_panic && asynth) {
 		_queue_panic = false;
+		auto pi = std::dynamic_pointer_cast<PluginInsert> (asynth);
 		for (uint8_t chn = 0; chn < 0xf; ++chn) {
 			uint8_t buf[3] = { ((uint8_t) (MIDI_CMD_CONTROL | chn)), ((uint8_t) MIDI_CTL_SUSTAIN), 0 };
-			mbuf.push_back(0, Evoral::MIDI_EVENT, 3, buf);
+			pi->write_immediate_event (Evoral::MIDI_EVENT, 3, buf);
 			buf[1] = MIDI_CTL_ALL_NOTES_OFF;
-			mbuf.push_back(0, Evoral::MIDI_EVENT, 3, buf);
+			pi->write_immediate_event (Evoral::MIDI_EVENT, 3, buf);
 			buf[1] = MIDI_CTL_RESET_CONTROLLERS;
-			mbuf.push_back(0, Evoral::MIDI_EVENT, 3, buf);
+			pi->write_immediate_event (Evoral::MIDI_EVENT, 3, buf);
 		}
 	}
 
@@ -471,14 +471,9 @@ Auditioner::audition_region (std::shared_ptr<Region> region, bool loop)
 	_disk_reader->seek (offset.samples(), true);
 
 	if (_midi_audition) {
-		/* Fill MIDI buffers.
-		 * This is safe to call from here. ::::audition_region()
-		 * is called by the butler thread. Also the session is not
-		 * yet auditioning. So Session::non_realtime_overwrite()
-		 * does call the auditioner's DR.
-		 */
+		/* Request Fill MIDI buffers. */
+		_queue_panic = true;
 		set_pending_overwrite (PlaylistModified);
-		_disk_reader->overwrite_existing_buffers ();
 	}
 
 	current_sample = offset.samples();

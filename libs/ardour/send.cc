@@ -51,8 +51,8 @@ using namespace ARDOUR;
 using namespace PBD;
 using namespace std;
 
-PBD::Signal0<void> LatentSend::ChangedLatency;
-PBD::Signal0<void> LatentSend::QueueUpdate;
+PBD::Signal<void()> LatentSend::ChangedLatency;
+PBD::Signal<void()> LatentSend::QueueUpdate;
 
 LatentSend::LatentSend ()
 		: _delay_in (0)
@@ -97,7 +97,7 @@ Send::Send (Session& s, std::shared_ptr<Pannable> p, std::shared_ptr<MuteMaster>
 {
 	//boost_debug_shared_ptr_mark_interesting (this, "send");
 
-	std::shared_ptr<AutomationList> gl (new AutomationList (Evoral::Parameter (BusSendLevel), time_domain()));
+	std::shared_ptr<AutomationList> gl (new AutomationList (Evoral::Parameter (BusSendLevel), *this));
 	set_gain_control (std::shared_ptr<GainControl> (new GainControl (_session, Evoral::Parameter(BusSendLevel), gl)));
 
 	gain_control ()->set_flag (Controllable::InlineControl);
@@ -110,16 +110,16 @@ Send::Send (Session& s, std::shared_ptr<Pannable> p, std::shared_ptr<MuteMaster>
 
 
 	if (_role == Delivery::Aux || _role == Delivery::Send) {
-		set_polarity_control (std::shared_ptr<AutomationControl> (new AutomationControl (_session, PhaseAutomation, ParameterDescriptor (PhaseAutomation), std::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(PhaseAutomation), time_domain())), "polarity-invert")));
+		set_polarity_control (std::shared_ptr<AutomationControl> (new AutomationControl (_session, PhaseAutomation, ParameterDescriptor (PhaseAutomation), std::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(PhaseAutomation), *this)), "polarity-invert")));
 		add_control (polarity_control ());
 	}
 
 	if (panner_shell()) {
-		panner_shell()->Changed.connect_same_thread (*this, boost::bind (&Send::panshell_changed, this));
-		panner_shell()->PannableChanged.connect_same_thread (*this, boost::bind (&Send::pannable_changed, this));
+		panner_shell()->Changed.connect_same_thread (*this, std::bind (&Send::panshell_changed, this));
+		panner_shell()->PannableChanged.connect_same_thread (*this, std::bind (&Send::pannable_changed, this));
 	}
 	if (_output) {
-		_output->changed.connect_same_thread (*this, boost::bind (&Send::snd_output_changed, this, _1, _2));
+		_output->changed.connect_same_thread (*this, std::bind (&Send::snd_output_changed, this, _1, _2));
 	}
 }
 
@@ -142,13 +142,16 @@ Send::deactivate ()
 	_meter->deactivate ();
 	_meter->reset ();
 
-	Delivery::deactivate ();
+	/* DO NOT CALL Delivery::deactivate (); that deactivates _amp.
+	 * InternalSend still runs and uses _amp until fade out has converged.
+	 */
+	Processor::deactivate ();
 }
 
 samplecnt_t
 Send::signal_latency () const
 {
-	if (!_pending_active) {
+	if (!_pending_active && !_active) {
 		 return 0;
 	}
 	if (_delay_out > _delay_in) {
@@ -239,7 +242,11 @@ Send::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, do
 		return;
 	}
 
-	if (!check_active()) {
+	/* Do not use check_active() here, because we need to continue running
+	 * until the gain has gone to zero.
+	 */
+
+	if (!_active && !_pending_active) {
 		_meter->reset ();
 		_output->silence (nframes);
 		return;

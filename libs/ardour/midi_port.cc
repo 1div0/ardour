@@ -43,7 +43,6 @@ MidiPort::MidiPort (const std::string& name, PortFlags flags)
 	: Port (name, DataType::MIDI, flags)
 	, _resolve_required (false)
 	, _input_active (true)
-	, _trace_parser (0)
 	, _data_fetched_for_cycle (false)
 {
 	_buffer = new MidiBuffer (AudioEngine::instance()->raw_buffer_size (DataType::MIDI));
@@ -73,10 +72,6 @@ MidiPort::cycle_start (pframes_t nframes)
 
 	if (sends_output () && _port_handle) {
 		port_engine.midi_clear (port_engine.get_buffer (_port_handle, nframes));
-	}
-
-	if (receives_input() && _trace_parser) {
-		read_and_parse_entire_midi_buffer_with_no_speed_adjustment (nframes, *_trace_parser, AudioEngine::instance()->sample_time_at_cycle_start());
 	}
 
 	if (_inbound_midi_filter) {
@@ -157,6 +152,14 @@ MidiPort::get_midi_buffer (pframes_t nframes)
 
 			timestamp -= _global_port_buffer_offset;
 
+			if (size == 3) {
+				if (((buf[0] & 0xF0) == 0x90) && (buf[2] != 0)) {
+					NoteOn (buf[1]);
+				} else if (((buf[0] & 0xF0) == 0x80) || (((buf[0] & 0xF0) == 0x90) && (buf[2] == 0))) {
+					NoteOff (buf[1]);
+				}
+			}
+
 			if ((buf[0] & 0xF0) == 0x90 && buf[2] == 0) {
 				/* normalize note on with velocity 0 to proper note off */
 				uint8_t ev[3];
@@ -227,6 +230,12 @@ MidiPort::read_and_parse_entire_midi_buffer_with_no_speed_adjustment (pframes_t 
 void
 MidiPort::cycle_end (pframes_t nframes)
 {
+	if (receives_input()) {
+		std::shared_ptr<MIDI::Parser> trace_parser = _trace_parser.lock ();
+		if (trace_parser) {
+			read_and_parse_entire_midi_buffer_with_no_speed_adjustment (nframes, *trace_parser.get(), AudioEngine::instance()->sample_time_at_cycle_start());
+		}
+	}
 	Port::cycle_end (nframes);
 	_data_fetched_for_cycle = false;
 }
@@ -266,95 +275,101 @@ MidiPort::resolve_notes (void* port_buffer, MidiBuffer::TimeType when)
 void
 MidiPort::flush_buffers (pframes_t nframes)
 {
-	if (sends_output ()) {
+	if (!sends_output ()) {
+		return;
+	}
 
-		void* port_buffer = 0;
+	void* port_buffer = 0;
 
-		if (_resolve_required) {
-			port_buffer = port_engine.get_buffer (_port_handle, nframes);
-			/* resolve all notes at the start of the buffer */
-			resolve_notes (port_buffer, _global_port_buffer_offset);
-			_resolve_required = false;
-		}
+	if (_resolve_required && (_global_port_buffer_offset + nframes) > 0) {
+		port_buffer = port_engine.get_buffer (_port_handle, nframes);
+		/* This is called from ARDOUR::PortManager::cycle_end() at which
+		 * point other MIDI data has already been written to the port.
+		 * So we "resolve notes" (panic) at the end of he buffer.
+		 */
+		resolve_notes (port_buffer, _global_port_buffer_offset + nframes -1);
+		_resolve_required = false;
+	}
 
-		if (_buffer->empty()) {
-			return;
-		}
+	if (_buffer->empty()) {
+		return;
+	}
 
-		if (!port_buffer) {
-			port_buffer = port_engine.get_buffer (_port_handle, nframes);
-		}
+	if (!port_buffer) {
+		port_buffer = port_engine.get_buffer (_port_handle, nframes);
+	}
 
-		double speed_ratio = (flags () & TransportGenerator) ? 1.0 : resample_ratio ();
+	double speed_ratio = (flags () & TransportGenerator) ? 1.0 : resample_ratio ();
 
-		for (MidiBuffer::iterator i = _buffer->begin(); i != _buffer->end(); ++i) {
+	std::shared_ptr<MIDI::Parser> trace_parser = _trace_parser.lock ();
 
-			const Evoral::Event<MidiBuffer::TimeType> ev (*i, false);
+	for (MidiBuffer::iterator i = _buffer->begin(); i != _buffer->end(); ++i) {
 
-			const samplepos_t adjusted_time = ev.time() + _global_port_buffer_offset;
+		const Evoral::Event<MidiBuffer::TimeType> ev (*i, false);
 
-			if (sends_output() && _trace_parser) {
-				uint8_t const * const buf = ev.buffer();
-				const samplepos_t now = AudioEngine::instance()->sample_time_at_cycle_start();
+		/* event times are in samples, relative to cycle start */
+		const samplepos_t adjusted_time = ev.time() + _global_port_buffer_offset;
 
-				_trace_parser->set_timestamp (now + adjusted_time / speed_ratio);
+		/* MIDI Tracer */
+		if (trace_parser) {
+			uint8_t const * const buf = ev.buffer();
+			const samplepos_t now = AudioEngine::instance()->sample_time_at_cycle_start();
 
-				uint32_t limit = ev.size();
+			trace_parser->set_timestamp (now + adjusted_time / speed_ratio);
 
-				for (size_t n = 0; n < limit; ++n) {
-					_trace_parser->scanner (buf[n]);
-				}
+			uint32_t limit = ev.size();
+
+			for (size_t n = 0; n < limit; ++n) {
+				trace_parser->scanner (buf[n]);
 			}
-
-			// event times are in samples, relative to cycle start
+		}
 
 #ifndef NDEBUG
-			if (DEBUG_ENABLED (DEBUG::MidiIO)) {
-				const Session* s = AudioEngine::instance()->session();
-				const samplepos_t now = (s ? s->transport_sample() : 0);
-				DEBUG_STR_DECL(a);
-				DEBUG_STR_APPEND(a, string_compose ("MidiPort %7 %1 pop event    @ %2[%7] (global %4, within %5 gpbo %6 sz %3 ", _buffer, adjusted_time, ev.size(),
-				                                    now + adjusted_time, nframes, _global_port_buffer_offset, name(), ev.time()));
-				for (size_t i=0; i < ev.size(); ++i) {
-					DEBUG_STR_APPEND(a,hex);
-					DEBUG_STR_APPEND(a,"0x");
-					DEBUG_STR_APPEND(a,(int)(ev.buffer()[i]));
-					DEBUG_STR_APPEND(a,' ');
-				}
-				DEBUG_STR_APPEND(a,'\n');
-				DEBUG_TRACE (DEBUG::MidiIO, DEBUG_STR(a).str());
+		if (DEBUG_ENABLED (DEBUG::MidiIO)) {
+			const Session* s = AudioEngine::instance()->session();
+			const samplepos_t now = (s ? s->transport_sample() : 0);
+			DEBUG_STR_DECL(a);
+			DEBUG_STR_APPEND(a, string_compose ("MidiPort %7 %1 pop event    @ %2[%7] (global %4, within %5 gpbo %6 sz %3 ", _buffer, adjusted_time, ev.size(),
+						now + adjusted_time, nframes, _global_port_buffer_offset, name(), ev.time()));
+			for (size_t i=0; i < ev.size(); ++i) {
+				DEBUG_STR_APPEND(a,hex);
+				DEBUG_STR_APPEND(a,"0x");
+				DEBUG_STR_APPEND(a,(int)(ev.buffer()[i]));
+				DEBUG_STR_APPEND(a,' ');
 			}
+			DEBUG_STR_APPEND(a,'\n');
+			DEBUG_TRACE (DEBUG::MidiIO, DEBUG_STR(a).str());
+		}
 #endif
 
-			// XXX consider removing this check for optimized builds
-			// and just send 'em all, at cycle_end
-			// see AudioEngine::split_cycle (), PortManager::cycle_end()
-			if ((adjusted_time >= _global_port_buffer_offset) && (adjusted_time < _global_port_buffer_offset + nframes)) {
-				pframes_t tme = floor (adjusted_time / speed_ratio);
-				if (port_engine.midi_event_put (port_buffer, tme, ev.buffer(), ev.size()) != 0) {
-					cerr << "write failed, dropped event, time " << adjusted_time << '/' << ev.time() << endl;
-				}
-			} else {
-				pframes_t tme = floor (adjusted_time / speed_ratio);
-				cerr << "Dropped outgoing MIDI event. time " << adjusted_time
-				     << " (" << ev.time() << ") @" << speed_ratio << " = " << tme
-				     << " out of range [" << _global_port_buffer_offset
-				     << " .. " << _global_port_buffer_offset + nframes
-				     << "]";
-				for (size_t xx = 0; xx < ev.size(); ++xx) {
-					cerr << ' ' << hex << (int) ev.buffer()[xx];
-				}
-				cerr << dec << endl;
+		// XXX consider removing this check for optimized builds
+		// and just send 'em all, at cycle_end
+		// see AudioEngine::split_cycle (), PortManager::cycle_end()
+		if ((adjusted_time >= _global_port_buffer_offset) && (adjusted_time < _global_port_buffer_offset + nframes)) {
+			pframes_t tme = floor (adjusted_time / speed_ratio);
+			if (port_engine.midi_event_put (port_buffer, tme, ev.buffer(), ev.size()) != 0) {
+				cerr << "write failed, dropped event, time " << adjusted_time << '/' << ev.time() << endl;
 			}
+		} else {
+			pframes_t tme = floor (adjusted_time / speed_ratio);
+			cerr << "Dropped outgoing MIDI event. time " << adjusted_time
+				<< " (" << ev.time() << ") @" << speed_ratio << " = " << tme
+				<< " out of range [" << _global_port_buffer_offset
+				<< " .. " << _global_port_buffer_offset + nframes
+				<< "]";
+			for (size_t xx = 0; xx < ev.size(); ++xx) {
+				cerr << ' ' << hex << (int) ev.buffer()[xx];
+			}
+			cerr << dec << endl;
 		}
+	}
 
-		/* done.. the data has moved to the port buffer, mark it so,
-		 * unless we're exporting in which PortExportMIDI::read
-		 * needs to read it at the end of a process cycle.
-		 */
-		if (!AudioEngine::instance()->session()->exporting ()) {
-			_buffer->clear ();
-		}
+	/* done.. the data has moved to the port buffer, mark it so,
+	 * unless we're exporting in which PortExportMIDI::read
+	 * needs to read it at the end of a process cycle.
+	 */
+	if (!AudioEngine::instance()->session()->exporting ()) {
+		_buffer->clear ();
 	}
 }
 
@@ -386,9 +401,15 @@ MidiPort::reset ()
 }
 
 void
-MidiPort::set_trace (MIDI::Parser * p)
+MidiPort::set_trace (std::weak_ptr<MIDI::Parser> p)
 {
 	_trace_parser = p;
+}
+
+std::shared_ptr<MIDI::Parser>
+MidiPort::trace_parser() const
+{
+	return _trace_parser.lock();
 }
 
 void

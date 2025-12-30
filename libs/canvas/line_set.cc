@@ -18,6 +18,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include <cmath>
+
 #include "canvas/line_set.h"
 
 using namespace std;
@@ -55,19 +57,25 @@ LineSet::compute_bounding_box () const
 
 		if (_orientation == Horizontal) {
 
-			_bounding_box = Rect (0, /* x0 */
-					      _lines.front().pos - (_lines.front().width/2.0), /* y0 */
-					      _extent, /* x1 */
-					      _lines.back().pos - (_lines.back().width/2.0) /* y1 */
-				);
+			double y0 = _lines.front().pos - (_lines.front().width/2.0);
+			double y1 = _lines.back().pos + (_lines.back().width/2.0);
+
+			if (fmod (_lines.front().width, 2.)) {
+				y0 -= _lines.front().width * 0.5;
+			}
+
+			_bounding_box = Rect (0, y0, _extent, y1);
 
 		} else {
 
-			_bounding_box = Rect (_lines.front().pos - _lines.front().width/2.0, /* x0 */
-					      0, /* y0 */
-					      _lines.back().pos + _lines.back().width/2.0, /* x1 */
-					      _extent /* y1 */
-				);
+			double x0 = _lines.front().pos - _lines.front().width/2.0;
+			double x1 = _lines.back().pos + _lines.back().width/2.0;
+
+			if (fmod (_lines.front().width, 2.)) {
+				x0 -= _lines.front().width * 0.5;
+			}
+
+			_bounding_box = Rect (x0, 0, x1, _extent);
 		}
 	}
 
@@ -90,40 +98,48 @@ LineSet::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
 {
 	/* area is in window coordinates */
 
-	for (vector<Line>::const_iterator i = _lines.begin(); i != _lines.end(); ++i) {
+	for (auto const & l : _lines) {
 
 		Rect self;
 
-		if (_orientation == Horizontal) {
-			self = item_to_window (Rect (0, i->pos - (i->width/2.0), _extent, i->pos + (i->width/2.0)));
-		} else {
-			self = item_to_window (Rect (i->pos - (i->width/2.0), 0, i->pos + (i->width/2.0), _extent));
-		}
-
-		Rect isect = self.intersection (area);
-
-		if (!isect) {
-			continue;
-		}
-
-		Rect intersection (isect);
-
-		Gtkmm2ext::set_source_rgba (context, i->color);
-		context->set_line_width (i->width);
-
-		/* Not 100% sure that the computation of the invariant
-		 * positions (y and x) below work correctly if the line width
-		 * is not 1.0, but visual inspection suggests it is OK.
+		/* Self is a rectangle that fully encloses the pixels drawn to
+		 * display this line. It does NOT represent the coordinates
+		 * that should be used to actually draw the line, at least not
+		 * along the axis corresponding to _orientation
 		 */
 
 		if (_orientation == Horizontal) {
-			double y = self.y0 + ((self.y1 - self.y0)/2.0);
-			context->move_to (intersection.x0, y);
-			context->line_to (intersection.x1, y);
+			self = Rect (0, l.pos - (l.width/2.0), _extent, l.pos + (l.width/2.0));
 		} else {
-			double x = self.x0 + ((self.x1 - self.x0)/2.0);
-			context->move_to (x, intersection.y0);
-			context->line_to (x, intersection.y1);
+			self = Rect (l.pos - (l.width/2.0), 0, l.pos + (l.width/2.0), _extent);
+		}
+
+		/* Note the 2nd argument, to avoid rounding after we may have
+		 * just shifted to a half-pixel grid (see
+		 * doc/cairo-single-pixel-lines)
+		 */
+		self = item_to_window (self, false);
+		Rect intersection = self.intersection (area);
+
+		if (!intersection) {
+			continue;
+		}
+
+		Gtkmm2ext::set_source_rgba (context, l.color);
+		context->set_line_width (l.width);
+
+		/* OK, something to draw. The actual line must be drawn at
+		 * l.pos (one one axis)
+		 */
+
+		if (_orientation == Horizontal) {
+			Coord c = item_to_window (Duple (0., l.pos), false).y;
+			context->move_to (intersection.x0, c);
+			context->line_to (intersection.x1, c);
+		} else {
+			Coord c = item_to_window (Duple (l.pos, 0.), false).x;
+			context->move_to (c, intersection.y0);
+			context->line_to (c, intersection.y1);
 		}
 
 		context->stroke ();
@@ -131,12 +147,37 @@ LineSet::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
 }
 
 void
-LineSet::add_coord (Coord y, Distance width, Gtkmm2ext::Color color)
+LineSet::add_coord (Coord pos, Distance width, Gtkmm2ext::Color color)
+{
+	/* If width is odd (width % 2 != 0) and position is on
+	   a whole pixel, shift it to a half-pixel position. Otherwise
+	   force it back to an integer position. See
+	   doc/cairo-single-pixel-lines for more details.
+	*/
+
+	if (fmod (width, 2.) && !fmod (pos, 1.0)) {
+		/* odd width, integral position */
+		pos += 0.5;
+	} else {
+		/* even width and/or non-integral position */
+		pos = floor (pos);
+	}
+
+	_lines.push_back (Line (pos, width, color));
+}
+
+void
+LineSet::begin_add ()
 {
 	begin_change ();
+}
 
-	_lines.push_back (Line (y, width, color));
-	sort (_lines.begin(), _lines.end(), LineSorter());
+void
+LineSet::end_add ()
+{
+	if (!_lines.empty()) {
+		sort (_lines.begin(), _lines.end(), LineSorter());
+	}
 
 	set_bbox_dirty ();
 	end_change ();

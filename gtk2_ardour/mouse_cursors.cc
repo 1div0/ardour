@@ -18,7 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gdkmm/cursor.h>
+#include <ydkmm/cursor.h>
 
 #include "gtkmm2ext/cursors.h"
 
@@ -49,7 +49,6 @@ MouseCursors::MouseCursors ()
 	, zoom_out (0)
 	, time_fx (0)
 	, fader (0)
-	, speaker (0)
 	, midi_pencil (0)
 	, midi_select (0)
 	, midi_resize (0)
@@ -80,6 +79,8 @@ MouseCursors::~MouseCursors ()
 void
 MouseCursors::drop_all ()
 {
+	cursors.clear ();
+
 	delete cross_hair; cross_hair = 0;
 	delete scissors; scissors = 0;
 	delete trimmer; trimmer = 0;
@@ -98,7 +99,6 @@ MouseCursors::drop_all ()
 	delete zoom_out; zoom_out = 0;
 	delete time_fx; time_fx = 0;
 	delete fader; fader = 0;
-	delete speaker; speaker = 0;
 	delete midi_pencil; midi_pencil = 0;
 	delete midi_select; midi_select = 0;
 	delete midi_resize; midi_resize = 0;
@@ -131,7 +131,9 @@ MouseCursors::make_cursor (const char* name, int hotspot_x, int hotspot_y)
 	}
 
 	Glib::RefPtr<Gdk::Pixbuf> p (::get_icon (name, _cursor_set));
-	return new Gdk::Cursor (Gdk::Display::get_default(), p, hotspot_x, hotspot_y);
+	Gdk::Cursor* c = new Gdk::Cursor (Gdk::Display::get_default(), p, hotspot_x, hotspot_y);
+	cursors.push_back (c);
+	return c;
 }
 
 void
@@ -194,12 +196,6 @@ MouseCursors::set_cursor_set (const std::string& name)
 	}
 
 	{
-		RefPtr<Bitmap> source = Bitmap::create ((char const *) speaker_cursor_bits, speaker_cursor_width, speaker_cursor_height);
-		RefPtr<Bitmap> mask = Bitmap::create ((char const *) speaker_cursor_mask_bits, speaker_cursor_width, speaker_cursor_height);
-		speaker = new Cursor (source, mask, ffg, fbg, speaker_cursor_width >> 1, speaker_cursor_height >> 1);
-	}
-
-	{
 		char pix[4] = { 0, 0, 0, 0 };
 		RefPtr<Bitmap> bits = Bitmap::create (pix, 2, 2);
 		Color c;
@@ -207,15 +203,25 @@ MouseCursors::set_cursor_set (const std::string& name)
 	}
 
 	cross_hair = new Cursor (CROSSHAIR);
+	cursors.push_back (cross_hair);
 	trimmer =  new Cursor (SB_H_DOUBLE_ARROW);
+	cursors.push_back (trimmer);
 	time_fx = new Cursor (SIZING);
+	cursors.push_back (time_fx);
 	wait = new Cursor (WATCH);
+	cursors.push_back (wait);
 	timebar = new Cursor(LEFT_PTR);
+	cursors.push_back (timebar);
 	midi_pencil = new Cursor (PENCIL);
+	cursors.push_back (midi_pencil);
 	midi_select = new Cursor (CENTER_PTR);
+	cursors.push_back (midi_select);
 	midi_resize = new Cursor (SIZING);
+	cursors.push_back (midi_resize);
 	midi_erase = new Cursor (DRAPED_BOX);
+	cursors.push_back (midi_erase);
 	up_down = new Cursor (SB_V_DOUBLE_ARROW);
+	cursors.push_back (up_down);
 }
 
 void
@@ -226,3 +232,16 @@ MouseCursors::create_invalid()
 	Gdk::Color c;
 	_invalid = new Gdk::Cursor (bits, bits, c, c, 0, 0);
 }
+
+Gdk::Cursor*
+MouseCursors::from_gdk_cursor (GdkCursor* gc)
+{
+	for (auto & c : cursors) {
+		if (c->gobj() == gc) {
+			return c;
+		}
+	}
+
+	return nullptr;
+}
+

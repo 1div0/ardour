@@ -24,21 +24,20 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_gtk_time_axis_h__
-#define __ardour_gtk_time_axis_h__
+#pragma once
 
 #include <vector>
 #include <list>
 
-#include <gtkmm/box.h>
-#include <gtkmm/fixed.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/drawingarea.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/table.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/label.h>
-#include <gtkmm/sizegroup.h>
+#include <ytkmm/box.h>
+#include <ytkmm/fixed.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/drawingarea.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/table.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/label.h>
+#include <ytkmm/sizegroup.h>
 
 #include "pbd/stateful.h"
 #include "pbd/signals.h"
@@ -56,6 +55,7 @@
 #include "axis_view.h"
 #include "enums.h"
 #include "editing.h"
+#include "selectable.h"
 
 namespace ARDOUR {
 	class Session;
@@ -82,7 +82,6 @@ class TimeSelection;
 class PointSelection;
 class TimeAxisViewItem;
 class Selection;
-class Selectable;
 class RegionView;
 class GhostRegion;
 class StreamView;
@@ -95,7 +94,7 @@ class PasteContext;
  * This class provides the basic LHS controls and display methods. This should be
  * extended to create functional time-axis based views.
  */
-class TimeAxisView : public virtual AxisView
+class TimeAxisView : public virtual AxisView, public SelectableOwner
 {
 private:
 	enum NamePackingBits {
@@ -107,7 +106,9 @@ public:
 	TimeAxisView(ARDOUR::Session* sess, PublicEditor& ed, TimeAxisView* parent, ArdourCanvas::Canvas& canvas);
 	virtual ~TimeAxisView ();
 
-	static PBD::Signal1<void,TimeAxisView*> CatchDeletion;
+	std::string name () const { return name_label.get_text (); }
+
+	static PBD::Signal<void(TimeAxisView*)> CatchDeletion;
 
 	static void setup_sizes ();
 
@@ -125,7 +126,7 @@ public:
 	uint32_t effective_height () const { return _effective_height; }
 
 	/** @return y position, or -1 if hidden */
-	double y_position () const { return _y_position; }
+	int y_position () const { return _y_position; }
 
 	/** @return our Editor */
 	PublicEditor& editor () const { return _editor; }
@@ -134,7 +135,7 @@ public:
 
 	void idle_resize (int32_t);
 
-	virtual guint32 show_at (double y, int& nth, Gtk::VBox *parent);
+	virtual guint32 show_at (int y, int& nth, Gtk::VBox *parent);
 	virtual void hide ();
 
 	bool touched (double top, double bot);
@@ -170,8 +171,8 @@ public:
 
 	virtual void step_height (bool);
 
-	virtual ARDOUR::RouteGroup* route_group() const { return 0; }
-	virtual std::shared_ptr<ARDOUR::Playlist> playlist() const { return std::shared_ptr<ARDOUR::Playlist> (); }
+	virtual std::shared_ptr<ARDOUR::RouteGroup> route_group() const { return nullptr; }
+	virtual std::shared_ptr<ARDOUR::Playlist> playlist() const { return nullptr; }
 
 	virtual void set_samples_per_pixel (double);
 	virtual void show_selection (TimeSelection&);
@@ -188,7 +189,6 @@ public:
 	 *  @param pos Position to paste to (session samples).
 	 *  @param selection Selection to paste.
 	 *  @param ctx Paste context.
-	 *  @param sub_num music-time sub-division: \c -1: snap to bar, \c 1: exact beat, \c >1: \c (1 \c / \p sub_num \c ) beat-divisions
 	 */
 	virtual bool paste (Temporal::timepos_t const & pos,
 	                    const Selection&    selection,
@@ -209,8 +209,8 @@ public:
 
 	void order_selection_trims (ArdourCanvas::Item *item, bool put_start_on_top);
 
-	virtual void get_selectables (Temporal::timepos_t const &, Temporal::timepos_t  const &, double, double, std::list<Selectable*>&, bool within = false);
-	virtual void get_inverted_selectables (Selection&, std::list<Selectable *>& results);
+	void _get_selectables (Temporal::timepos_t const &, Temporal::timepos_t  const &, double, double, std::list<Selectable*>&, bool within);
+	void get_inverted_selectables (Selection&, std::list<Selectable *>& results);
 	virtual void get_regionviews_at_or_after (Temporal::timepos_t const &, RegionSelection&) {}
 
 	void add_ghost (RegionView*);
@@ -262,14 +262,13 @@ protected:
 	Gtk::Menu*            _size_menu;
 	ArdourCanvas::Line*       _canvas_separator;
 	ArdourCanvas::Container*  _canvas_display;
-	double                _y_position;
+	int                   _y_position;
 	PublicEditor&         _editor;
 
 	virtual bool can_edit_name() const;
 
 	void begin_name_edit ();
 	void end_name_edit (std::string, int);
-	virtual std::string name () const { return name_label.get_text (); }
 
 	/* derived classes can override these */
 
@@ -284,12 +283,6 @@ protected:
 	virtual bool controls_ebox_button_press (GdkEventButton*);
 	virtual bool controls_ebox_motion (GdkEventMotion*);
 	virtual bool controls_ebox_leave (GdkEventCrossing*);
-
-	/** Display the standard LHS control menu at when.
-	 *
-	 * @param when the popup activation time
-	 */
-	virtual void popup_display_menu (guint32 when);
 
 	/** Build the standard LHS control menu.
 	 * Subclasses should extend this method to add their own menu options.
@@ -336,7 +329,8 @@ private:
 
 	void compute_heights ();
 	bool maybe_set_cursor (int y);
+	void popup_display_menu (int button, guint32 when);
+
 
 }; /* class TimeAxisView */
 
-#endif /* __ardour_gtk_time_axis_h__ */

@@ -24,13 +24,13 @@
 
 #include <string>
 
-#include <gtkmm/assistant.h>
-#include <gtkmm/label.h>
-#include <gtkmm/expander.h>
-#include <gtkmm/box.h>
-#include <gtkmm/radiobutton.h>
-#include <gtkmm/filechooserbutton.h>
-#include <gtkmm/comboboxtext.h>
+#include <ytkmm/assistant.h>
+#include <ytkmm/label.h>
+#include <ytkmm/expander.h>
+#include <ytkmm/box.h>
+#include <ytkmm/radiobutton.h>
+#include <ytkmm/filechooserbutton.h>
+#include <ytkmm/comboboxtext.h>
 
 #include "ardour/utils.h"
 
@@ -77,13 +77,19 @@ private:
 	/* Welcome */
 	Gtk::ComboBoxText ui_font_scale;
 	void rescale_ui ();
-	void guess_default_ui_scale ();
 
 	/* first page */
 	Gtk::FileChooserButton* default_dir_chooser;
+	Gtk::Label* default_dir_label;
 	void default_dir_changed();
 	void setup_first_page ();
 	Gtk::FileChooserButton new_folder_chooser;
+
+	/* Clip lib page */
+	Gtk::FileChooserButton* clip_lib_chooser;
+	Gtk::Label* clip_lib_label;
+	void clip_lib_changed();
+	void setup_clip_lib_page ();
 
 	/* final page */
 	void setup_final_page ();

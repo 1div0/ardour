@@ -40,15 +40,16 @@
 #include "canvas/scroll_group.h"
 
 #include "editor.h"
+#include "editor_sections.h"
 #include "keyboard.h"
 #include "public_editor.h"
 #include "audio_region_view.h"
 #include "audio_streamview.h"
 #include "audio_time_axis.h"
 #include "region_gain_line.h"
-#include "automation_line.h"
+#include "editor_automation_line.h"
 #include "automation_time_axis.h"
-#include "automation_line.h"
+#include "editor_automation_line.h"
 #include "control_point.h"
 #include "editor_drag.h"
 #include "midi_time_axis.h"
@@ -151,7 +152,7 @@ bool
 Editor::canvas_scroll_event (GdkEventScroll *event, bool from_canvas)
 {
 	if (from_canvas) {
-		boost::optional<ArdourCanvas::Rect> rulers = _time_markers_group->bounding_box();
+		std::optional<ArdourCanvas::Rect> rulers = _time_markers_group->bounding_box();
 		if (rulers && rulers->contains (Duple (event->x, event->y))) {
 			return canvas_ruler_event ((GdkEvent*) event, timecode_ruler, TimecodeRulerItem);
 		}
@@ -199,50 +200,6 @@ Editor::track_canvas_motion_notify_event (GdkEventMotion */*event*/)
 	/* keep those motion events coming */
 	_track_canvas->get_pointer (x, y);
 	return false;
-}
-
-bool
-Editor::typed_event (ArdourCanvas::Item* item, GdkEvent *event, ItemType type)
-{
-	if (!session () || session()->loading () || session()->deletion_in_progress ()) {
-		return false;
-	}
-
-	gint ret = FALSE;
-
-	switch (event->type) {
-	case GDK_BUTTON_PRESS:
-	case GDK_2BUTTON_PRESS:
-	case GDK_3BUTTON_PRESS:
-		ret = button_press_handler (item, event, type);
-		break;
-	case GDK_BUTTON_RELEASE:
-		ret = button_release_handler (item, event, type);
-		break;
-	case GDK_MOTION_NOTIFY:
-		ret = motion_handler (item, event);
-		break;
-
-	case GDK_ENTER_NOTIFY:
-		ret = enter_handler (item, event, type);
-		break;
-
-	case GDK_LEAVE_NOTIFY:
-		ret = leave_handler (item, event, type);
-		break;
-
-	case GDK_KEY_PRESS:
-		ret = key_press_handler (item, event, type);
-		break;
-
-	case GDK_KEY_RELEASE:
-		ret = key_release_handler (item, event, type);
-		break;
-
-	default:
-		break;
-	}
-	return ret;
 }
 
 bool
@@ -374,6 +331,13 @@ Editor::canvas_stream_view_event (GdkEvent *event, ArdourCanvas::Item* item, Rou
 bool
 Editor::canvas_automation_track_event (GdkEvent *event, ArdourCanvas::Item* item, AutomationTimeAxisView *atv)
 {
+	if (atv->parameter().type() == MidiVelocityAutomation) {
+		/* no event handling for velocity tracks until we can make the
+		   automation control affect note velocity.
+		*/
+		return false;
+	}
+
 	bool ret = false;
 
 	switch (event->type) {
@@ -401,6 +365,18 @@ Editor::canvas_automation_track_event (GdkEvent *event, ArdourCanvas::Item* item
 
 	case GDK_LEAVE_NOTIFY:
 		ret = leave_handler (item, event, AutomationTrackItem);
+		break;
+
+	case GDK_KEY_PRESS:
+		if (_drags->active()) {
+			return _drags->mid_drag_key_event (&event->key);
+		}
+		break;
+
+	case GDK_KEY_RELEASE:
+		if (_drags->active()) {
+			return _drags->mid_drag_key_event (&event->key);
+		}
 		break;
 
 	default:
@@ -660,7 +636,7 @@ Editor::canvas_control_point_event (GdkEvent *event, ArdourCanvas::Item* item, C
 	case GDK_2BUTTON_PRESS:
 	case GDK_3BUTTON_PRESS:
 		clicked_control_point = cp;
-		clicked_axisview = &cp->line().trackview;
+		clicked_axisview = &dynamic_cast<EditorAutomationLine*> (&cp->line())->trackview;
 		clicked_routeview = dynamic_cast<RouteTimeAxisView*>(clicked_axisview);
 		clicked_regionview = 0;
 		break;
@@ -672,17 +648,29 @@ Editor::canvas_control_point_event (GdkEvent *event, ArdourCanvas::Item* item, C
 }
 
 bool
-Editor::canvas_line_event (GdkEvent *event, ArdourCanvas::Item* item, AutomationLine* al)
+Editor::canvas_velocity_event (GdkEvent *event, ArdourCanvas::Item* item)
+{
+	return typed_event (item, event, VelocityItem);
+}
+
+bool
+Editor::canvas_velocity_base_event (GdkEvent *event, ArdourCanvas::Item* item)
+{
+	return typed_event (item, event, VelocityBaseItem);
+}
+
+bool
+Editor::canvas_line_event (GdkEvent *event, ArdourCanvas::Item* item, EditorAutomationLine* al)
 {
 	ItemType type;
-	AudioRegionGainLine* gl;
-	if ((gl = dynamic_cast<AudioRegionGainLine*> (al)) != 0) {
+	RegionFxLine* rfl;
+	if ((rfl = dynamic_cast<RegionFxLine*> (al)) != 0) {
 		type = GainLineItem;
 		if (event->type == GDK_BUTTON_PRESS) {
-			clicked_regionview = &gl->region_view ();
+			clicked_regionview = &rfl->region_view ();
 		}
 	} else {
-		type = AutomationLineItem;
+		type = EditorAutomationLineItem;
 		if (event->type == GDK_BUTTON_PRESS) {
 			clicked_regionview = 0;
 		}
@@ -837,6 +825,7 @@ Editor::canvas_frame_handle_event (GdkEvent* event, ArdourCanvas::Item* item, Re
 		ret = motion_handler (item, event);
 		break;
 	case GDK_ENTER_NOTIFY:
+		set_entered_regionview (rv);
 		ret = enter_handler (item, event, type);
 		break;
 
@@ -979,6 +968,12 @@ Editor::canvas_marker_event (GdkEvent *event, ArdourCanvas::Item* item, ArdourMa
 }
 
 bool
+Editor::canvas_selection_marker_event (GdkEvent *event, ArdourCanvas::Item* item)
+{
+	return typed_event (item, event, SelectionMarkerItem);
+}
+
+bool
 Editor::canvas_videotl_bar_event (GdkEvent *event, ArdourCanvas::Item* item)
 {
 	return typed_event (item, event, VideoBarItem);
@@ -1090,9 +1085,109 @@ Editor::canvas_ruler_bar_event (GdkEvent *event, ArdourCanvas::Item* item, ItemT
 }
 
 bool
+Editor::section_rect_event (GdkEvent* ev, Location* loc, ArdourCanvas::Rectangle* rect, std::string color)
+{
+	switch (ev->type) {
+		case GDK_ENTER_NOTIFY:
+			if (UIConfiguration::instance ().get_widget_prelight ()) {
+				rect->set_fill_color (Gtkmm2ext::HSV (UIConfiguration::instance().color (color)).lighter (0.25));
+				return true;
+			}
+			break;
+		case GDK_LEAVE_NOTIFY:
+			if (UIConfiguration::instance ().get_widget_prelight ()) {
+				rect->set_fill_color (UIConfiguration::instance().color (color));
+				return true;
+			}
+			break;
+		case GDK_BUTTON_PRESS:
+			if (Keyboard::modifier_state_equals (ev->button.state, Keyboard::PrimaryModifier)) {
+				/* used to add markers */
+				return false;
+			}
+			if (ev->button.button == 1) {
+				_session->request_locate (loc->start().samples());
+			}
+			return true;
+		case GDK_2BUTTON_PRESS:
+		case GDK_3BUTTON_PRESS:
+			if (Keyboard::modifier_state_equals (ev->button.state, Keyboard::PrimaryModifier)) {
+				return false;
+			}
+			if (ev->button.button == 1) {
+				assert (find_location_markers (loc));
+				edit_marker (find_location_markers (loc)->start, true);
+				return true;
+			}
+			break;
+		case GDK_BUTTON_RELEASE:
+			if (Keyboard::is_context_menu_event (&ev->button)) {
+				using namespace Menu_Helpers;
+
+				/* find section */
+				timepos_t start (loc->start ());
+				timepos_t end;
+				Location* l = _session->locations()->section_at (start, start, end);
+				assert (l);
+
+				timepos_t where (canvas_event_time (ev));
+				snap_to (where, Temporal::RoundNearest);
+
+				section_box_menu.set_name ("ArdourContextMenu");
+				MenuList& items (section_box_menu.items());
+				items.clear ();
+
+				items.push_back (MenuElem (_("New Arrangement Marker"), sigc::bind (sigc::mem_fun(*this, &Editor::add_location_mark_with_flag), where, Location::Flags(Location::IsMark | Location::IsSection), 0)));
+				items.push_back (MenuElem (_("Select Arrangement Section"), sigc::bind (sigc::mem_fun(*_sections, &EditorSections::select), l)));
+#if 0
+				items.push_back (SeparatorElem());
+				add_section_context_items (items);   //TODO: section_context_items needs to be modified to operate on the marker you clicked on, not the range selection (which might not exist)
+#endif
+
+				section_box_menu.popup (ev->button.button, ev->button.time);
+				return true;
+			}
+			break;
+		default:
+			break;
+	}
+	return false;
+}
+
+bool
 Editor::canvas_playhead_cursor_event (GdkEvent *event, ArdourCanvas::Item* item)
 {
 	return typed_event (item, event, PlayheadCursorItem);
+}
+
+bool
+Editor::canvas_section_box_event (GdkEvent *event)
+{
+	switch (event->type) {
+		case GDK_BUTTON_PRESS:
+			if (!Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier)
+			   && event->button.button == 1) {
+				_drags->set (new CursorDrag (*this, *_playhead_cursor, false), event);
+			}
+			/*fallthrough*/
+		case GDK_2BUTTON_PRESS:
+			/*fallthrough*/
+		case GDK_3BUTTON_PRESS:
+			return !Keyboard::modifier_state_equals (event->button.state, Keyboard::PrimaryModifier);
+		case GDK_BUTTON_RELEASE:
+			if (Keyboard::is_context_menu_event (&event->button)) {
+				section_box_menu.set_name ("ArdourContextMenu");
+				Gtk::Menu_Helpers::MenuList& items (section_box_menu.items());
+				items.clear ();
+				add_section_context_items (items);
+				section_box_menu.popup (event->button.button, event->button.time);
+				return true;
+			}
+			return false;
+		default:
+			break;
+	}
+	return false;
 }
 
 bool
@@ -1103,6 +1198,16 @@ Editor::canvas_note_event (GdkEvent *event, ArdourCanvas::Item* item)
 	}
 
 	return typed_event (item, event, NoteItem);
+}
+
+bool
+Editor::canvas_bg_event (GdkEvent *event, ArdourCanvas::Item* item)
+{
+	if (!internal_editing()) {
+		return false;
+	}
+
+	return typed_event (item, event, RegionItem);
 }
 
 bool
@@ -1123,8 +1228,8 @@ Editor::canvas_drop_zone_event (GdkEvent* event)
 
 	case GDK_SCROLL:
 		/* convert coordinates back into window space so that
-		   we can just call canvas_scroll_event().
-		*/
+		 * we can just call canvas_scroll_event().
+		 */
 		winpos = _track_canvas->canvas_to_window (Duple (event->scroll.x, event->scroll.y));
 		scroll = event->scroll;
 		scroll.x = winpos.x;
@@ -1144,6 +1249,53 @@ Editor::canvas_drop_zone_event (GdkEvent* event)
 
 	default:
 		break;
+	}
+
+	return true;
+}
+
+bool
+Editor::canvas_grid_zone_event (GdkEvent* event)
+{
+	GdkEventScroll scroll;
+	ArdourCanvas::Duple winpos;
+
+
+	switch (event->type) {
+
+		case GDK_BUTTON_PRESS:
+			if (event->button.button == 1) {
+				choose_mapping_drag (_canvas_grid_zone, event);
+			}
+			break;
+
+		case GDK_BUTTON_RELEASE:
+			return typed_event (_canvas_grid_zone, event, GridZoneItem);
+			break;
+
+		case GDK_SCROLL:
+			/* convert coordinates back into window space so that
+			 * we can just call canvas_scroll_event().
+			 */
+			winpos   = _track_canvas->canvas_to_window (Duple (event->scroll.x, event->scroll.y));
+			scroll   = event->scroll;
+			scroll.x = winpos.x;
+			scroll.y = winpos.y;
+			return canvas_scroll_event (&scroll, true);
+			break;
+
+		case GDK_ENTER_NOTIFY:
+			return typed_event (_canvas_grid_zone, event, GridZoneItem);
+
+		case GDK_LEAVE_NOTIFY:
+			return typed_event (_canvas_grid_zone, event, GridZoneItem);
+
+		case GDK_MOTION_NOTIFY:
+			return motion_handler (_canvas_grid_zone, event);
+			break;
+
+		default:
+			break;
 	}
 
 	return true;
@@ -1242,7 +1394,7 @@ Editor::drop_regions (const Glib::RefPtr<Gdk::DragContext>& /*context*/,
 	double px;
 	double py;
 
-	event.type = GDK_MOTION_NOTIFY;
+	event.type = GDK_BUTTON_PRESS;
 	event.button.x = x;
 	event.button.y = y;
 	/* assume we're dragging with button 1 */
@@ -1276,7 +1428,7 @@ Editor::drop_regions (const Glib::RefPtr<Gdk::DragContext>& /*context*/,
 				                                         Config->get_strict_io () || Profile->get_mixbus (),
 				                                         std::shared_ptr<ARDOUR::PluginInfo>(),
 				                                         (ARDOUR::Plugin::PresetRecord*) 0,
-				                                         (ARDOUR::RouteGroup*) 0, 1, region->name(), PresentationInfo::max_order, Normal, true);
+				                                         nullptr, 1, region->name(), PresentationInfo::max_order, Normal, true);
 				rtav = dynamic_cast<RouteTimeAxisView*> (time_axis_view_from_stripable (midi_tracks.front()));
 			} else {
 				return;
@@ -1292,7 +1444,7 @@ Editor::drop_regions (const Glib::RefPtr<Gdk::DragContext>& /*context*/,
 
 		if ((std::dynamic_pointer_cast<AudioRegion> (region_copy) != 0 && dynamic_cast<AudioTimeAxisView*> (rtav) != 0) ||
 		    (std::dynamic_pointer_cast<MidiRegion> (region_copy) != 0 && dynamic_cast<MidiTimeAxisView*> (rtav) != 0)) {
-			_drags->set (new RegionInsertDrag (this, region_copy, rtav, timepos_t (pos), drag_time_domain (region_copy.get())), &event);
+			_drags->set (new RegionInsertDrag (*this, region_copy, rtav, timepos_t (pos), drag_time_domain (region_copy.get())), &event);
 			_drags->end_grab (&event);
 		}
 	}

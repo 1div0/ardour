@@ -32,15 +32,16 @@
 
 #include <algorithm>
 
-#include <gtkmm/button.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/messagedialog.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treestore.h>
+#include <ytkmm/button.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/messagedialog.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
+#include <ytkmm/treestore.h>
 
+#include "gtkmm2ext/cell_renderer_pixbuf_multi.h"
 #include "gtkmm2ext/utils.h"
 
 #include "widgets/tooltips.h"
@@ -58,6 +59,7 @@
 #include "plugin_utils.h"
 #include "gui_thread.h"
 #include "ui_config.h"
+#include "utils.h"
 
 #include "pbd/i18n.h"
 
@@ -85,16 +87,35 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	_plugin_menu = 0;
 	in_row_change = false;
 
-	manager.PluginListChanged.connect (plugin_list_changed_connection, invalidator (*this), boost::bind (&PluginSelector::build_plugin_menu, this), gui_context());
-	manager.PluginStatusChanged.connect (plugin_list_changed_connection, invalidator (*this), boost::bind (&PluginSelector::build_plugin_menu, this), gui_context());
-	manager.PluginTagChanged.connect (plugin_list_changed_connection, invalidator (*this), boost::bind (&PluginSelector::build_plugin_menu, this), gui_context());
+	manager.PluginListChanged.connect (plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::build_plugin_menu, this), gui_context());
+	manager.PluginStatusChanged.connect (plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::build_plugin_menu, this), gui_context());
+	manager.PluginTagChanged.connect (plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::build_plugin_menu, this), gui_context());
 
-	manager.PluginStatusChanged.connect (plugin_list_changed_connection, invalidator (*this), boost::bind (&PluginSelector::plugin_status_changed, this, _1, _2, _3), gui_context());
-	manager.PluginTagChanged.connect(plugin_list_changed_connection, invalidator (*this), boost::bind (&PluginSelector::tags_changed, this, _1, _2, _3), gui_context());
+	manager.PluginStatusChanged.connect (plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::plugin_status_changed, this, _1, _2, _3), gui_context());
+	manager.PluginTagChanged.connect(plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::tags_changed, this, _1, _2, _3), gui_context());
 
 	plugin_model = Gtk::ListStore::create (plugin_columns);
 	plugin_display.set_model (plugin_model);
-	plugin_display.append_column (S_("Favorite|Fav"), plugin_columns.favorite);
+
+	{
+		Gtkmm2ext::CellRendererPixbufMulti* cell;
+		Gtk::TreeViewColumn*                tvc;
+
+		cell = manage (new Gtkmm2ext::CellRendererPixbufMulti ());
+		cell->signal_changed().connect (sigc::mem_fun (*this, &PluginSelector::favorite_changed));
+		cell->set_pixbuf (Gtkmm2ext::Off, ARDOUR_UI_UTILS::get_icon ("favorite-no"));
+		cell->set_pixbuf (Gtkmm2ext::ExplicitActive, ARDOUR_UI_UTILS::get_icon ("favorite-yes"));
+
+		tvc = manage (new Gtk::TreeViewColumn (S_("Favorite|Fav"), *cell));
+		tvc->add_attribute (cell->property_state (), plugin_columns.favorite);
+		tvc->set_sizing (Gtk::TREE_VIEW_COLUMN_GROW_ONLY);
+		tvc->set_alignment (Gtk::ALIGN_CENTER);
+		tvc->set_expand (false);
+		tvc->set_resizable (false);
+
+		plugin_display.append_column (*tvc);
+	}
+
 	plugin_display.append_column (_("Name"), plugin_columns.name);
 	plugin_display.append_column (_("Tags"), plugin_columns.tags);
 	plugin_display.append_column (_("Creator"), plugin_columns.creator);
@@ -114,10 +135,6 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	plugin_display.set_name("PluginSelectorDisplay");
 	plugin_display.signal_row_activated().connect_notify (sigc::mem_fun(*this, &PluginSelector::row_activated));
 	plugin_display.get_selection()->signal_changed().connect (sigc::mem_fun(*this, &PluginSelector::display_selection_changed));
-
-	CellRendererToggle* fav_cell = dynamic_cast<CellRendererToggle*>(plugin_display.get_column_cell_renderer (0));
-	fav_cell->property_activatable() = true;
-	fav_cell->signal_toggled().connect (sigc::mem_fun (*this, &PluginSelector::favorite_changed));
 
 	scroller.set_border_width(10);
 	scroller.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
@@ -363,16 +380,36 @@ PluginSelector::show_this_plugin (const PluginInfoPtr& info, const std::string& 
 	bool maybe_show = false;
 	PluginManager::PluginStatusType status = manager.get_status (info);
 
+	if (info->is_internal ()) {
+		return false;
+	}
+
+	bool search_name = _search_name_checkbox->get_active();
+	bool search_tags = _search_tags_checkbox->get_active();
+	bool search_creator = false;
+
+	if (!search_name && !search_tags) {
+		search_name = true;
+		search_tags = true;
+		search_creator = true;
+	}
+
 	if (!searchstr.empty()) {
 
-		if (_search_name_checkbox->get_active()) { /* name contains */
+		if (search_name) {
 			std::string compstr = info->name;
 			setup_search_string (compstr);
 			maybe_show |= match_search_strings (compstr, searchstr);
 		}
 
-		if (_search_tags_checkbox->get_active()) { /* tag contains */
+		if (search_tags) {
 			std::string compstr = manager.get_tags_as_string (info);
+			setup_search_string (compstr);
+			maybe_show |= match_search_strings (compstr, searchstr);
+		}
+
+		if (search_creator) {
+			std::string compstr = info->creator;
 			setup_search_string (compstr);
 			maybe_show |= match_search_strings (compstr, searchstr);
 		}
@@ -910,6 +947,9 @@ struct PluginMenuCompareByCreator {
 Gtk::Menu*
 PluginSelector::plugin_menu()
 {
+	if (_plugin_menu->get_attach_widget ()) {
+		_plugin_menu->detach ();
+	}
 	return _plugin_menu;
 }
 
@@ -1055,6 +1095,7 @@ PluginSelector::create_by_creator_menu (ARDOUR::PluginInfoList& all_plugs)
 		PluginManager::PluginStatusType status = manager.get_status (*i);
 		if (status == PluginManager::Hidden) continue;
 		if (status == PluginManager::Concealed) continue;
+		if ((*i)->is_internal ()) continue;
 
 		string creator = (*i)->creator;
 
@@ -1115,6 +1156,7 @@ PluginSelector::create_by_tags_menu (ARDOUR::PluginInfoList& all_plugs)
 		PluginManager::PluginStatusType status = manager.get_status (*i);
 		if (status == PluginManager::Hidden) continue;
 		if (status == PluginManager::Concealed) continue;
+		if ((*i)->is_internal ()) continue;
 
 		/* for each tag in the plugins tag list, add it to that submenu */
 		vector<string> tokens = manager.get_tags(*i);

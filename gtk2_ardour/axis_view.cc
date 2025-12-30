@@ -52,8 +52,6 @@ using namespace Gtkmm2ext;
 using namespace ARDOUR;
 using namespace ARDOUR_UI_UTILS;
 
-list<Gdk::Color> AxisView::used_colors;
-
 AxisView::AxisView ()
 {
 }
@@ -63,9 +61,9 @@ AxisView::~AxisView()
 }
 
 Gdk::Color
-AxisView::unique_random_color()
+AxisView::round_robin_palette_color ()
 {
-	return ARDOUR_UI_UTILS::unique_palette_color (used_colors);
+	return ARDOUR_UI_UTILS::round_robin_palette_color ();
 }
 
 string
@@ -153,12 +151,15 @@ AxisView::set_name_ellipsize_mode ()
 	switch (UIConfiguration::instance().get_time_axis_name_ellipsize_mode()) {
 	case -1:
 		name_label.set_ellipsize (Pango::ELLIPSIZE_START);
+		inactive_label.set_ellipsize (Pango::ELLIPSIZE_START);
 		break;
 	case 1:
 		name_label.set_ellipsize (Pango::ELLIPSIZE_END);
+		inactive_label.set_ellipsize (Pango::ELLIPSIZE_END);
 		break;
 	default:
 		name_label.set_ellipsize (Pango::ELLIPSIZE_MIDDLE);
+		inactive_label.set_ellipsize (Pango::ELLIPSIZE_MIDDLE);
 		break;
 	}
 }

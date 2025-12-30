@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_vca_h__
-#define __ardour_vca_h__
+#pragma once
 
 #include <memory>
 #include <string>
@@ -61,7 +60,7 @@ class LIBARDOUR_API VCA : public Stripable,
 	XMLNode& get_state() const;
 	int set_state (XMLNode const&, int version);
 
-	PBD::Signal0<void> Drop; /* signal to slaves to drop control by this VCA */
+	PBD::Signal<void()> Drop; /* signal to slaves to drop control by this VCA */
 
 	/* Slavable API */
 
@@ -110,75 +109,42 @@ class LIBARDOUR_API VCA : public Stripable,
 
 	/* null Stripable API, because VCAs don't have any of this */
 
+	std::shared_ptr<AutomationControl> mapped_control (enum WellKnownCtrl, uint32_t band = 0) const {
+		return std::shared_ptr<AutomationControl>();
+	}
+	std::shared_ptr<ReadOnlyControl>   mapped_output (enum WellKnownData) const {
+		return std::shared_ptr<ReadOnlyControl>();
+	}
+
 	std::shared_ptr<SoloIsolateControl> solo_isolate_control() const { return std::shared_ptr<SoloIsolateControl>(); }
-	std::shared_ptr<SoloSafeControl> solo_safe_control() const { return std::shared_ptr<SoloSafeControl>(); }
+	std::shared_ptr<SoloSafeControl>    solo_safe_control() const { return std::shared_ptr<SoloSafeControl>(); }
+
 	std::shared_ptr<PeakMeter>         peak_meter() { return std::shared_ptr<PeakMeter>(); }
 	std::shared_ptr<const PeakMeter>   peak_meter() const { return std::shared_ptr<PeakMeter>(); }
 	std::shared_ptr<PhaseControl>      phase_control() const { return std::shared_ptr<PhaseControl>(); }
 	std::shared_ptr<GainControl>       trim_control() const { return std::shared_ptr<GainControl>(); }
+
 	std::shared_ptr<AutomationControl> pan_azimuth_control() const { return std::shared_ptr<AutomationControl>(); }
 	std::shared_ptr<AutomationControl> pan_elevation_control() const { return std::shared_ptr<AutomationControl>(); }
 	std::shared_ptr<AutomationControl> pan_width_control() const { return std::shared_ptr<AutomationControl>(); }
 	std::shared_ptr<AutomationControl> pan_frontback_control() const { return std::shared_ptr<AutomationControl>(); }
 	std::shared_ptr<AutomationControl> pan_lfe_control() const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> tape_drive_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> tape_drive_mode_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<ReadOnlyControl> tape_drive_mtr_controllable () const { return std::shared_ptr<ReadOnlyControl>(); }
+
 	uint32_t eq_band_cnt () const { return 0; }
 	std::string eq_band_name (uint32_t) const { return std::string(); }
-	std::shared_ptr<AutomationControl> eq_enable_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> eq_gain_controllable (uint32_t) const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> eq_freq_controllable (uint32_t) const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> eq_q_controllable (uint32_t) const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> eq_shape_controllable (uint32_t) const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> filter_freq_controllable (bool) const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> filter_slope_controllable (bool) const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> filter_enable_controllable (bool) const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_enable_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_threshold_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_speed_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_mode_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_makeup_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_ratio_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_attack_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_release_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_key_filter_freq_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> comp_lookahead_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<ReadOnlyControl>   comp_meter_controllable () const { return std::shared_ptr<ReadOnlyControl>(); }
-	std::shared_ptr<ReadOnlyControl>   comp_redux_controllable () const { return std::shared_ptr<ReadOnlyControl>(); }
 
-	std::shared_ptr<AutomationControl> gate_enable_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_mode_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_ratio_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_knee_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_threshold_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_depth_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_hysteresis_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_hold_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_attack_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_release_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_key_listen_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_key_filter_enable_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_key_filter_freq_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> gate_lookahead_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<ReadOnlyControl>   gate_meter_controllable () const { return std::shared_ptr<ReadOnlyControl>(); }
-	std::shared_ptr<ReadOnlyControl>   gate_redux_controllable () const { return std::shared_ptr<ReadOnlyControl>(); }
-
-	std::shared_ptr<AutomationControl> send_level_controllable (uint32_t n) const { return std::shared_ptr<AutomationControl>(); }
+	std::shared_ptr<AutomationControl> send_level_controllable (uint32_t n, bool locked = false) const { return std::shared_ptr<AutomationControl>(); }
 	std::shared_ptr<AutomationControl> send_enable_controllable (uint32_t n) const { return std::shared_ptr<AutomationControl>(); }
 	std::shared_ptr<AutomationControl> send_pan_azimuth_controllable (uint32_t n) const { return std::shared_ptr<AutomationControl>(); }
 	std::shared_ptr<AutomationControl> send_pan_azimuth_enable_controllable (uint32_t n) const { return std::shared_ptr<AutomationControl>(); }
 	std::string send_name (uint32_t n) const { return std::string(); }
+
 	std::shared_ptr<AutomationControl> master_send_enable_controllable () const { return std::shared_ptr<AutomationControl>(); }
 	std::shared_ptr<MonitorProcessor> monitor_control() const { return std::shared_ptr<MonitorProcessor>(); }
 	std::shared_ptr<MonitorControl> monitoring_control() const { return std::shared_ptr<MonitorControl>(); }
 
-	//additional filter params (currently 32C only )
-	std::shared_ptr<AutomationControl> eq_lpf_controllable () const { return std::shared_ptr<AutomationControl>(); }
-	std::shared_ptr<AutomationControl> filter_enable_controllable () const { return std::shared_ptr<AutomationControl>(); }
-
 	protected:
-	SlavableControlList slavables () const;
+	SlavableAutomationControlList slavables () const;
 
   private:
 	int32_t _number;
@@ -199,4 +165,3 @@ class LIBARDOUR_API VCA : public Stripable,
 
 } /* namespace */
 
-#endif /* __ardour_vca_h__ */

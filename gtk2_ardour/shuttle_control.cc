@@ -47,6 +47,7 @@
 #include "rgb_macros.h"
 #include "shuttle_control.h"
 #include "timers.h"
+#include "ui_config.h"
 
 #include "pbd/i18n.h"
 
@@ -78,7 +79,7 @@ ShuttleInfoButton::ShuttleInfoButton ()
 	set_elements (ArdourButton::Text);
 	parameter_changed ("shuttle-units");
 
-	Config->ParameterChanged.connect (parameter_connection, MISSING_INVALIDATOR, boost::bind (&ShuttleInfoButton::parameter_changed, this, _1), gui_context ());
+	Config->ParameterChanged.connect (parameter_connection, MISSING_INVALIDATOR, std::bind (&ShuttleInfoButton::parameter_changed, this, _1), gui_context ());
 
 	add_events (Gdk::ENTER_NOTIFY_MASK | Gdk::LEAVE_NOTIFY_MASK | Gdk::BUTTON_RELEASE_MASK | Gdk::BUTTON_PRESS_MASK | Gdk::POINTER_MOTION_MASK | Gdk::SCROLL_MASK);
 }
@@ -155,6 +156,7 @@ ShuttleControl::ShuttleControl ()
 	shine_pattern         = 0;
 	last_shuttle_request  = 0;
 	last_speed_displayed  = -99999999;
+	last_shuttle_fract    = -99999999;
 	shuttle_grabbed       = false;
 	shuttle_speed_on_grab = 0;
 	shuttle_fract         = 0.0;
@@ -185,8 +187,8 @@ ShuttleControl::ShuttleControl ()
 		shuttle_max_speed = 1.5f;
 	}
 
-	Config->ParameterChanged.connect (parameter_connection, MISSING_INVALIDATOR, boost::bind (&ShuttleControl::parameter_changed, this, _1), gui_context ());
-	Port::ResamplerQualityChanged.connect (port_connection, MISSING_INVALIDATOR, boost::bind (&ShuttleControl::parameter_changed, this, "external-sync"), gui_context ());
+	Config->ParameterChanged.connect (parameter_connection, MISSING_INVALIDATOR, std::bind (&ShuttleControl::parameter_changed, this, _1), gui_context ());
+	Port::ResamplerQualityChanged.connect (port_connection, MISSING_INVALIDATOR, std::bind (&ShuttleControl::parameter_changed, this, "external-sync"), gui_context ());
 
 	UIConfiguration::instance ().ColorsChanged.connect (sigc::mem_fun (*this, &ShuttleControl::set_colors));
 	Timers::blink_connect (sigc::mem_fun (*this, &ShuttleControl::do_blink));
@@ -201,6 +203,7 @@ ShuttleControl::ShuttleControl ()
 	/* gtkmm 2.4: the C++ wrapper doesn't work */
 	g_signal_connect ((GObject*)gobj (), "query-tooltip", G_CALLBACK (qt), NULL);
 	// signal_query_tooltip().connect (sigc::mem_fun (*this, &ShuttleControl::on_query_tooltip));
+	set_colors ();
 }
 
 ShuttleControl::~ShuttleControl ()
@@ -251,6 +254,10 @@ ShuttleControl::varispeed_button_scroll_event (GdkEventScroll* ev)
 void
 ShuttleControl::do_blink (bool onoff)
 {
+	if (UIConfiguration::instance().get_no_strobe()) {
+		onoff = true;
+	}
+
 	if (!shuttle_grabbed && _session && _session->default_play_speed () != 1.0) {
 		_vari_button.set_active (onoff);
 		if (_session->actual_speed () == 0) {
@@ -266,12 +273,12 @@ void
 ShuttleControl::set_session (Session* s)
 {
 	SessionHandlePtr::set_session (s);
-	_vari_dialog.set_session (_session);
 
 	if (_session) {
+		_vari_dialog.set_session (_session);
 		_session->add_controllable (_controllable);
 		_info_button.set_session (s);
-		_session->config.ParameterChanged.connect (_session_connections, MISSING_INVALIDATOR, boost::bind (&ShuttleControl::parameter_changed, this, _1), gui_context());
+		_session->config.ParameterChanged.connect (_session_connections, MISSING_INVALIDATOR, std::bind (&ShuttleControl::parameter_changed, this, _1), gui_context());
 		/* set sensitivity */
 		parameter_changed ("external-sync");
 	} else {
@@ -318,13 +325,6 @@ ShuttleControl::map_transport_state ()
 		speed = _session->actual_speed ();
 	}
 
-	if ((fabsf (speed - last_speed_displayed) < 0.005f) // dead-zone
-	    && !(speed == 1.f && last_speed_displayed != 1.f)
-	    && !(speed == 0.f && last_speed_displayed != 0.f)) {
-		return; // nothing to see here, move along.
-	}
-
-	// Q: is there a good reason why we  re-calculate this every time?
 	if (fabs (speed) <= (2 * DBL_EPSILON)) {
 		shuttle_fract = 0;
 	} else {
@@ -333,6 +333,11 @@ ShuttleControl::map_transport_state ()
 		} else {
 			shuttle_fract = speed_as_fract (speed);
 		}
+	}
+
+	if ((fabsf (shuttle_fract - last_shuttle_fract) < 0.005f)) {
+		/* dead-zone */
+		return;
 	}
 
 	queue_draw ();
@@ -725,6 +730,7 @@ ShuttleControl::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangl
 	}
 
 	last_speed_displayed = actual_speed;
+	last_shuttle_fract = shuttle_fract;
 
 	_info_button.set_text (buf);
 
@@ -765,6 +771,7 @@ ShuttleControl::parameter_changed (std::string p)
 	} else if (p == "shuttle-max-speed") {
 		shuttle_max_speed    = Config->get_shuttle_max_speed ();
 		last_speed_displayed = -99999999;
+		last_shuttle_fract = -99999999;
 		map_transport_state ();
 		use_shuttle_fract (true);
 		delete shuttle_context_menu;

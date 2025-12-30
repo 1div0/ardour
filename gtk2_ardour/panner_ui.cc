@@ -125,7 +125,7 @@ PannerUI::set_panner (std::shared_ptr<PannerShell> ps, std::shared_ptr<Panner> p
 		return;
 	}
 
-	_panshell->Changed.connect (connections, invalidator (*this), boost::bind (&PannerUI::panshell_changed, this), gui_context());
+	_panshell->Changed.connect (connections, invalidator (*this), std::bind (&PannerUI::panshell_changed, this), gui_context());
 
 	/* new panner object, force complete reset of panner GUI
 	 */
@@ -385,7 +385,7 @@ PannerUI::pan_button_event (GdkEventButton* ev)
 			pan_menu->set_name ("ArdourContextMenu");
 		}
 		build_pan_menu ();
-		pan_menu->popup (1, ev->time);
+		pan_menu->popup (ev->button, ev->time);
 		return true;
 		break;
 	default:
@@ -528,7 +528,7 @@ PannerUI::pan_automation_state_button_event (GdkEventButton *ev)
 		if (pan_astate_menu == 0) {
 			build_astate_menu ();
 		}
-		pan_astate_menu->popup (1, ev->time);
+		pan_astate_menu->popup (ev->button, ev->time);
 		break;
 	default:
 		break;
@@ -540,6 +540,9 @@ PannerUI::pan_automation_state_button_event (GdkEventButton *ev)
 void
 PannerUI::pan_automation_state_changed ()
 {
+	if (!_panner) {
+		return;
+	}
 	std::shared_ptr<Pannable> pannable (_panner->pannable());
 	pan_automation_state_button.set_label (GainMeterBase::short_astate_string(pannable->automation_state()));
 

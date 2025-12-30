@@ -19,14 +19,18 @@
 
 #include <vector>
 
-#include <gtkmm/combobox.h>
-#include <gtkmm/box.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treeview.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/scrolledwindow.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/box.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
+#include <ytkmm/image.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/radiobutton.h>
+#include <ytkmm/scale.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/treeview.h>
+#include <ytkmm/treestore.h>
 
 namespace Gtk {
 	class CellRendererCombo;
@@ -40,13 +44,10 @@ namespace ActionManager {
         class ActionModel;
 }
 
-namespace ArdourSurface {
+namespace ArdourSurface { namespace MACKIE_NAMESPACE {
 
 class MackieControlProtocol;
-
-namespace Mackie {
-	class Surface;
-}
+class Surface;
 
 class MackieControlProtocolGUI : public Gtk::Notebook
 {
@@ -84,7 +85,7 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 			add (shiftcontrol);
 		};
 		Gtk::TreeModelColumn<std::string> name;
-		Gtk::TreeModelColumn<Mackie::Button::ID>  id;
+		Gtk::TreeModelColumn<int>         id; // enum Button::ID
 		Gtk::TreeModelColumn<std::string> plain;
 		Gtk::TreeModelColumn<std::string> shift;
 		Gtk::TreeModelColumn<std::string> control;
@@ -121,9 +122,10 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 	Gtk::HScale      touch_sensitivity_scale;
 	Gtk::Button      recalibrate_fader_button;
 	Gtk::Adjustment  ipmidi_base_port_adjustment;
-	Gtk::Button      discover_button;
 
-	void discover_clicked ();
+	Gtk::HBox  hpacker;
+	Gtk::Image image;
+
 	void recalibrate_faders ();
 	void toggle_backlight ();
 	void touch_sensitive_change ();
@@ -138,7 +140,7 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 	void update_port_combos (std::vector<std::string> const&, std::vector<std::string> const&,
 	                         Gtk::ComboBox* input_combo,
 	                         Gtk::ComboBox* output_combo,
-	                         std::shared_ptr<Mackie::Surface> surface);
+	                         std::shared_ptr<MACKIE_NAMESPACE::Surface> surface);
 
 	PBD::ScopedConnectionList _port_connections;
 	void connection_handler ();
@@ -146,7 +148,8 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 	Glib::RefPtr<Gtk::ListStore> build_midi_port_list (std::vector<std::string> const & ports, bool for_input);
 	bool _ignore_profile_changed;
 	bool ignore_active_change;
-	void active_port_changed (Gtk::ComboBox* combo, std::weak_ptr<Mackie::Surface> ws, bool for_input);
+	void active_port_changed (Gtk::ComboBox* combo, std::weak_ptr<MACKIE_NAMESPACE::Surface> ws, bool for_input);
 };
 
-}
+} // namespace Mackie
+} // namespace ArdourSurface

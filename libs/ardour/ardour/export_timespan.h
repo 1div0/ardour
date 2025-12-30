@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_export_timespan_h__
-#define __ardour_export_timespan_h__
+#pragma once
 
 #include <memory>
 #include <string>
@@ -54,6 +53,9 @@ public:
 	std::string range_id () const { return _range_id; }
 	void set_range_id (std::string range_id) { _range_id = range_id; }
 
+	std::string vapor () const { return _vapor; }
+	void set_vapor (std::string vapor) { _vapor = vapor; }
+
 	bool realtime () const { return _realtime; }
 	void set_realtime (bool rt) { _realtime = rt; }
 
@@ -80,10 +82,9 @@ private:
 
 	std::string _name;
 	std::string _range_id;
+	std::string _vapor;
 	bool        _realtime;
-
 };
 
 } // namespace ARDOUR
 
-#endif /* __ardour_export_timespan_h__ */

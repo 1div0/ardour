@@ -23,11 +23,11 @@
 #include <vector>
 #include <cmath>
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/box.h>
-#include <gtkmm/drawingarea.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/separator.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/drawingarea.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/separator.h>
 
 #include "pbd/stateful.h"
 
@@ -62,15 +62,15 @@ public:
 	void fast_update ();
 	std::shared_ptr<ARDOUR::Route> route() { return _route; }
 
-	static PBD::Signal1<void,MeterStrip*> CatchDeletion;
-	static PBD::Signal0<void> MetricChanged;
-	static PBD::Signal0<void> ConfigurationChanged;
+	static PBD::Signal<void(MeterStrip*)> CatchDeletion;
+	static PBD::Signal<void()> MetricChanged;
+	static PBD::Signal<void()> ConfigurationChanged;
 
 	void reset_peak_display ();
 	void reset_route_peak_display (ARDOUR::Route*);
-	void reset_group_peak_display (ARDOUR::RouteGroup*);
+	void reset_group_peak_display (std::shared_ptr<ARDOUR::RouteGroup>);
 
-	void set_meter_type_multi (int, ARDOUR::RouteGroup*, ARDOUR::MeterType);
+	void set_meter_type_multi (int, std::shared_ptr<ARDOUR::RouteGroup>, ARDOUR::MeterType);
 
 	void set_metric_mode (int, ARDOUR::MeterType);
 	int  get_metric_mode() { return _metricmode; }
@@ -151,8 +151,8 @@ private:
 
 	bool peak_button_release (GdkEventButton*);
 
-	void gain_start_touch ();
-	void gain_end_touch ();
+	void gain_start_touch (int);
+	void gain_end_touch (int);
 
 	void parameter_changed (std::string const & p);
 	void redraw_metrics ();

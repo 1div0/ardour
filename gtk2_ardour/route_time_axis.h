@@ -22,20 +22,19 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_route_time_axis_h__
-#define __ardour_route_time_axis_h__
+#pragma once
 
 #include <list>
 #include <set>
 
-#include <gtkmm/table.h>
-#include <gtkmm/button.h>
-#include <gtkmm/box.h>
-#include <gtkmm/menu.h>
-#include <gtkmm/menuitem.h>
-#include <gtkmm/radiomenuitem.h>
-#include <gtkmm/checkmenuitem.h>
-#include <gtkmm/adjustment.h>
+#include <ytkmm/table.h>
+#include <ytkmm/button.h>
+#include <ytkmm/box.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/menuitem.h>
+#include <ytkmm/radiomenuitem.h>
+#include <ytkmm/checkmenuitem.h>
+#include <ytkmm/adjustment.h>
 
 #include "widgets/ardour_button.h"
 
@@ -69,7 +68,7 @@ class Selection;
 class RegionSelection;
 class Selectable;
 class AutomationTimeAxisView;
-class AutomationLine;
+class EditorAutomationLine;
 class TimeSelection;
 class RouteGroupMenu;
 class ItemCounts;
@@ -99,7 +98,7 @@ public:
 	void selection_click (GdkEventButton*);
 	void set_selected_points (PointSelection&);
 	void set_selected_regionviews (RegionSelection&);
-	void get_selectables (Temporal::timepos_t const &, Temporal::timepos_t const &, double top, double bot, std::list<Selectable *>&, bool within = false);
+	void _get_selectables (Temporal::timepos_t const &, Temporal::timepos_t const &, double top, double bot, std::list<Selectable *>&, bool within);
 	void get_inverted_selectables (Selection&, std::list<Selectable*>&);
 	void get_regionviews_at_or_after (Temporal::timepos_t const &, RegionSelection&);
 
@@ -119,17 +118,13 @@ public:
 	void toggle_automation_track (const Evoral::Parameter& param);
 	void fade_range (TimeSelection&);
 
-	void add_underlay (StreamView*, bool update_xml = true);
-	void remove_underlay (StreamView*);
-	void build_underlay_menu(Gtk::Menu*);
-
 	int set_state (const XMLNode&, int version);
 
 	virtual Gtk::CheckMenuItem* automation_child_menu_item (Evoral::Parameter);
 	virtual std::shared_ptr<AutomationTimeAxisView> automation_child(Evoral::Parameter param, PBD::ID ctrl_id = PBD::ID(0));
 
 	StreamView*         view() const { return _view; }
-	ARDOUR::RouteGroup* route_group() const;
+	std::shared_ptr<ARDOUR::RouteGroup> route_group() const;
 	std::shared_ptr<ARDOUR::Playlist> playlist() const;
 
 	void fast_update ();
@@ -205,7 +200,7 @@ protected:
 	std::shared_ptr<AutomationTimeAxisView>
 	find_atav_by_ctrl (std::shared_ptr<ARDOUR::AutomationControl>, bool route_owned_only = true);
 
-	std::shared_ptr<AutomationLine>
+	std::shared_ptr<EditorAutomationLine>
 	find_processor_automation_curve (std::shared_ptr<ARDOUR::Processor> i, Evoral::Parameter);
 
 	void add_processor_automation_curve (std::shared_ptr<ARDOUR::Processor> r, Evoral::Parameter);
@@ -274,7 +269,7 @@ protected:
 
 	std::map<std::shared_ptr<PBD::Controllable>, Gtk::CheckMenuItem*> ctrl_item_map;
 
-	typedef std::vector<std::shared_ptr<AutomationLine> > ProcessorAutomationCurves;
+	typedef std::vector<std::shared_ptr<EditorAutomationLine> > ProcessorAutomationCurves;
 	ProcessorAutomationCurves processor_automation_curves;
 	/** parameter -> menu item map for the plugin automation menu */
 	ParameterMenuMap _subplugin_menu_map;
@@ -282,14 +277,6 @@ protected:
 	void post_construct ();
 
 	GainMeterBase gm;
-
-	XMLNode* underlay_xml_node;
-	bool set_underlay_state();
-
-	typedef std::list<StreamView*> UnderlayList;
-	UnderlayList _underlay_streams;
-	typedef std::list<RouteTimeAxisView*> UnderlayMirrorList;
-	UnderlayMirrorList _underlay_mirrors;
 
 	bool _ignore_set_layer_display;
 	void layer_display_menu_change (Gtk::MenuItem* item);
@@ -313,7 +300,7 @@ private:
 	void parameter_changed (std::string const & p);
 	void update_track_number_visibility();
 	void show_touched_automation (std::weak_ptr<PBD::Controllable>);
-	void maybe_hide_automation (bool, std::weak_ptr<PBD::Controllable>);
+	void maybe_hide_automation (bool, ARDOUR::WeakAutomationControlList);
 
 	void drop_instrument_ref ();
 	void reread_midnam ();
@@ -323,4 +310,3 @@ private:
 	sigc::connection      ctrl_autohide_connection;
 };
 
-#endif /* __ardour_route_time_axis_h__ */

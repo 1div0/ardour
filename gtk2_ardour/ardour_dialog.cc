@@ -45,7 +45,7 @@ ArdourDialog::ArdourDialog (const string& title, bool modal, bool use_seperator)
         , allow_idle (true)
 {
 	init ();
-	set_position (Gtk::WIN_POS_MOUSE);
+	set_position (UIConfiguration::instance().get_default_window_position());
 }
 
 ArdourDialog::ArdourDialog (Gtk::Window& parent, const string& title, bool modal, bool use_seperator)
@@ -57,6 +57,8 @@ ArdourDialog::ArdourDialog (Gtk::Window& parent, const string& title, bool modal
 {
 	init ();
 	set_position (Gtk::WIN_POS_CENTER_ON_PARENT);
+	set_transient_for (parent);
+
 }
 
 ArdourDialog::~ArdourDialog ()

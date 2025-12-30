@@ -24,14 +24,16 @@
 #include "ardour/route_group.h"
 #include "ardour/session.h"
 
-#include <gtkmm/table.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/messagedialog.h>
+#include <ytkmm/table.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/messagedialog.h>
 
 #include "gtkmm2ext/colors.h"
 
+#include "gui_thread.h"
 #include "route_group_dialog.h"
 #include "group_tabs.h"
+#include "ui_config.h"
 
 #include "pbd/i18n.h"
 
@@ -40,7 +42,7 @@ using namespace ARDOUR;
 using namespace std;
 using namespace PBD;
 
-RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
+RouteGroupDialog::RouteGroupDialog (std::shared_ptr<RouteGroup> g, bool creating_new)
 	: ArdourDialog (_("Track/bus Group"))
 	, _group (g)
 	, _initial_name (g->name ())
@@ -50,6 +52,7 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	, _mute (_("Muting"))
 	, _solo (_("Soloing"))
 	, _rec_enable (_("Record enable"))
+	, _sursend_enable (_("Surround Send enable"))
 	, _select (_("Selection"))
 	, _route_active (_("Active state"))
 	, _share_color (_("Color"))
@@ -107,15 +110,16 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	_mute.set_active (_group->is_mute());
 	_solo.set_active (_group->is_solo());
 	_rec_enable.set_active (_group->is_recenable());
+	_sursend_enable.set_active (_group->is_sursend_enable());
 	_select.set_active (_group->is_select());
 	_route_active.set_active (_group->is_route_active());
 	_share_color.set_active (_group->is_color());
 	_share_monitoring.set_active (_group->is_monitoring());
 
 	if (_group->name ().empty()) {
-		_initial_name = "1";
+		_initial_name = bump_name_abc ("");
 		while (!unique_name (_initial_name)) {
-			_initial_name = bump_name_number (_initial_name);
+			_initial_name = bump_name_abc (_initial_name);
 		}
 		_name.set_text (_initial_name);
 		update();
@@ -132,6 +136,7 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	_mute.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_solo.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_rec_enable.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
+	_sursend_enable.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_select.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_route_active.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_share_color.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
@@ -153,13 +158,17 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	table->attach (*l, 1, 2, 2, 3, Gtk::FILL, Gtk::FILL, 0, 0);
 	table->attach (_relative, 2, 3, 2, 3, Gtk::FILL, Gtk::FILL, 0, 0);
 
-	table->attach (_mute, 1, 3, 3, 4, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_solo, 1, 3, 4, 5, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_rec_enable, 1, 3, 5, 6, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_select, 1, 3, 6, 7, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_route_active, 1, 3, 7, 8, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_share_color, 1, 3, 8, 9, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_share_monitoring, 1, 3, 9, 10, Gtk::FILL, Gtk::FILL, 0, 0);
+	int r = 3;
+	table->attach (_mute,             1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_solo,             1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_rec_enable,       1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+#ifdef VAPOR
+	table->attach (_sursend_enable,   1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+#endif
+	table->attach (_select,           1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_route_active,     1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_share_color,      1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_share_monitoring, 1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
 
 	options_box->pack_start (*table, false, true);
 	main_vbox->pack_start (*options_box, false, true);
@@ -172,6 +181,8 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 		add_button (Stock::CANCEL, RESPONSE_CANCEL);
 		add_button (Stock::NEW, RESPONSE_OK);
 		set_default_response (RESPONSE_OK);
+	} else {
+		_group->Destroyed.connect (_group_connection, invalidator (*this), std::bind (&Dialog::response, this, RESPONSE_CANCEL), gui_context());
 	}
 
 	show_all_children ();
@@ -195,7 +206,7 @@ RouteGroupDialog::name_check () const
 		true
 		);
 
-	msg.set_position (WIN_POS_MOUSE);
+	msg.set_position (UIConfiguration::instance().get_default_window_position());
 	msg.run ();
 
 	return false;
@@ -208,6 +219,7 @@ RouteGroupDialog::update ()
 
 	plist.add (Properties::group_gain, _gain.get_active());
 	plist.add (Properties::group_recenable, _rec_enable.get_active());
+	plist.add (Properties::group_sursend_enable, _sursend_enable.get_active());
 	plist.add (Properties::group_mute, _mute.get_active());
 	plist.add (Properties::group_solo, _solo.get_active ());
 	plist.add (Properties::group_select, _select.get_active());
@@ -234,8 +246,8 @@ bool
 RouteGroupDialog::unique_name (std::string const name) const
 {
 	if (name.empty()) return false; // do not allow empty name, empty means unset.
-	list<RouteGroup*> route_groups = _group->session().route_groups ();
-	list<RouteGroup*>::iterator i = route_groups.begin ();
+	RouteGroupList route_groups = _group->session().route_groups ();
+	RouteGroupList::iterator i = route_groups.begin ();
 	while (i != route_groups.end() && ((*i)->name() != name || *i == _group)) {
 		++i;
 	}

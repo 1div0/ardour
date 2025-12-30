@@ -27,7 +27,6 @@
 #include <string>
 #include <vector>
 
-
 #include "pbd/signals.h"
 #include "pbd/stateful.h"
 #include "pbd/glib_event_source.h"
@@ -42,6 +41,7 @@ class Route;
 class Session;
 class Bundle;
 class Stripable;
+class PluginInsert;
 
 class LIBCONTROLCP_API ControlProtocol : public PBD::Stateful, public PBD::ScopedConnectionList, public BasicUI
 {
@@ -57,31 +57,32 @@ public:
 	virtual int set_feedback (bool /*yn*/) { return 0; }
 	virtual bool get_feedback () const { return false; }
 
-	virtual void midi_connectivity_established () {}
+	virtual void midi_connectivity_established (bool) {}
 
 	virtual void stripable_selection_changed () = 0;
 
-	PBD::Signal0<void> ActiveChanged;
+	PBD::Signal<void()> ActiveChanged;
 
 	/* signals that a control protocol can emit and other (presumably graphical)
 	 * user interfaces can respond to
 	 */
 
-	static PBD::Signal0<void> ZoomToSession;
-	static PBD::Signal0<void> ZoomIn;
-	static PBD::Signal0<void> ZoomOut;
-	static PBD::Signal0<void> Enter;
-	static PBD::Signal0<void> Undo;
-	static PBD::Signal0<void> Redo;
-	static PBD::Signal1<void, float> ScrollTimeline;
-	static PBD::Signal1<void, uint32_t> GotoView;
-	static PBD::Signal0<void> CloseDialog;
-	static PBD::Signal0<void> VerticalZoomInAll;
-	static PBD::Signal0<void> VerticalZoomOutAll;
-	static PBD::Signal0<void> VerticalZoomInSelected;
-	static PBD::Signal0<void> VerticalZoomOutSelected;
-	static PBD::Signal0<void> StepTracksDown;
-	static PBD::Signal0<void> StepTracksUp;
+	static PBD::Signal<void()> ZoomToSession;
+	static PBD::Signal<void()> ZoomIn;
+	static PBD::Signal<void()> ZoomOut;
+	static PBD::Signal<void()> Enter;
+	static PBD::Signal<void()> Undo;
+	static PBD::Signal<void()> Redo;
+	static PBD::Signal<void(float)> ScrollTimeline;
+	static PBD::Signal<void(uint32_t)> GotoView;
+	static PBD::Signal<void()> CloseDialog;
+	static PBD::Signal<void()> VerticalZoomInAll;
+	static PBD::Signal<void()> VerticalZoomOutAll;
+	static PBD::Signal<void()> VerticalZoomInSelected;
+	static PBD::Signal<void()> VerticalZoomOutSelected;
+	static PBD::Signal<void()> StepTracksDown;
+	static PBD::Signal<void()> StepTracksUp;
+	static PBD::Signal<void(std::weak_ptr<ARDOUR::PluginInsert> )> PluginSelected;
 
 	void add_stripable_to_selection (std::shared_ptr<ARDOUR::Stripable>);
 	void set_stripable_selection (std::shared_ptr<ARDOUR::Stripable>);
@@ -171,24 +172,14 @@ extern "C" {
 class ControlProtocolDescriptor
 {
 public:
-	const char* name;              /* descriptive */
-	const char* id;                /* unique and version-specific */
-	void*       ptr;               /* protocol can store a value here */
-	void*       module;            /* not for public access */
-	int         mandatory;         /* if non-zero, always load and do not make optional */
-	bool        supports_feedback; /* if true, protocol has toggleable feedback mechanism */
-	bool (*probe) (ControlProtocolDescriptor*);
-	ControlProtocol* (*initialize) (ControlProtocolDescriptor*, Session*);
-	void (*destroy) (ControlProtocolDescriptor*, ControlProtocol*);
-	/* this is required if the control protocol connects to signals
-	 * from libardour. they all do. It should allocate a
-	 * type-specific request buffer for the calling thread, and
-	 * store it in a thread-local location that will be used to
-	 * find it when sending the event loop a message
-	 * (e.g. call_slot()). It should also return the allocated
-	 * buffer as a void*.
-	 */
-	void* (*request_buffer_factory) (uint32_t);
+	const char* name;                       /* descriptive */
+	const char* id;                         /* unique and version-specific */
+	void*       module;                     /* not for public access */
+	bool (*available) ();                   /* called directly after loading module */
+	bool (*probe_port) ();                  /* called when ports change (PortRegisteredOrUnregistered) */
+	bool (*match_usb) (uint16_t, uint16_t); /* called when USB devices are hotplugged (libusb) */
+	ControlProtocol* (*initialize) (Session*);
+	void (*destroy) (ControlProtocol*);
 };
 }
 }

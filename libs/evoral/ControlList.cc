@@ -64,33 +64,33 @@ event_time_less_than (ControlEvent* a, ControlEvent* b)
 	return a->when < b->when;
 }
 
-ControlList::ControlList (const Parameter& id, const ParameterDescriptor& desc, TimeDomain ts)
-	: _parameter (id)
+ControlList::ControlList (const Parameter& id, const ParameterDescriptor& desc, TimeDomainProvider const & tds)
+	: TimeDomainProvider (tds)
+	, _parameter (id)
 	, _desc (desc)
 	, _interpolation (default_interpolation ())
-	, _time_domain (ts)
 	, _curve (0)
 {
 	_frozen                     = 0;
 	_changed_when_thawed        = false;
-	_lookup_cache.left          = timepos_t::max (_time_domain);
+	_lookup_cache.left          = timepos_t::max (time_domain());
 	_lookup_cache.range.first   = _events.end ();
 	_lookup_cache.range.second  = _events.end ();
-	_search_cache.left          = timepos_t::max (_time_domain);
+	_search_cache.left          = timepos_t::max (time_domain());
 	_search_cache.first         = _events.end ();
 	_sort_pending               = false;
 	new_write_pass              = true;
 	_in_write_pass              = false;
 	did_write_during_pass       = false;
-	insert_position             = timepos_t::max (_time_domain);
+	insert_position             = timepos_t::max (time_domain());
 	most_recent_insert_iterator = _events.end ();
 }
 
 ControlList::ControlList (const ControlList& other)
-	: _parameter (other._parameter)
+	: TimeDomainProvider (other)
+	, _parameter (other._parameter)
 	, _desc (other._desc)
 	, _interpolation (other._interpolation)
-	, _time_domain (other._time_domain)
 	, _curve (0)
 {
 	_frozen                     = 0;
@@ -102,7 +102,7 @@ ControlList::ControlList (const ControlList& other)
 	new_write_pass              = true;
 	_in_write_pass              = false;
 	did_write_during_pass       = false;
-	insert_position             = timepos_t::max (_time_domain);
+	insert_position             = timepos_t::max (time_domain());
 	most_recent_insert_iterator = _events.end ();
 
 	// XXX copy_events() emits Dirty, but this is just assignment copy/construction
@@ -110,10 +110,10 @@ ControlList::ControlList (const ControlList& other)
 }
 
 ControlList::ControlList (const ControlList& other, timepos_t const& start, timepos_t const& end)
-	: _parameter (other._parameter)
+	: TimeDomainProvider (other)
+	, _parameter (other._parameter)
 	, _desc (other._desc)
 	, _interpolation (other._interpolation)
-	, _time_domain (other._time_domain)
 	, _curve (0)
 {
 	_frozen                    = 0;
@@ -135,7 +135,7 @@ ControlList::ControlList (const ControlList& other, timepos_t const& start, time
 	new_write_pass              = true;
 	_in_write_pass              = false;
 	did_write_during_pass       = false;
-	insert_position             = timepos_t::max (_time_domain);
+	insert_position             = timepos_t::max (time_domain());
 	most_recent_insert_iterator = _events.end ();
 
 	mark_dirty ();
@@ -152,9 +152,10 @@ ControlList::~ControlList ()
 }
 
 std::shared_ptr<ControlList>
-ControlList::create (const Parameter& id, const ParameterDescriptor& desc, TimeDomain time_style)
+ControlList::create (const Parameter& id, const ParameterDescriptor& desc, TimeDomainProvider const & tdp)
 {
-	return std::shared_ptr<ControlList> (new ControlList (id, desc, time_style));
+	ControlList* cl (new ControlList (id, desc, tdp));
+	return std::shared_ptr<ControlList> (cl);
 }
 
 bool
@@ -176,7 +177,7 @@ ControlList::operator= (const ControlList& other)
 		new_write_pass        = true;
 		_in_write_pass        = false;
 		did_write_during_pass = false;
-		insert_position       = timepos_t::max (_time_domain);
+		insert_position       = timepos_t::max (time_domain());
 
 		_parameter     = other._parameter;
 		_desc          = other._desc;
@@ -267,8 +268,9 @@ ControlList::x_scale (ratio_t const& factor)
 timepos_t
 ControlList::ensure_time_domain (timepos_t const& val) const
 {
-	if (val.time_domain () != _time_domain) {
-		switch (_time_domain) {
+	TimeDomain td (time_domain());
+	if (val.time_domain () != td) {
+		switch (td) {
 			case Temporal::AudioTime:
 				return timepos_t (val.samples ());
 				break;
@@ -298,7 +300,7 @@ ControlList::extend_to (timepos_t const& end)
 }
 
 void
-ControlList::y_transform (boost::function<double (double)> callback)
+ControlList::y_transform (std::function<double (double)> callback)
 {
 	{
 		Glib::Threads::RWLock::WriterLock lm (_lock);
@@ -311,7 +313,7 @@ ControlList::y_transform (boost::function<double (double)> callback)
 }
 
 void
-ControlList::list_merge (ControlList const& other, boost::function<double (double, double)> callback)
+ControlList::list_merge (ControlList const& other, std::function<double (double, double)> callback)
 {
 	{
 		Glib::Threads::RWLock::WriterLock lm (_lock);
@@ -527,7 +529,7 @@ ControlList::start_write_pass (timepos_t const& time)
 	 */
 	if (_in_write_pass && !new_write_pass) {
 #if 1
-		add_guard_point (when, timecnt_t (_time_domain)); // also sets most_recent_insert_iterator
+		add_guard_point (when, timecnt_t (time_domain())); // also sets most_recent_insert_iterator
 #else
 		const ControlEvent cp (when, 0.0);
 		most_recent_insert_iterator = lower_bound (_events.begin (), _events.end (), &cp, time_comparator);
@@ -557,7 +559,7 @@ ControlList::set_in_write_pass (bool yn, bool add_point, timepos_t when)
 
 	if (yn && add_point) {
 		Glib::Threads::RWLock::WriterLock lm (_lock);
-		add_guard_point (when, timecnt_t (_time_domain));
+		add_guard_point (when, timecnt_t (time_domain()));
 	}
 }
 
@@ -565,7 +567,7 @@ void
 ControlList::add_guard_point (timepos_t const& time, timecnt_t const& offset)
 {
 	/* we do not convert this yet */
-	assert (offset.time_domain () == _time_domain);
+	assert (offset.time_domain () == time_domain());
 
 	timepos_t when = ensure_time_domain (time);
 
@@ -686,7 +688,7 @@ ControlList::editor_add (timepos_t const& time, double value, bool with_guard)
 			 */
 
 			if (when >= 1) {
-				_events.insert (_events.end (), new ControlEvent (timepos_t (_time_domain), value));
+				_events.insert (_events.end (), new ControlEvent (timepos_t (time_domain()), value));
 				DEBUG_TRACE (DEBUG::ControlList, string_compose ("@%1 added value %2 at zero\n", this, value));
 			}
 		}
@@ -708,6 +710,84 @@ ControlList::editor_add (timepos_t const& time, double value, bool with_guard)
 
 		mark_dirty ();
 	}
+	maybe_signal_changed ();
+
+	return true;
+}
+
+bool
+ControlList::editor_add_ordered (OrderedPoints const & points, bool with_guard)
+{
+	/* this is for making changes from a graphical line editor */
+
+	/* Note that as the name suggests, @p points must be in time
+	 * order. This code does not check for this condition to be satisfied,
+	 * but it will break if not honored.
+	 */
+
+	if (points.empty()) {
+		return false;
+	}
+
+	{
+		Glib::Threads::RWLock::WriterLock lm (_lock);
+
+		Temporal::timepos_t earliest = ensure_time_domain (points.front().when);
+		Temporal::timepos_t latest   = ensure_time_domain (points.back().when);
+
+		assert (earliest <= latest);
+
+		timecnt_t distance = earliest.distance (latest);
+
+		(void) erase_range_internal (earliest, latest, _events);
+
+		if (with_guard) {
+			unlocked_invalidate_insert_iterator ();
+			add_guard_point (earliest, -GUARD_POINT_DELTA (*this));
+		}
+		if (with_guard && !distance.is_zero()) {
+			unlocked_invalidate_insert_iterator ();
+			add_guard_point (latest, GUARD_POINT_DELTA (*this));
+		}
+
+		/* Get the iterator where we should start insertion */
+
+		timepos_t    when = ensure_time_domain (points.front().when);
+		ControlEvent cp (when, 0.0f);
+		iterator     i = lower_bound (_events.begin (), _events.end (), &cp, time_comparator);
+		double       value = std::min ((double)_desc.upper, std::max ((double)_desc.lower, points.front().value));
+
+		if (i != _events.end () && (*i)->when == when) {
+			return false;
+		}
+
+		/* if we are creating the first point in the list, and it will
+		 * not be at zero, add an "anchor" point there at zero, with
+		 * the same value.
+		 */
+
+		if (_events.empty () && when > timecnt_t (time_domain())) {
+			_events.insert (_events.end (), new ControlEvent (timepos_t (time_domain()), value));
+			DEBUG_TRACE (DEBUG::ControlList, string_compose ("@%1 added value %2 at zero\n", this, value));
+		}
+
+		for (auto const & p : points) {
+
+			/* ensure time domain for point is correct */
+			when = ensure_time_domain (p.when);
+
+			/* clamp new value to allowed range */
+			value = std::min ((double)_desc.upper, std::max ((double)_desc.lower, p.value));
+
+			insert_position = when;
+
+			DEBUG_TRACE (DEBUG::ControlList, string_compose ("editor_add: actually add when= %1 value= %2\n", when, value));
+			_events.insert (i, new ControlEvent (when, value));
+		}
+
+		mark_dirty ();
+	}
+
 	maybe_signal_changed ();
 
 	return true;
@@ -813,11 +893,11 @@ ControlList::add (timepos_t const& time, double value, bool with_guards, bool wi
 			if (when >= 1) {
 				if (_desc.toggled) {
 					const double opp_val = ((value >= 0.5) ? 1.0 : 0.0);
-					_events.insert (_events.end (), new ControlEvent (timepos_t (_time_domain), opp_val));
+					_events.insert (_events.end (), new ControlEvent (timepos_t (time_domain()), opp_val));
 					DEBUG_TRACE (DEBUG::ControlList, string_compose ("@%1 added toggled value %2 at zero\n", this, opp_val));
 
 				} else {
-					_events.insert (_events.end (), new ControlEvent (timepos_t (_time_domain), value));
+					_events.insert (_events.end (), new ControlEvent (timepos_t (time_domain()), value));
 					DEBUG_TRACE (DEBUG::ControlList, string_compose ("@%1 added default value %2 at zero\n", this, _desc.normal));
 				}
 			}
@@ -827,7 +907,7 @@ ControlList::add (timepos_t const& time, double value, bool with_guards, bool wi
 			/* first write in a write pass: add guard point if requested */
 
 			if (with_guards) {
-				add_guard_point (insert_position, timecnt_t (_time_domain));
+				add_guard_point (insert_position, timecnt_t (time_domain()));
 			} else {
 				/* not adding a guard, but we need to set iterator appropriately */
 				const ControlEvent cp (when, 0.0);
@@ -1133,6 +1213,23 @@ ControlList::shift (timepos_t const& time, timecnt_t const& distance)
 	maybe_signal_changed ();
 }
 
+/* Note: timepos_t is used here instead of timecnt_t because there's an
+ * implicit origin for the magnitude of the distance.
+ */
+void
+ControlList::simple_shift (timepos_t const & distance)
+{
+	{
+		Glib::Threads::RWLock::WriterLock lm (_lock);
+		for (auto & e : _events) {
+			e->when = e->when + distance;
+		}
+
+		mark_dirty ();
+	}
+	maybe_signal_changed ();
+}
+
 void
 ControlList::modify (iterator iter, timepos_t const& time, double val)
 {
@@ -1233,10 +1330,10 @@ ControlList::thaw ()
 void
 ControlList::mark_dirty () const
 {
-	_lookup_cache.left         = timepos_t::max (_time_domain);
+	_lookup_cache.left         = timepos_t::max (time_domain());
 	_lookup_cache.range.first  = _events.end ();
 	_lookup_cache.range.second = _events.end ();
-	_search_cache.left         = timepos_t::max (_time_domain);
+	_search_cache.left         = timepos_t::max (time_domain());
 	_search_cache.first        = _events.end ();
 
 	if (_curve) {
@@ -1375,7 +1472,7 @@ ControlList::truncate_start (timecnt_t const& overall)
 
 			if (np < 2) {
 				/* less than 2 points: add a new point */
-				_events.push_front (new ControlEvent (timepos_t (_time_domain), _events.front ()->value));
+				_events.push_front (new ControlEvent (timepos_t (time_domain()), _events.front ()->value));
 
 			} else {
 				/* more than 2 points: check to see if the first 2 values
@@ -1388,10 +1485,10 @@ ControlList::truncate_start (timecnt_t const& overall)
 
 				if (_events.front ()->value == (*second)->value) {
 					/* first segment is flat, just move start point back to zero */
-					_events.front ()->when = timepos_t (_time_domain);
+					_events.front ()->when = timepos_t (time_domain());
 				} else {
 					/* leave non-flat segment in place, add a new leading point. */
-					_events.push_front (new ControlEvent (timepos_t (_time_domain), _events.front ()->value));
+					_events.push_front (new ControlEvent (timepos_t (time_domain()), _events.front ()->value));
 				}
 			}
 
@@ -1432,7 +1529,7 @@ ControlList::truncate_start (timecnt_t const& overall)
 
 			/* add a new point for the interpolated new value */
 
-			_events.push_front (new ControlEvent (timepos_t (_time_domain), first_legal_value));
+			_events.push_front (new ControlEvent (timepos_t (time_domain()), first_legal_value));
 		}
 
 		unlocked_invalidate_insert_iterator ();
@@ -1534,7 +1631,7 @@ ControlList::multipoint_eval (timepos_t const& xtime) const
 
 	/* Only do the range lookup if xtime is in a different range than last time
 	 * this was called (or if the lookup cache has been marked "dirty" (left<0) */
-	if ((_lookup_cache.left == timepos_t::max (_time_domain)) ||
+	if ((_lookup_cache.left == timepos_t::max (time_domain())) ||
 	    ((_lookup_cache.left > xtime) ||
 	     (_lookup_cache.range.first == _events.end ()) ||
 	     ((*_lookup_cache.range.second)->when < xtime))) {
@@ -1589,7 +1686,7 @@ ControlList::multipoint_eval (timepos_t const& xtime) const
 	}
 
 	/* x is a control point in the data */
-	_lookup_cache.left = timepos_t::max (_time_domain);
+	_lookup_cache.left = timepos_t::max (time_domain());
 	return (*range.first)->value;
 }
 
@@ -1601,9 +1698,9 @@ ControlList::build_search_cache_if_necessary (timepos_t const& start_time) const
 	if (_events.empty ()) {
 		/* Empty, nothing to cache, move to end. */
 		_search_cache.first = _events.end ();
-		_search_cache.left  = timepos_t::max (_time_domain);
+		_search_cache.left  = timepos_t::max (time_domain());
 		return;
-	} else if ((_search_cache.left == timepos_t::max (_time_domain)) || (_search_cache.left > start)) {
+	} else if ((_search_cache.left == timepos_t::max (time_domain())) || (_search_cache.left > start)) {
 		/* Marked dirty (left == max), or we're too far forward, re-search. */
 
 		const ControlEvent start_point (start, 0);
@@ -1704,7 +1801,7 @@ ControlList::rt_safe_earliest_event_linear_unlocked (Temporal::timepos_t const& 
 		build_search_cache_if_necessary (start);
 		const ControlEvent* first = *_search_cache.first;
 		if (_search_cache.first != _events.end ()) {
-			if (((first->when > start) || (inclusive && first->when == start)) && first->when < start + min_x_delta) {
+			if (((first->when > start) || (inclusive && first->when == start)) && ((first->when < start + min_x_delta) || (!inclusive && first->when == start + min_x_delta))) {
 				x = first->when;
 				y = first->value;
 				/* Move left of cache to this point
@@ -1786,20 +1883,33 @@ ControlList::rt_safe_earliest_event_linear_unlocked (Temporal::timepos_t const& 
 	}
 
 	/* This method is ONLY used for interpolating to generate value/time
-        * duples not present in the actual ControlList, and because of this,
-        * the desired time domain is always audio time.
-        */
+	 * duples not present in the actual ControlList
+	 */
 
-	double       a     = first->when.superclocks ();
-	double       b     = next->when.superclocks ();
-	const double slope = (b - a) / (next->value - first->value);
-	assert (slope != 0);
+	double slope;
 
-	double t  = start_time.superclocks ();
-	double dt = fmod (t, fabs (slope));
-	t += fabs (slope) - dt;
-	x = timecnt_t::from_superclock (t + 1);
-	y = rint (first->value + (t - a) / slope);
+	if (time_domain() == Temporal::AudioTime) {
+		double       a     = first->when.superclocks ();
+		double       b     = next->when.superclocks ();
+		slope = (b - a) / (next->value - first->value);
+		assert (slope != 0);
+		double t  = start_time.superclocks ();
+		double dt = fmod (t, fabs (slope));
+		t += fabs (slope) - dt;
+		x = timecnt_t::from_superclock (t + 1);
+		y = rint (first->value + (t - a) / slope);
+	} else {
+		double       a     = first->when.beats().to_ticks();
+		double       b     = next->when.beats().to_ticks();
+		slope = (b - a) / (next->value - first->value);
+		assert (slope != 0);
+		double t  = start_time.beats ().to_ticks();
+		double dt = fmod (t, fabs (slope));
+		t += fabs (slope) - dt;
+		x = timecnt_t::from_ticks (t + 1);
+		y = rint (first->value + (t - a) / slope);
+	}
+
 	if (slope > 0) {
 		y = std::max (first->value, std::min (next->value, y));
 	} else {
@@ -1834,7 +1944,7 @@ ControlList::rt_safe_earliest_event_linear_unlocked (Temporal::timepos_t const& 
 std::shared_ptr<ControlList>
 ControlList::cut_copy_clear (timepos_t const& start_time, timepos_t const& end_time, int op)
 {
-	std::shared_ptr<ControlList> nal = create (_parameter, _desc, _time_domain);
+	std::shared_ptr<ControlList> nal = create (_parameter, _desc, *this);
 
 	iterator     s, e;
 	timepos_t    start = start_time;
@@ -1878,7 +1988,7 @@ ControlList::cut_copy_clear (timepos_t const& start_time, timepos_t const& end_t
 			}
 
 			if (op != 2) { // ! clear
-				nal->_events.push_back (new ControlEvent (timepos_t (_time_domain), val));
+				nal->_events.push_back (new ControlEvent (timepos_t (time_domain()), val));
 			}
 		}
 
@@ -1984,10 +2094,10 @@ ControlList::paste (const ControlList& alist, timepos_t const& time)
 
 			timepos_t adj_pos;
 
-			if (_time_domain == (*i)->when.time_domain ()) {
+			if (time_domain() == (*i)->when.time_domain ()) {
 				adj_pos = (*i)->when + pos;
 			} else {
-				if (_time_domain == AudioTime) {
+				if (time_domain() == AudioTime) {
 					adj_pos = timepos_t (((*i)->when + pos).samples ());
 				} else {
 					adj_pos = timepos_t (((*i)->when + pos).beats ());
@@ -2069,7 +2179,7 @@ ControlList::move_ranges (const list<RangeMove>& movements)
 			while (j != old_events.end ()) {
 				timepos_t jtime;
 
-				switch (_time_domain) {
+				switch (time_domain()) {
 					case AudioTime:
 						jtime = (*j)->when;
 						break;
@@ -2088,7 +2198,7 @@ ControlList::move_ranges (const list<RangeMove>& movements)
 				if (jtime >= i->from) {
 					ControlEvent* ev = new ControlEvent (**j);
 
-					switch (_time_domain) {
+					switch (time_domain()) {
 						case AudioTime:
 							ev->when += dx;
 							break;
@@ -2147,6 +2257,44 @@ ControlList::set_interpolation (InterpolationStyle s)
 	return true;
 }
 
+void
+ControlList::start_domain_bounce (Temporal::DomainBounceInfo& dbi)
+{
+	if (time_domain() == dbi.to) {
+		return;
+	}
+
+	Glib::Threads::RWLock::ReaderLock olm (_lock);
+
+	for (auto const & e : _events) {
+		timepos_t t (e->when);
+		t.set_time_domain (dbi.to);
+		dbi.positions.insert (std::make_pair (&e->when, t));
+	}
+}
+
+void
+ControlList::finish_domain_bounce (Temporal::DomainBounceInfo& dbi)
+{
+	if (time_domain() == dbi.to) {
+		return;
+	}
+
+	{
+		Glib::Threads::RWLock::WriterLock lm (_lock);
+		for (auto const & e : _events) {
+			Temporal::TimeDomainPosChanges::iterator tdc = dbi.positions.find (&e->when);
+			assert (tdc != dbi.positions.end());
+
+			timepos_t t (tdc->second);
+			t.set_time_domain (dbi.from);
+			e->when = t;
+		}
+	}
+
+	maybe_signal_changed ();
+}
+
 bool
 ControlList::operator!= (ControlList const& other) const
 {
@@ -2202,22 +2350,15 @@ ControlList::dump (ostream& o)
 	}
 }
 
-void
-ControlList::set_time_domain (Temporal::TimeDomain td)
+bool
+ControlList::has_event_at (Temporal::timepos_t const & pos) const
 {
-	assert (_events.empty ());
-	_time_domain = td;
-	/* XXX: TODO: apply to all points */
-}
-
-void
-ControlList::set_time_domain_empty (Temporal::TimeDomain td)
-{
-	/* the event list may or may not be empty, but we act as if it is. This
-	   is used in e.g. ::set_state(), since we do not need to modify the
-	   event time domains there.
-	*/
-	_time_domain = td;
+	const ControlEvent fake (pos, 0.);
+	EventList::const_iterator i = std::lower_bound (_events.begin(), _events.end(), &fake, time_comparator);
+	if ((i == _events.end()) || ((*i)->when != pos)) {
+			return false;
+	}
+	return true;
 }
 
 } // namespace Evoral

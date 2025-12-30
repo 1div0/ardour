@@ -16,13 +16,10 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_record_enable_control_h__
-#define __ardour_record_enable_control_h__
+#pragma once
 
 #include <memory>
 #include <string>
-
-#include <boost/dynamic_bitset.hpp>
 
 #include "ardour/slavable_automation_control.h"
 #include "ardour/recordable.h"
@@ -36,7 +33,7 @@ class Session;
 class LIBARDOUR_API RecordEnableControl : public SlavableAutomationControl
 {
   public:
-	RecordEnableControl (Session& session, std::string const & name, Recordable& m, Temporal::TimeDomain);
+	RecordEnableControl (Session& session, std::string const & name, Recordable& m, Temporal::TimeDomainProvider const &);
 	~RecordEnableControl() {}
 
 	/* Most (Slavable)AutomationControls do not override this, but we need
@@ -58,4 +55,3 @@ class LIBARDOUR_API RecordEnableControl : public SlavableAutomationControl
 
 } /* namespace */
 
-#endif /* __libardour_record_enable_control_h__ */

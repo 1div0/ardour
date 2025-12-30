@@ -16,8 +16,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libardour_control_group_member_h__
-#define __libardour_control_group_member_h__
+#pragma once
+
+#include "ardour/libardour_visibility.h"
+
+#include <memory>
 
 namespace ARDOUR {
 
@@ -33,8 +36,9 @@ class LIBARDOUR_API ControlGroupMember
 	   mediated by the ControlGroup, not by operating on the member.
 	*/
 	virtual void set_group (std::shared_ptr<ControlGroup>) = 0;
+	virtual bool push_group (std::shared_ptr<ControlGroup>) = 0;
+	virtual bool pop_group () = 0;
 };
 
 } /* namespace */
 
-#endif /* __libardour_control_group_member_h__ */

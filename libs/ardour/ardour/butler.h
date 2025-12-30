@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_butler_h__
-#define __ardour_butler_h__
+#pragma once
 
 #include <atomic>
 
@@ -101,7 +100,7 @@ private:
 	void empty_pool_trash ();
 	void process_delegated_work ();
 	void config_changed (std::string);
-	bool flush_tracks_to_disk_normal (std::shared_ptr<RouteList>, uint32_t& errors);
+	bool flush_tracks_to_disk_normal (std::shared_ptr<RouteList const>, uint32_t& errors);
 	void queue_request (Request::Type r);
 
 	pthread_t thread;
@@ -122,4 +121,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif // __ardour_butler_h__

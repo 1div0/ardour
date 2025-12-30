@@ -20,16 +20,15 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_location_ui_h__
-#define __ardour_location_ui_h__
+#pragma once
 
-#include <gtkmm/box.h>
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/button.h>
-#include <gtkmm/table.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/label.h>
-#include <gtkmm/scrolledwindow.h>
+#include <ytkmm/box.h>
+#include <ytkmm/checkbutton.h>
+#include <ytkmm/button.h>
+#include <ytkmm/table.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/label.h>
+#include <ytkmm/scrolledwindow.h>
 
 #include "pbd/signals.h"
 
@@ -96,9 +95,9 @@ protected:
 
 	AudioClock    length_clock;
 	Gtk::CheckButton cd_check_button;
+	Gtk::CheckButton section_check_button;
 	Gtk::CheckButton hide_check_button;
 	Gtk::CheckButton lock_check_button;
-	Gtk::CheckButton glue_check_button;
 
 	ArdourWidgets::ArdourButton remove_button;
 
@@ -132,9 +131,9 @@ protected:
 	bool locate_to_clock (GdkEventButton*, AudioClock*);
 
 	void cd_toggled ();
+	void section_toggled ();
 	void hide_toggled ();
 	void lock_toggled ();
-	void glue_toggled ();
 	void remove_button_pressed ();
 
 	void scms_toggled ();
@@ -146,7 +145,6 @@ protected:
 	void location_changed ();
 	void flags_changed ();
 	void lock_changed ();
-	void time_domain_changed ();
 
 	void set_clock_editable_status ();
 	void show_cd_track_details ();
@@ -204,6 +202,8 @@ private:
 
 	void location_redraw_ranges ();
 
+	void start_changed (ARDOUR::Location*);
+
 	gint do_location_remove (ARDOUR::Location *);
 
 	guint32 i_am_the_modifier;
@@ -238,4 +238,3 @@ protected:
 	void session_going_away();
 };
 
-#endif // __ardour_location_ui_h__

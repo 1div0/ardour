@@ -36,6 +36,9 @@ public:
 	virtual void compute_bounding_box () const;
 
 	virtual void  set (Points const&);
+	virtual void  add_point (Duple const &);
+	virtual void  clear ();
+	void pop_back();
 	Points const& get () const;
 
 	void dump (std::ostream&) const;

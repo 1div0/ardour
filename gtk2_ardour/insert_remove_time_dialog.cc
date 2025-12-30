@@ -18,10 +18,10 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/table.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/alignment.h>
+#include <ytkmm/table.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/alignment.h>
 #include "insert_remove_time_dialog.h"
 #include "audio_clock.h"
 #include "ardour_ui.h"
@@ -89,7 +89,7 @@ InsertRemoveTimeDialog::InsertRemoveTimeDialog (PublicEditor& e, bool remove)
 		_intersected_combo.append (_("stay in position"));
 		_intersected_combo.append (_("move"));
 		_intersected_combo.append (_("be split"));
-		_intersected_combo.set_active (0);
+		_intersected_combo.set_active (2);
 		table->attach (_intersected_combo, 1, 2, 2, 3);
 	}
 
@@ -98,20 +98,11 @@ InsertRemoveTimeDialog::InsertRemoveTimeDialog (PublicEditor& e, bool remove)
 	_all_playlists.set_label (_("Apply to all playlists of the selected track(s)"));
 	get_vbox()->pack_start (_all_playlists);
 
-	_move_glued.set_label (_("Move glued-to-musical-time regions (MIDI regions)"));
-	_move_glued.set_active();
-	get_vbox()->pack_start (_move_glued);
 	_move_markers.set_label (_("Move markers"));
 	get_vbox()->pack_start (_move_markers);
 	_move_markers.signal_toggled().connect (sigc::mem_fun (*this, &InsertRemoveTimeDialog::move_markers_toggled));
-	_move_glued_markers.set_label (_("Move glued-to-musical-time markers"));
-	_move_glued_markers.set_active();
-	Alignment* indent = manage (new Alignment);
-	indent->set_padding (0, 0, 12, 0);
-	indent->add (_move_glued_markers);
-	get_vbox()->pack_start (*indent);
 	_move_locked_markers.set_label (_("Move locked markers"));
-	indent = manage (new Alignment);
+	Alignment* indent = manage (new Alignment);
 	indent->set_padding (0, 0, 12, 0);
 	indent->add (_move_locked_markers);
 	get_vbox()->pack_start (*indent);
@@ -159,12 +150,6 @@ InsertRemoveTimeDialog::all_playlists () const
 }
 
 bool
-InsertRemoveTimeDialog::move_glued () const
-{
-	return _move_glued.get_active ();
-}
-
-bool
 InsertRemoveTimeDialog::move_tempos () const
 {
 	return _move_tempos.get_active ();
@@ -174,12 +159,6 @@ bool
 InsertRemoveTimeDialog::move_markers () const
 {
 	return _move_markers.get_active ();
-}
-
-bool
-InsertRemoveTimeDialog::move_glued_markers () const
-{
-	return _move_glued_markers.get_active ();
 }
 
 bool
@@ -214,6 +193,5 @@ InsertRemoveTimeDialog::doit ()
 void
 InsertRemoveTimeDialog::move_markers_toggled ()
 {
-	_move_glued_markers.set_sensitive (_move_markers.get_active ());
 	_move_locked_markers.set_sensitive (_move_markers.get_active ());
 }

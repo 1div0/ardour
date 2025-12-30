@@ -21,8 +21,6 @@
 #include <iostream>
 #include <vector>
 
-#include <boost/shared_array.hpp>
-
 //#include <midi++/types.h>
 namespace MIDI {
 	typedef unsigned char byte;
@@ -48,9 +46,11 @@ namespace MIDI {
 class MidiByteArray : public std::vector<MIDI::byte>
 {
 public:
-	MidiByteArray() : std::vector<MIDI::byte>() {}
+	MidiByteArray () : std::vector<MIDI::byte>() {};
 
-	MidiByteArray( size_t count, MIDI::byte array[] );
+	MidiByteArray (std::vector<MIDI::byte> const & vec);
+
+	MidiByteArray (size_t count, MIDI::byte array[]);
 
 	bool compare_n (const MidiByteArray& other, MidiByteArray::size_type len) const;
 

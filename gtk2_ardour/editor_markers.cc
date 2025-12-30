@@ -34,6 +34,7 @@
 
 #include "ardour/session.h"
 #include "ardour/location.h"
+#include "ardour/midi_scene_change.h"
 #include "ardour/profile.h"
 #include "pbd/memento_command.h"
 
@@ -65,12 +66,16 @@ using namespace Temporal;
 void
 Editor::clear_marker_display ()
 {
-	for (LocationMarkerMap::iterator i = location_markers.begin(); i != location_markers.end(); ++i) {
-		delete i->second;
-	}
+	entered_marker = 0;
+	LocationMarkerMap lm = location_markers;
 
 	location_markers.clear ();
 	_sorted_marker_lists.clear ();
+
+	for (auto const & [l, m] : lm ) {
+		delete m;
+	}
+
 }
 
 void
@@ -90,6 +95,34 @@ Editor::add_new_location (Location *location)
 	if (location->is_auto_loop()) {
 		update_loop_range_view ();
 	}
+
+	if (location->is_section ()) {
+		update_section_rects ();
+	}
+}
+
+static ArdourMarker::Type
+marker_type (Location* l, bool start = true)
+{
+	if (l->is_mark()) {
+		if (l->is_cd_marker()) {
+			return ArdourMarker::Mark;
+		} else if (l->is_cue_marker()) {
+			return ArdourMarker::Cue;
+		} else if (l->is_section()) {
+			return ArdourMarker::Section;
+		} else {
+			return ArdourMarker::Mark;
+		}
+	} else if (l->is_auto_loop()) {
+		return start ? ArdourMarker::LoopStart : ArdourMarker::LoopEnd;
+	} else if (l->is_auto_punch()) {
+		return start ? ArdourMarker::PunchIn : ArdourMarker::PunchOut;
+	} else if (l->is_session_range()) {
+		return start ? ArdourMarker::SessionStart : ArdourMarker::SessionEnd;
+	} else {
+		return start ? ArdourMarker::RangeStart : ArdourMarker::RangeEnd;
+	}
 }
 
 /** Add a new location, without a time-consuming update of all marker labels;
@@ -100,35 +133,53 @@ ArdourCanvas::Container*
 Editor::add_new_location_internal (Location* location)
 {
 	LocationMarkers *lam = new LocationMarkers;
-	uint32_t color;
+	std::string color;
+	MarkerBarType mark_type = MarkerBarType (0);
+	RangeBarType range_type = RangeBarType (0);
 
 	/* make a note here of which group this marker ends up in */
 	ArdourCanvas::Container* group = 0;
 
 	if (location->is_cd_marker()) {
-		color = location_cd_marker_color;
+		color = X_("location cd marker");
+	} else if (location->is_section()) {
+		color = X_("location arrangement marker");
 	} else if (location->is_mark()) {
-		color = location_marker_color;
+		color = X_("location marker");
+	} else if (location->is_session_range()) {
+		color = X_("location session");
 	} else if (location->is_auto_loop()) {
-		color = location_loop_color;
+		color = X_("location loop");
 	} else if (location->is_auto_punch()) {
-		color = location_punch_color;
+		color = X_("location punch");
+	} else if (location->is_scene()) {
+		color = X_("location scene");
 	} else {
-		color = location_range_color;
+		color = X_("location range");
 	}
 
 	if (location->is_mark()) {
 
-		if (location->is_cd_marker() && ruler_cd_marker_action->get_active()) {
-			lam->start = new ArdourMarker (*this, *cd_marker_group, color, location->name(), ArdourMarker::Mark, location->start());
-			group = cd_marker_group;
-		} else if (location->is_cue_marker() && ruler_cue_marker_action->get_active()) {
-			lam->start = new ArdourMarker (*this, *cue_marker_group, color, location->name(), ArdourMarker::Cue, location->start());
-			lam->start->set_cue_index(location->cue_id());
-			group = cue_marker_group;
-		} else {
-			lam->start = new ArdourMarker (*this, *marker_group, color, location->name(), ArdourMarker::Mark, location->start());
+		if (location->is_cd_marker()) {
 			group = marker_group;
+			mark_type = CDMarks;
+			lam->start = new ArdourMarker (*this, *group, color, location->name(), marker_type (location), location->start());
+		} else if (location->is_cue_marker()) {
+			group = marker_group;
+			mark_type = CueMarks;
+			lam->start = new ArdourMarker (*this, *group, color, location->name(), marker_type (location), location->start());
+			lam->start->set_cue_index(location->cue_id());
+		} else if (location->is_section()) {
+			group = section_marker_group;
+			lam->start = new ArdourMarker (*this, *group, color, location->name(), marker_type (location), location->start());
+		} else if (location->is_scene()) {
+			mark_type = CueMarks;
+			group = marker_group;
+			lam->start = new ArdourMarker (*this, *group, color, location->name(), marker_type (location), location->start());
+		} else {
+			group = marker_group;
+			mark_type = LocationMarks;
+			lam->start = new ArdourMarker (*this, *group, color, location->name(), marker_type (location), location->start());
 		}
 
 		lam->end = 0;
@@ -136,59 +187,71 @@ Editor::add_new_location_internal (Location* location)
 	} else if (location->is_auto_loop()) {
 
 		// transport marker
-		lam->start = new ArdourMarker (*this, *transport_marker_group, color,
-					 location->name(), ArdourMarker::LoopStart, location->start());
-		lam->end   = new ArdourMarker (*this, *transport_marker_group, color,
-					 location->name(), ArdourMarker::LoopEnd, location->end());
-		group = transport_marker_group;
+		group = range_marker_group;
+		range_type = LoopRange;
+		lam->start = new ArdourMarker (*this, *group, color,
+					 location->name(), marker_type (location), location->start());
+		lam->end   = new ArdourMarker (*this, *group, color,
+					 location->name(), marker_type (location, false), location->end());
 
 	} else if (location->is_auto_punch()) {
 
 		// transport marker
-		lam->start = new ArdourMarker (*this, *transport_marker_group, color,
-					 location->name(), ArdourMarker::PunchIn, location->start());
-		lam->end   = new ArdourMarker (*this, *transport_marker_group, color,
-					 location->name(), ArdourMarker::PunchOut, location->end());
-		group = transport_marker_group;
+		group = range_marker_group;
+		range_type = PunchRange;
+		lam->start = new ArdourMarker (*this, *group, color,
+					 location->name(), marker_type (location), location->start());
+		lam->end   = new ArdourMarker (*this, *group, color,
+					 location->name(), marker_type (location, false), location->end());
 
 	} else if (location->is_session_range()) {
 
 		// session range
-		lam->start = new ArdourMarker (*this, *marker_group, color, _("start"), ArdourMarker::SessionStart, location->start());
-		lam->end = new ArdourMarker (*this, *marker_group, color, _("end"), ArdourMarker::SessionEnd, location->end());
-		group = marker_group;
+		group = range_marker_group;
+		range_type = SessionRange;
+		lam->start = new ArdourMarker (*this, *group, color, _("start"), marker_type (location), location->start());
+		lam->end = new ArdourMarker (*this, *group, color, _("end"), marker_type (location, false), location->end());
 
 	} else {
 		// range marker
-		if (location->is_cd_marker() && ruler_cd_marker_action->get_active()) {
-			lam->start = new ArdourMarker (*this, *cd_marker_group, color,
-						 location->name(), ArdourMarker::RangeStart, location->start());
-			lam->end   = new ArdourMarker (*this, *cd_marker_group, color,
-						 location->name(), ArdourMarker::RangeEnd, location->end());
-			group = cd_marker_group;
-		} else {
-			lam->start = new ArdourMarker (*this, *range_marker_group, color,
-						 location->name(), ArdourMarker::RangeStart, location->start());
-			lam->end   = new ArdourMarker (*this, *range_marker_group, color,
-						 location->name(), ArdourMarker::RangeEnd, location->end());
-			group = range_marker_group;
-		}
+		group = range_marker_group;
+		range_type = OtherRange;
+		lam->start = new ArdourMarker (*this, *group, color,
+		                               location->name(), marker_type (location), location->start());
+		lam->end   = new ArdourMarker (*this, *group, color,
+		                               location->name(), marker_type (location, false), location->end());
 	}
 
+#if 0
 	if (location->position_time_domain() == Temporal::BeatTime) {
 		lam->set_name (string_compose ("%1%2", u8"\u266B", location->name ())); // BEAMED EIGHTH NOTES
 	}
+#endif
 
 	if (location->is_hidden ()) {
 		lam->hide();
 	} else {
-		lam->show ();
+		if (mark_type) {
+			if (!(_visible_marker_types & mark_type)) {
+				lam->hide ();
+			} else {
+				lam->show ();
+			}
+		} else if (range_type) {
+			if (!(_visible_range_types & range_type)) {
+				lam->hide ();
+			} else {
+				lam->show ();
+			}
+		} else {
+			lam->show ();
+		}
 	}
 
-	location->NameChanged.connect (*this, invalidator (*this), boost::bind (&Editor::location_changed, this, location), gui_context());
-	location->CueChanged.connect (*this, invalidator (*this), boost::bind (&Editor::location_changed, this, location), gui_context());
-	location->TimeDomainChanged.connect (*this, invalidator (*this), boost::bind (&Editor::location_changed, this, location), gui_context());
-	location->FlagsChanged.connect (*this, invalidator (*this), boost::bind (&Editor::location_flags_changed, this, location), gui_context());
+	location->NameChanged.connect (*this, invalidator (*this), std::bind (&Editor::location_changed, this, location), gui_context());
+	location->CueChanged.connect (*this, invalidator (*this), std::bind (&Editor::location_changed, this, location), gui_context());
+	location->TimeDomainChanged.connect (*this, invalidator (*this), std::bind (&Editor::location_changed, this, location), gui_context());
+	location->FlagsChanged.connect (*this, invalidator (*this), std::bind (&Editor::location_flags_changed, this, location), gui_context());
 
 	pair<Location*,LocationMarkers*> newpair;
 
@@ -227,11 +290,7 @@ Editor::location_changed (Location *location)
 		return;
 	}
 
-	if (location->position_time_domain() == Temporal::BeatTime) {
-		lam->set_name (string_compose ("%1%2", u8"\u266B", location->name ())); // BEAMED EIGHTH NOTES
-	} else {
-		lam->set_name (location->name ());
-	}
+	lam->set_name (location->name ());
 
 	if (location->is_cue_marker()) {
 		lam->start->set_cue_index (location->cue_id());
@@ -249,6 +308,9 @@ Editor::location_changed (Location *location)
 	if (lam->end) {
 		check_marker_label (lam->end);
 	}
+	if (location->is_section ()) {
+		update_section_rects ();
+	}
 }
 
 /** Look at a marker and check whether its label, and those of the previous and next markers,
@@ -265,7 +327,10 @@ Editor::check_marker_label (ArdourMarker* m)
 
 	list<ArdourMarker*>::iterator prev = sorted.end ();
 	list<ArdourMarker*>::iterator next = i;
-	++next;
+
+	if (next != sorted.end()) {
+		++next;
+	}
 
 	/* Look to see if the previous marker is still behind `m' in time */
 	if (i != sorted.begin()) {
@@ -273,7 +338,7 @@ Editor::check_marker_label (ArdourMarker* m)
 		prev = i;
 		--prev;
 
-		if ((*prev)->position() > m->position()) {
+		if ((*prev)->position() >= m->position()) {
 			/* This marker is no longer in the correct order with the previous one, so
 			 * update all the markers in this group.
 			 */
@@ -310,8 +375,11 @@ Editor::check_marker_label (ArdourMarker* m)
 		}
 	}
 
-	if (next != sorted.end()) {
+	while (next != sorted.end() && (*next)->position () == m->position ()) {
+		++next;
+	}
 
+	if (next != sorted.end()) {
 		/* Update just the available space between this marker and the next */
 
 		double const p = sample_to_pixel (m->position().distance ((*next)->position()).samples());
@@ -332,9 +400,20 @@ Editor::check_marker_label (ArdourMarker* m)
 
 struct MarkerComparator {
 	bool operator() (ArdourMarker const * a, ArdourMarker const * b) {
+		if (a->position() == b->position()) {
+			return a->label_on_left ();
+		}
 		return a->position() < b->position();
 	}
 };
+
+void
+Editor::update_all_marker_lanes ()
+{
+	for (auto & lam : location_markers) {
+		lam.second->set_position (lam.first->start(), lam.first->end());
+	}
+}
 
 /** Update all marker labels in all groups */
 void
@@ -371,14 +450,29 @@ Editor::update_marker_labels (ArdourCanvas::Item* group)
 	while (i != sorted.end()) {
 
 		if (prev != sorted.end()) {
-			double const p = sample_to_pixel ((*prev)->position().distance ((*i)->position()).samples());
+
+			list<ArdourMarker*>::iterator pi = prev;
+			while (pi != sorted.begin () && (*pi)->position () == (*i)->position()) {
+				--pi;
+			}
+
+			double p = sample_to_pixel ((*pi)->position().distance ((*i)->position()).samples());
+
+			if (p == 0) {
+				p = DBL_MAX;
+			}
 
 			if ((*prev)->label_on_left()) {
 				(*i)->set_left_label_limit (p);
 			} else {
 				(*i)->set_left_label_limit (p / 2);
 			}
+		} else {
+			(*i)->set_left_label_limit (DBL_MAX);
+		}
 
+		while (next != sorted.end() && (*next)->position () == (*i)->position ()) {
+			++next;
 		}
 
 		if (next != sorted.end()) {
@@ -391,6 +485,8 @@ Editor::update_marker_labels (ArdourCanvas::Item* group)
 			}
 
 			++next;
+		} else {
+			(*i)->set_right_label_limit (DBL_MAX);
 		}
 
 		prev = i;
@@ -410,19 +506,30 @@ Editor::location_flags_changed (Location *location)
 		return;
 	}
 
-	// move cd markers to/from cd marker bar as appropriate
-	ensure_cd_marker_updated (lam, location);
+	if (lam->start->type () != marker_type (location)) {
+		/* this removes the current location and calls
+		 * refresh_location_display () which re-adds it
+		 * using the correct type.
+		 */
+		location_gone (location);
+		return;
+	}
+
+	// moved markers to/from cd marker bar as appropriate
+	ensure_marker_updated (lam, location);
 
 	if (location->is_cd_marker()) {
-		lam->set_color_rgba (location_cd_marker_color);
+		lam->set_color ("location cd marker");
+	} else if (location->is_section()) {
+		lam->set_color ("location arrangement marker");
 	} else if (location->is_mark()) {
-		lam->set_color_rgba (location_marker_color);
+		lam->set_color ("location marker");
 	} else if (location->is_auto_punch()) {
-		lam->set_color_rgba (location_punch_color);
+		lam->set_color ("location punch");
 	} else if (location->is_auto_loop()) {
-		lam->set_color_rgba (location_loop_color);
+		lam->set_color ("location loop");
 	} else {
-		lam->set_color_rgba (location_range_color);
+		lam->set_color ("location range");
 	}
 
 	if (location->is_hidden()) {
@@ -433,97 +540,40 @@ Editor::location_flags_changed (Location *location)
 }
 
 void
-Editor::update_cd_marker_display ()
+Editor::update_marker_display ()
 {
-	for (LocationMarkerMap::iterator i = location_markers.begin(); i != location_markers.end(); ++i) {
-		LocationMarkers * lam = i->second;
-		Location * location = i->first;
-
-		ensure_cd_marker_updated (lam, location);
-	}
-}
-
-
-void Editor::ensure_cd_marker_updated (LocationMarkers * lam, Location * location)
-{
-	if (location->is_cd_marker()
-	    && (ruler_cd_marker_action->get_active() &&  lam->start->get_parent() != cd_marker_group))
-	{
-		//cerr << "reparenting non-cd marker so it can be relocated: " << location->name() << endl;
-		if (lam->start) {
-			lam->start->reparent (*cd_marker_group);
-		}
-		if (lam->end) {
-			lam->end->reparent (*cd_marker_group);
-		}
-	}
-	else if ( (!location->is_cd_marker() || !ruler_cd_marker_action->get_active())
-		  && (lam->start->get_parent() == cd_marker_group))
-	{
-		//cerr << "reparenting non-cd marker so it can be relocated: " << location->name() << endl;
-		if (location->is_mark()) {
-			if (lam->start) {
-				lam->start->reparent (*marker_group);
-			}
-			if (lam->end) {
-				lam->end->reparent (*marker_group);
-			}
-		}
-		else {
-			if (lam->start) {
-				lam->start->reparent (*range_marker_group);
-			}
-			if (lam->end) {
-				lam->end->reparent (*range_marker_group);
-			}
-		}
+	for (auto const& i : location_markers) {
+		ensure_marker_updated (i.second, i.first);
 	}
 }
 
 void
-Editor::update_cue_marker_display ()
+Editor::reparent_location_markers (LocationMarkers* lam, ArdourCanvas::Item* new_parent)
 {
-	for (LocationMarkerMap::iterator i = location_markers.begin(); i != location_markers.end(); ++i) {
-		LocationMarkers * lam = i->second;
-		Location * location = i->first;
-
-		ensure_cue_marker_updated (lam, location);
+	if (lam->start && lam->start->get_parent() != new_parent) {
+		lam->start->reparent (*new_parent);
+		remove_sorted_marker (lam->start);
+		_sorted_marker_lists[new_parent].push_back (lam->start);
+	}
+	if (lam->end && lam->end->get_parent() != new_parent) {
+		lam->end->reparent (*new_parent);
+		remove_sorted_marker (lam->end);
+		_sorted_marker_lists[new_parent].push_back (lam->end);
 	}
 }
 
-void Editor::ensure_cue_marker_updated (LocationMarkers * lam, Location * location)
+void Editor::ensure_marker_updated (LocationMarkers* lam, Location* location)
 {
-	if (location->is_cd_marker()
-	    && (ruler_cd_marker_action->get_active() &&  lam->start->get_parent() != cd_marker_group))
-	{
-		//cerr << "reparenting non-cd marker so it can be relocated: " << location->name() << endl;
-		if (lam->start) {
-			lam->start->reparent (*cd_marker_group);
-		}
-		if (lam->end) {
-			lam->end->reparent (*cd_marker_group);
-		}
-	}
-	else if ( (!location->is_cd_marker() || !ruler_cd_marker_action->get_active())
-		  && (lam->start->get_parent() == cd_marker_group))
-	{
-		//cerr << "reparenting non-cd marker so it can be relocated: " << location->name() << endl;
-		if (location->is_mark()) {
-			if (lam->start) {
-				lam->start->reparent (*marker_group);
-			}
-			if (lam->end) {
-				lam->end->reparent (*marker_group);
-			}
-		}
-		else {
-			if (lam->start) {
-				lam->start->reparent (*range_marker_group);
-			}
-			if (lam->end) {
-				lam->end->reparent (*range_marker_group);
-			}
-		}
+	if (location->is_cd_marker()) {
+		reparent_location_markers (lam, marker_group);
+	} else if (location->is_section()) {
+		reparent_location_markers (lam, section_marker_group);
+	} else if (location->is_scene()) {
+		reparent_location_markers (lam, marker_group);
+	} else if (location->is_cue_marker()) {
+		reparent_location_markers (lam, marker_group);
+	} else if (location->is_mark() || location->matches (Location::Flags(0))) {
+		reparent_location_markers (lam, marker_group);
 	}
 }
 
@@ -601,8 +651,10 @@ Editor::refresh_location_display_internal (const Locations::LocationList& locati
 		LocationMarkerMap::iterator x;
 
 		if ((x = location_markers.find (*i)) != location_markers.end()) {
-			x->second->valid = true;
-			continue;
+			if (x->second->start && x->second->start->type () == marker_type (*i)) {
+				x->second->valid = true;
+				continue;
+			}
 		}
 
 		add_new_location_internal (*i);
@@ -626,6 +678,11 @@ Editor::refresh_location_display_internal (const Locations::LocationList& locati
 
 			LocationMarkers* m = i->second;
 			location_markers.erase (i);
+
+			if (m && (entered_marker == m->start || entered_marker == m->end)) {
+				entered_marker = 0;
+			}
+
 			delete m;
 		}
 
@@ -646,6 +703,47 @@ Editor::refresh_location_display ()
 	}
 
 	update_marker_labels ();
+}
+
+void
+Editor::update_section_rects ()
+{
+	ENSURE_GUI_THREAD (*this, &Editor::update_section_rects);
+	if (!_session) {
+		return;
+	}
+	section_marker_bar->clear (true);
+
+	timepos_t start;
+	timepos_t end;
+	std::vector<Locations::LocationPair> locs;
+
+	Locations* loc = _session->locations ();
+	Location*  l   = NULL;
+	bool bright    = false;
+
+	do {
+		l = loc->next_section_iter (l, start, end, locs);
+		if (l) {
+			double const left  = sample_to_pixel (start.samples ());
+			double const right = sample_to_pixel (end.samples ());
+
+			ArdourCanvas::Rectangle* rect = new ArdourCanvas::Rectangle (section_marker_bar, ArdourCanvas::Rect (left, 1, right, timebar_height));
+			rect->set_fill (true);
+			rect->set_outline_what(ArdourCanvas::Rectangle::What(0));
+			rect->raise_to_top ();
+
+			std::string const color = bright ? "arrangement rect" : "arrangement rect alt";
+			rect->set_fill_color (UIConfiguration::instance().color (color));
+			rect->Event.connect (sigc::bind (sigc::mem_fun (this, &Editor::section_rect_event), l,  rect, color));
+
+			Editor::LocationMarkers* markers = find_location_markers (l);
+			if (markers) {
+				markers->set_color (color);
+			}
+			bright = !bright;
+		}
+	} while (l);
 }
 
 void
@@ -691,11 +789,11 @@ Editor::LocationMarkers::set_position (timepos_t const & startt,
 }
 
 void
-Editor::LocationMarkers::set_color_rgba (uint32_t rgba)
+Editor::LocationMarkers::set_color (std::string const& color_name)
 {
-	start->set_color_rgba (rgba);
+	start->set_color (color_name);
 	if (end) {
-		end->set_color_rgba (rgba);
+		end->set_color (color_name);
 	}
 }
 
@@ -733,50 +831,6 @@ Editor::LocationMarkers::setup_lines ()
 	if (end) {
 		end->setup_line ();
 	}
-}
-
-void
-Editor::mouse_add_new_marker (timepos_t where, Location::Flags extra_flags, int32_t cue_id)
-{
-	if (!_session) {
-		return;
-	}
-
-	string markername;
-	string namebase;
-	Location::Flags flags = Location::Flags (extra_flags|Location::IsMark);
-
-	std::cerr << "adding marker @ " << where << std::endl;
-
-	if (flags & Location::IsCueMarker) {
-		/* XXX i18n needed for cue letter names */
-		markername = string_compose (_("cue %1"), cue_marker_name (cue_id));
-	} else {
-		namebase = _("mark");
-		_session->locations()->next_available_name (markername, namebase);
-
-		if (!choose_new_marker_name (markername)) {
-			return;
-		}
-	}
-
-	Location *location = new Location (*_session, where, where, markername, flags, cue_id);
-	begin_reversible_command (_("add marker"));
-
-	XMLNode &before = _session->locations()->get_state();
-	_session->locations()->add (location, true);
-	XMLNode &after = _session->locations()->get_state();
-	_session->add_command (new MementoCommand<Locations>(*(_session->locations()), &before, &after));
-
-	/* find the marker we just added */
-
-	LocationMarkers *lam = find_location_markers (location);
-	if (lam) {
-		/* make it the selected marker */
-		selection->set (lam->start);
-	}
-
-	commit_reversible_command ();
 }
 
 void
@@ -860,6 +914,10 @@ Editor::remove_marker (ArdourMarker* marker)
 		return;
 	}
 
+	if (entered_marker == marker) {
+		entered_marker = 0;
+	}
+
 	if (marker->type() == ArdourMarker::RegionCue) {
 		Glib::signal_idle().connect (sigc::bind (sigc::mem_fun(*this, &Editor::really_remove_region_marker), marker));
 	} else {
@@ -934,6 +992,11 @@ Editor::location_gone (Location *location)
 
 			LocationMarkers* m = i->second;
 			location_markers.erase (i);
+
+			if (m && (entered_marker == m->start || entered_marker == m->end)) {
+				entered_marker = 0;
+			}
+
 			delete m;
 
 			/* Markers that visually overlap with this (removed) marker
@@ -944,6 +1007,10 @@ Editor::location_gone (Location *location)
 			refresh_location_display ();
 			break;
 		}
+	}
+
+	if (location->is_section ()) {
+		update_section_rects ();
 	}
 }
 
@@ -971,17 +1038,14 @@ Editor::tempo_map_marker_context_menu (GdkEventButton* ev, ArdourCanvas::Item* i
 	if (mm) {
 		can_remove = !mm->meter().map().is_initial (mm->meter());
 		build_meter_marker_menu (mm, can_remove);
-		meter_marker_menu->popup (1, ev->time);
+		meter_marker_menu->popup (ev->button, ev->time);
 	} else if (tm) {
-		if (!tm->tempo().active()) {
-			return;
-		}
 		can_remove = !tm->tempo().map().is_initial(tm->tempo()) && !tm->tempo().locked_to_meter();
 		build_tempo_marker_menu (tm, can_remove);
-		tempo_marker_menu->popup (1, ev->time);
+		tempo_marker_menu->popup (ev->button, ev->time);
 	} else if (bm) {
 		build_bbt_marker_menu (bm);
-		bbt_marker_menu->popup (1, ev->time);
+		bbt_marker_menu->popup (ev->button, ev->time);
 	} else {
 		return;
 	}
@@ -1010,7 +1074,7 @@ Editor::marker_context_menu (GdkEventButton* ev, ArdourCanvas::Item* item)
 		build_range_marker_menu (loc, loc == transport_loop_location() || loc == transport_punch_location(), loc->is_session_range());
 
 		marker_menu_item = item;
-		range_marker_menu->popup (1, ev->time);
+		range_marker_menu->popup (ev->button, ev->time);
 
 	} else if (loc->is_mark()) {
 
@@ -1031,12 +1095,12 @@ Editor::marker_context_menu (GdkEventButton* ev, ArdourCanvas::Item* item)
 			}
 #endif
 			marker_menu_item = item;
-			marker_menu->popup (1, ev->time);
+			marker_menu->popup (ev->button, ev->time);
 
 	} else if (loc->is_range_marker()) {
 		build_range_marker_menu (loc, false, false);
 		marker_menu_item = item;
-		range_marker_menu->popup (1, ev->time);
+		range_marker_menu->popup (ev->button, ev->time);
 	}
 }
 
@@ -1047,7 +1111,7 @@ Editor::new_transport_marker_context_menu (GdkEventButton* ev, ArdourCanvas::Ite
 		build_new_transport_marker_menu ();
 	}
 
-	new_transport_marker_menu->popup (1, ev->time);
+	new_transport_marker_menu->popup (ev->button, ev->time);
 
 }
 
@@ -1085,7 +1149,6 @@ Editor::build_marker_menu (Location* loc)
 		items.push_back (MenuElem (_("Create Range to Next Marker"), sigc::mem_fun(*this, &Editor::marker_menu_range_to_next)));
 
 		items.push_back (MenuElem (_("Promote to Time Origin"), sigc::mem_fun(*this, &Editor::marker_menu_set_origin)));
-		items.push_back (MenuElem (_("Hide"), sigc::mem_fun(*this, &Editor::marker_menu_hide)));
 		items.push_back (MenuElem (_("Rename..."), sigc::mem_fun(*this, &Editor::marker_menu_rename)));
 
 		items.push_back (CheckMenuElem (_("Lock")));
@@ -1096,13 +1159,17 @@ Editor::build_marker_menu (Location* loc)
 		lock_item->signal_activate().connect (sigc::mem_fun (*this, &Editor::toggle_marker_menu_lock));
 	}
 
-	items.push_back (CheckMenuElem (_("Glue to Bars and Beats")));
-	Gtk::CheckMenuItem* glue_item = static_cast<Gtk::CheckMenuItem*> (&items.back());
-	glue_item->set_active (loc->position_time_domain() == Temporal::BeatTime);
-
-	glue_item->signal_activate().connect (sigc::mem_fun (*this, &Editor::toggle_marker_menu_glue));
-
 	items.push_back (SeparatorElem());
+
+	if (!loc->is_range () && !loc->is_xrun ()) {
+		items.push_back (CheckMenuElem (_("Arrangement Boundary")));
+		Gtk::CheckMenuItem* item = static_cast<Gtk::CheckMenuItem*> (&items.back());
+		if (loc->is_section ()) {
+			item->set_active ();
+		}
+		item->signal_activate().connect (sigc::mem_fun (*this, &Editor::toggle_marker_section));
+		items.push_back (SeparatorElem());
+	}
 
 	items.push_back (MenuElem (_("Remove"), sigc::mem_fun(*this, &Editor::marker_menu_remove)));
 }
@@ -1129,13 +1196,6 @@ Editor::build_range_marker_menu (Location* loc, bool loop_or_punch, bool session
 	items.push_back (MenuElem (_("Set Range from Selection"), sigc::bind (sigc::mem_fun(*this, &Editor::marker_menu_set_from_selection), false)));
 
 	items.push_back (MenuElem (_("Zoom to Range"), sigc::mem_fun (*this, &Editor::marker_menu_zoom_to_range)));
-
-	items.push_back (SeparatorElem());
-	items.push_back (CheckMenuElem (_("Glue to Bars and Beats")));
-
-	Gtk::CheckMenuItem* glue_item = static_cast<Gtk::CheckMenuItem*> (&items.back());
-	glue_item->set_active (loc->position_time_domain() == Temporal::BeatTime);
-	glue_item->signal_activate().connect (sigc::mem_fun (*this, &Editor::toggle_marker_menu_glue));
 
 	items.push_back (SeparatorElem());
 	items.push_back (MenuElem (_("Loudness Assistant..."), sigc::mem_fun(*this, &Editor::loudness_assistant_marker)));
@@ -1312,7 +1372,7 @@ Editor::marker_menu_select_all_selectables_using_range ()
 	bool is_start;
 
 	if (((l = find_location_from_marker (marker, is_start)) != 0) && (l->end() > l->start())) {
-		select_all_within (l->start(), l->end(), 0,  DBL_MAX, track_views, Selection::Set, false);
+		select_all_within (l->start(), l->end(), 0,  DBL_MAX, selectable_owners(), SelectionSet, false);
 	}
 
 }
@@ -1469,7 +1529,7 @@ Editor::marker_menu_set_from_playhead ()
 
 		timepos_t pos (_session->audible_sample());
 
-		if (default_time_domain() == Temporal::BeatTime) {
+		if (time_domain() == Temporal::BeatTime) {
 			pos = timepos_t (pos.beats());
 		}
 
@@ -1708,7 +1768,6 @@ Editor::ramp_to_next_tempo ()
 	if (!tmc.map().set_ramped (const_cast<Temporal::TempoPoint&>(tempo), true)) {
 		tmc.abort ();
 	}
-	std::cerr << "leave scope\n";
 }
 
 void
@@ -1738,6 +1797,28 @@ Editor::toggle_marker_menu_lock ()
 }
 
 void
+Editor::toggle_marker_section ()
+{
+	ArdourMarker* marker;
+
+	if ((marker = reinterpret_cast<ArdourMarker *> (marker_menu_item->get_data ("marker"))) == 0) {
+		fatal << _("programming error: marker canvas item has no marker object pointer!") << endmsg;
+		abort(); /*NOTREACHED*/
+	}
+
+	Location* loc;
+	bool ignored;
+
+	loc = find_location_from_marker (marker, ignored);
+
+	if (!loc) {
+		return;
+	}
+
+	loc->set_section (!loc->is_section ());
+}
+
+void
 Editor::marker_menu_rename ()
 {
 	ArdourMarker* marker;
@@ -1748,11 +1829,11 @@ Editor::marker_menu_rename ()
 	}
 
 
-	rename_marker (marker);
+	edit_marker (marker, false);
 }
 
 void
-Editor::rename_marker(ArdourMarker *marker)
+Editor::edit_marker(ArdourMarker *marker, bool with_scene)
 {
 	Location* loc;
 	bool is_start;
@@ -1767,24 +1848,109 @@ Editor::rename_marker(ArdourMarker *marker)
 		return;
 	}
 
+	edit_location (*loc, with_scene, true);
+}
+
+bool
+Editor::edit_location (Location& loc, bool with_scene, bool with_command)
+{
 	ArdourWidgets::Prompter dialog (true);
 	string txt;
+	string verb;
+
+	if (with_scene) {
+		verb = _("Edit");
+	} else {
+		verb = _("Rename");
+	}
 
 	dialog.set_prompt (_("New Name:"));
 
-	if (loc->is_mark()) {
-		dialog.set_title (_("Rename Mark"));
+	if (loc.is_section()) {
+		dialog.set_title (string_compose (_("%1 Arrangement Section"), verb));
+	} else if (loc.is_range()) {
+		dialog.set_title (string_compose (_("%1 Range"), verb));
 	} else {
-		dialog.set_title (_("Rename Range"));
+		dialog.set_title (string_compose (_("%1 Marker"), verb));
 	}
 
 	dialog.set_name ("MarkRenameWindow");
 	dialog.set_size_request (250, -1);
-	dialog.set_position (Gtk::WIN_POS_MOUSE);
+	dialog.set_position (UIConfiguration::instance().get_default_window_position());
 
-	dialog.add_button (_("Rename"), RESPONSE_ACCEPT);
-	dialog.set_response_sensitive (Gtk::RESPONSE_ACCEPT, false);
-	dialog.set_initial_text (loc->name());
+	dialog.add_button (verb, RESPONSE_ACCEPT);
+	dialog.set_initial_text (loc.name());
+
+	Gtk::Adjustment* program_adjust (nullptr);
+	Gtk::Adjustment* bank_adjust (nullptr);
+	Gtk::Adjustment* channel_adjust (nullptr);
+	Gtk::CheckButton* use_scene_button (nullptr);
+
+	if (with_scene) {
+		program_adjust = new Gtk::Adjustment (1, 1, 128, 1, 10);
+		bank_adjust = new Gtk::Adjustment (1, 1, 128, 1, 10);
+		channel_adjust = new Gtk::Adjustment (1, 1, 16, 1, 4);
+		Gtk::SpinButton* program = manage (new Gtk::SpinButton (*program_adjust));
+		Gtk::SpinButton* bank = manage (new Gtk::SpinButton (*bank_adjust));
+		Gtk::SpinButton* channel = manage (new Gtk::SpinButton (*channel_adjust));
+		Gtk::Label* l1 = manage (new Gtk::Label (_("Program Number")));
+		Gtk::Label* l2 = manage (new Gtk::Label (_("Bank Number")));
+		Gtk::Label* l3 = manage (new Gtk::Label (_("Channel")));
+
+		std::shared_ptr<MIDISceneChange> msc = std::dynamic_pointer_cast<MIDISceneChange> (loc.scene_change());
+		if (msc) {
+			program_adjust->set_value (msc->program() + 1);
+			bank_adjust->set_value (msc->bank() + 1);
+			channel_adjust->set_value (msc->channel() + 1);
+		}
+
+		program_adjust->signal_value_changed().connect (sigc::bind (sigc::mem_fun (dialog, &Gtk::Dialog::set_response_sensitive), Gtk::RESPONSE_ACCEPT, true));
+		bank_adjust->signal_value_changed().connect (sigc::bind (sigc::mem_fun (dialog, &Gtk::Dialog::set_response_sensitive), Gtk::RESPONSE_ACCEPT, true));
+		channel_adjust->signal_value_changed().connect (sigc::bind (sigc::mem_fun (dialog, &Gtk::Dialog::set_response_sensitive), Gtk::RESPONSE_ACCEPT, true));
+
+		Gtk::Label* scene_title = manage (new Gtk::Label (string_compose ("<span size=\"large\" weight=\"bold\">%1</span>", _("Scene Change"))));
+		scene_title->set_use_markup (true);
+
+		Gtk::HBox* b1 = manage (new Gtk::HBox);
+		b1->set_spacing (12);
+		b1->pack_start (*l1, true, true);
+		l1->set_alignment (1.0);
+		b1->pack_start (*program, true, false);
+
+		Gtk::HBox* b2 = manage (new Gtk::HBox);
+		b2->set_spacing (12);
+		b2->pack_start (*l2, true, true);
+		l2->set_alignment (1.0);
+		b2->pack_start (*bank, true, false);
+
+		Gtk::HBox* b3 = manage (new Gtk::HBox);
+		b3->set_spacing (12);
+		b3->pack_start (*l3, true, true);
+		l3->set_alignment (1.0);
+		b3->pack_start (*channel, true, false);
+
+		use_scene_button = manage (new Gtk::CheckButton (_("Clear scene change")));
+		if (!msc) {
+			use_scene_button->set_sensitive (false);
+		} else {
+			use_scene_button->signal_toggled().connect  (sigc::bind (sigc::mem_fun (dialog, &Gtk::Dialog::set_response_sensitive), Gtk::RESPONSE_ACCEPT, true));
+		}
+
+		Gtk::HBox* b4 = manage (new Gtk::HBox);
+		b4->pack_start (*use_scene_button, true, false);
+
+		Gtk::VBox* scene_box = manage (new Gtk::VBox);
+		scene_box->set_spacing (12);
+		scene_box->pack_start (*scene_title, false, false);
+		scene_box->pack_start (*b1, false, false);
+		scene_box->pack_start (*b2, false, false);
+		scene_box->pack_start (*b3, false, false);
+		scene_box->pack_start (*b4, true, true);
+
+		scene_box->show_all ();
+
+		dialog.get_vbox()->pack_end (*scene_box, false, false);
+	}
 
 	dialog.show ();
 
@@ -1792,27 +1958,56 @@ Editor::rename_marker(ArdourMarker *marker)
 	case RESPONSE_ACCEPT:
 		break;
 	default:
-		return;
+		return false;
 	}
 
-	begin_reversible_command ( _("rename marker") );
 	XMLNode &before = _session->locations()->get_state();
 
-	dialog.get_result(txt);
-	loc->set_name (txt);
+	if (with_command) {
+		begin_reversible_command (with_scene ? _("edit marker") : _("rename marker"));
+	}
+
+	dialog.get_result (txt);
+	loc.set_name (txt);
+
+	if (with_scene) {
+
+		if (use_scene_button->get_active()) {
+			loc.set_scene_change (nullptr);
+		} else {
+
+			int pc = program_adjust->get_value() - 1;
+			int b = bank_adjust->get_value() - 1;
+			int chn = channel_adjust->get_value() - 1;
+
+			std::shared_ptr<MIDISceneChange> msc = std::dynamic_pointer_cast<MIDISceneChange> (loc.scene_change ());
+			if (!msc) {
+				msc.reset (new MIDISceneChange (chn, b, pc));
+				loc.set_scene_change (msc);
+			}
+			msc->set_channel (chn);
+			msc->set_program (pc);
+			msc->set_bank (b);
+		}
+	}
+
 	_session->set_dirty ();
 
-	XMLNode &after = _session->locations()->get_state();
-	_session->add_command (new MementoCommand<Locations>(*(_session->locations()), &before, &after));
-	commit_reversible_command ();
+	if (with_command) {
+		XMLNode &after = _session->locations()->get_state();
+		_session->add_command (new MementoCommand<Locations>(*(_session->locations()), &before, &after));
+		commit_reversible_command ();
+	} else {
+		delete &before;
+	}
+
+	return true;
 }
 
 void
 Editor::new_transport_marker_menu_popdown ()
 {
 	// hide rects
-	transport_bar_drag_rect->hide();
-
 	_drags->abort ();
 }
 
@@ -1952,39 +2147,6 @@ Editor::jump_to_loop_marker (bool start)
 }
 
 void
-Editor::toggle_marker_menu_glue ()
-{
-	ArdourMarker* marker;
-
-	if ((marker = reinterpret_cast<ArdourMarker *> (marker_menu_item->get_data ("marker"))) == 0) {
-		fatal << _("programming error: marker canvas item has no marker object pointer!") << endmsg;
-		abort(); /*NOTREACHED*/
-	}
-
-	Location* loc;
-	bool ignored;
-
-	loc = find_location_from_marker (marker, ignored);
-
-	if (!loc) {
-		return;
-	}
-
-	begin_reversible_command (_("change marker lock style"));
-	XMLNode &before = _session->locations()->get_state();
-
-	if (loc->position_time_domain() == Temporal::BeatTime) {
-		loc->set_position_time_domain (Temporal::AudioTime);
-	} else {
-		loc->set_position_time_domain (Temporal::BeatTime);
-	}
-
-	XMLNode &after = _session->locations()->get_state();
-	_session->add_command(new MementoCommand<Locations>(*(_session->locations()), &before, &after));
-	commit_reversible_command ();
-}
-
-void
 Editor::toggle_marker_lines ()
 {
 	_show_marker_lines = !_show_marker_lines;
@@ -2015,6 +2177,22 @@ Editor::find_marker_from_location_id (PBD::ID const & id, bool is_start) const
 }
 
 void
+Editor::update_selection_markers ()
+{
+	timepos_t start, end;
+	if (get_selection_extents (start, end)) {
+		_selection_marker->set_position (start, end);
+		_selection_marker->show ();
+		ActionManager::get_action ("Editor", "cut-paste-section")->set_sensitive (true);
+		ActionManager::get_action ("Editor", "copy-paste-section")->set_sensitive (true);
+	} else {
+		_selection_marker->hide ();
+		ActionManager::get_action ("Editor", "cut-paste-section")->set_sensitive (false);
+		ActionManager::get_action ("Editor", "copy-paste-section")->set_sensitive (false);
+	}
+}
+
+void
 Editor::toggle_cue_behavior ()
 {
 	CueBehavior cb (_session->config.get_cue_behavior());
@@ -2023,5 +2201,154 @@ Editor::toggle_cue_behavior ()
 		_session->config.set_cue_behavior (ARDOUR::CueBehavior (cb & ~ARDOUR::FollowCues));
 	} else {
 		_session->config.set_cue_behavior (ARDOUR::CueBehavior (cb | ARDOUR::FollowCues));
+	}
+}
+
+void
+Editor::set_visible_marker_types (MarkerBarType mbt)
+{
+	_visible_marker_types = mbt;
+	update_mark_and_range_visibility ();
+	VisibleMarkersChanged ();
+}
+
+void
+Editor::set_visible_range_types (RangeBarType rbt)
+{
+	_visible_range_types = rbt;
+	update_mark_and_range_visibility ();
+	VisibleRangesChanged ();
+}
+
+Editor::MarkerBarType
+Editor::visible_marker_types () const
+{
+	return _visible_marker_types;
+}
+
+
+Editor::RangeBarType
+Editor::visible_range_types () const
+{
+	return _visible_range_types;
+}
+
+void
+Editor::update_mark_and_range_visibility ()
+{
+	for (auto & l : location_markers) {
+
+		Location* location = l.first;
+		LocationMarkers* lam = l.second;
+
+		MarkerBarType mark_type = MarkerBarType (0);
+		RangeBarType range_type = RangeBarType (0);
+
+		if (location->is_mark()) {
+
+			if (location->is_cd_marker()) {
+				mark_type = CDMarks;
+			} else if (location->is_cue_marker()) {
+				mark_type = CueMarks;
+			} else if (location->is_section()) {
+
+			} else if (location->is_scene()) {
+				mark_type = SceneMarks;
+			} else {
+				mark_type = LocationMarks;
+			}
+
+		} else if (location->is_auto_loop()) {
+			range_type = LoopRange;
+		} else if (location->is_auto_punch()) {
+			range_type = PunchRange;
+		} else if (location->is_session_range()) {
+			range_type = SessionRange;
+
+		} else {
+			range_type = OtherRange;
+		}
+
+		if (location->is_hidden ()) {
+			lam->hide();
+		} else {
+			if (mark_type) {
+				if (!(_visible_marker_types & mark_type)) {
+					lam->hide ();
+				} else {
+					lam->show ();
+				}
+			} else if (range_type) {
+				if (!(_visible_range_types & range_type)) {
+					lam->hide ();
+				} else {
+					lam->show ();
+				}
+			} else {
+				lam->show ();
+			}
+		}
+	}
+}
+
+void
+Editor::show_marker_type (MarkerBarType mbt)
+{
+	Glib::RefPtr<Gtk::RadioAction> action;
+	switch (mbt) {
+	case CDMarks:
+		action = cd_marker_action;
+		break;
+	case CueMarks:
+		action = cue_marker_action;
+		break;
+	case SceneMarks:
+		action = scene_marker_action;
+		break;
+	case LocationMarks:
+		action = location_marker_action;
+		break;
+	default:
+		action = all_marker_action;
+		break;
+	}
+
+	if (action->get_active()) {
+		/* Only change things for the currently active action, since
+		   this will be called for both the deactivated action, and the
+		   newly activated one.
+		*/
+		set_visible_marker_types (mbt);
+	}
+}
+
+void
+Editor::show_range_type (RangeBarType rbt)
+{
+	Glib::RefPtr<Gtk::RadioAction> action;
+	switch (rbt) {
+	case OtherRange:
+		action = other_range_action;
+		break;
+	case PunchRange:
+		action = punch_range_action;
+		break;
+	case LoopRange:
+		action = loop_range_action;
+		break;
+	case SessionRange:
+		action = session_range_action;
+		break;
+	default:
+		action = all_range_action;
+		break;
+	}
+
+	if (action->get_active()) {
+		/* Only change things for the currently active action, since
+		   this will be called for both the deactivated action, and the
+		   newly activated one.
+		*/
+		set_visible_range_types (rbt);
 	}
 }

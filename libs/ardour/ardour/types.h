@@ -28,8 +28,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_types_h__
-#define __ardour_types_h__
+#pragma once
 
 #include <bitset>
 #include <cstdint>
@@ -72,8 +71,11 @@ class Source;
 class AudioSource;
 class GraphNode;
 class Route;
+class RouteGroup;
 class Region;
+class Playlist;
 class Stripable;
+class Trigger;
 class VCA;
 class AutomationControl;
 class SlavableAutomationControl;
@@ -101,6 +103,9 @@ typedef std::list<std::pair<sampleoffset_t, sampleoffset_t> > AudioIntervalResul
 typedef std::map<std::shared_ptr<ARDOUR::Region>,AudioIntervalResult> AudioIntervalMap;
 
 typedef std::list<std::shared_ptr<Region> > RegionList;
+typedef std::set<std::shared_ptr<Playlist> > PlaylistSet;
+typedef std::list<std::shared_ptr<RouteGroup>> RouteGroupList;
+	
 
 struct IOChange {
 
@@ -171,8 +176,19 @@ enum AutomationType {
 	MonitoringAutomation,
 	BusSendLevel,
 	BusSendEnable,
+	SurroundSendLevel,
 	InsertReturnLevel,
 	MainOutVolume,
+	MidiVelocityAutomation,
+	PanSurroundX,
+	PanSurroundY,
+	PanSurroundZ,
+	PanSurroundSize,
+	PanSurroundSnap,
+	BinauralRenderMode,
+	PanSurroundElevationEnable,
+	PanSurroundZones,
+	PanSurroundRamp,
 
 	/* used only by Controllable Descriptor to access send parameters */
 
@@ -247,6 +263,13 @@ enum RecordMode {
 	RecSoundOnSound
 };
 
+enum SectionOperation {
+	CopyPasteSection,
+	CutPasteSection,
+	InsertSection,
+	DeleteSection,
+};
+
 enum NoteMode {
 	Sustained,
 	Percussive
@@ -284,6 +307,7 @@ class AnyTime {
 	enum Type {
 		Timecode,
 		BBT,
+		BBT_Offset,
 		Samples,
 		Seconds
 	};
@@ -291,14 +315,21 @@ class AnyTime {
 	Type type;
 
 	Timecode::Time     timecode;
-	Temporal::BBT_Time bbt;
+	union {
+		Temporal::BBT_Time bbt;
+		Temporal::BBT_Offset bbt_offset;
+	};
 
 	union {
 		samplecnt_t     samples;
 		double         seconds;
 	};
 
-	AnyTime() { type = Samples; samples = 0; }
+	AnyTime () : type (Samples), samples (0) {}
+	AnyTime (Temporal::BBT_Offset bt) : type (BBT_Offset), bbt_offset (bt) {}
+	AnyTime (std::string const &);
+
+	std::string str() const;
 
 	bool operator== (AnyTime const & other) const {
 		if (type != other.type) { return false; }
@@ -308,6 +339,8 @@ class AnyTime {
 			return timecode == other.timecode;
 		case BBT:
 			return bbt == other.bbt;
+		case BBT_Offset:
+			return bbt_offset == other.bbt_offset;
 		case Samples:
 			return samples == other.samples;
 		case Seconds:
@@ -324,6 +357,8 @@ class AnyTime {
 				timecode.seconds != 0 || timecode.frames != 0;
 		case BBT:
 			return bbt.bars != 0 || bbt.beats != 0 || bbt.ticks != 0;
+		case BBT_Offset:
+			return bbt_offset.bars != 0 || bbt_offset.beats != 0 || bbt_offset.ticks != 0;
 		case Samples:
 			return samples != 0;
 		case Seconds:
@@ -425,6 +460,12 @@ enum EditMode {
 	Lock
 };
 
+enum SnapTarget {
+	SnapTargetGrid,
+	SnapTargetOther,
+	SnapTargetBoth
+};
+
 enum RippleMode {
 	RippleSelected,
 	RippleAll,
@@ -446,6 +487,13 @@ enum RangeSelectionAfterSplit {
 	ClearSel = 0,
 	PreserveSel = 1,  // bit 0
 	ForceSel = 2      // bit 1
+};
+
+enum TimeSelectionAfterSectionPaste {
+	SectionSelectNoop = 0,
+	SectionSelectClear = 1,
+	SectionSelectRetain = 2,
+	SectionSelectRetainAndMovePlayhead = 3,
 };
 
 enum RegionPoint {
@@ -470,6 +518,12 @@ enum MonitorChoice {
 	MonitorInput = 0x1,
 	MonitorDisk = 0x2,
 	MonitorCue = 0x3,
+};
+
+enum FastWindOp {
+	FastWindOff = 0,
+	FastWindVarispeed = 0x1,  //rewind/ffwd commands will varispeed the transport (incl reverse playback)
+	FastWindLocate = 0x2,     //rewind/ffwd commands will jump to next/prior marker
 };
 
 enum MonitorState {
@@ -638,9 +692,9 @@ typedef std::list<std::shared_ptr<GraphNode> > GraphNodeList;
 typedef std::list<std::shared_ptr<Stripable> > StripableList;
 typedef std::list<std::weak_ptr  <Route> > WeakRouteList;
 typedef std::list<std::weak_ptr  <Stripable> > WeakStripableList;
-typedef std::list<std::shared_ptr<AutomationControl> > ControlList;
-typedef std::list<std::weak_ptr  <AutomationControl> > WeakControlList;
-typedef std::list<std::shared_ptr<SlavableAutomationControl> > SlavableControlList;
+typedef std::list<std::shared_ptr<AutomationControl> > AutomationControlList;
+typedef std::list<std::weak_ptr  <AutomationControl> > WeakAutomationControlList;
+typedef std::list<std::shared_ptr<SlavableAutomationControl> > SlavableAutomationControlList;
 typedef std::set <AutomationType> AutomationTypeSet;
 
 typedef std::list<std::shared_ptr<VCA> > VCAList;
@@ -702,10 +756,14 @@ enum AppleNSGLViewMode {
  */
 struct RouteProcessorChange {
 	enum Type {
-		MeterPointChange = 0x1,
-		RealTimeChange   = 0x2,
-		GeneralChange    = 0x4,
-		SendReturnChange = 0x8
+		NoProcessorChange   = 0x00,
+		MeterPointChange    = 0x01,
+		RealTimeChange      = 0x02,
+		GeneralChange       = 0x04,
+		SendReturnChange    = 0x08,
+		CustomPinChange     = 0x10,
+		ParameterNameChange = 0x20,
+		PortNameChange      = 0x40
 	};
 
 	RouteProcessorChange () : type (GeneralChange), meter_visibly_changed (true)
@@ -813,6 +871,7 @@ enum PlaylistDisposition {
 enum MidiTrackNameSource {
 	SMFTrackNumber,
 	SMFTrackName,
+	SMFFileAndTrackName,
 	SMFInstrumentName
 };
 
@@ -934,6 +993,28 @@ struct ProcessedRanges {
 	ProcessedRanges() : start { 0, 0 }, end { 0, 0 }, cnt (0) {}
 };
 
+enum SelectionOperation {
+	SelectionSet,
+	SelectionAdd,
+	SelectionToggle,
+	SelectionRemove,
+	SelectionExtend /* UI only operation, not core */
+};
+
+enum RecordState {
+	Disabled = 0,
+	Enabled = 1,
+	Recording = 2
+};
+
+
+/* compare to IEditController */
+enum VST3KnobMode {
+	VST3KnobPluginDefault = -1,
+	VST3KnobCircularMode = 0,
+	VST3KnobRelativCircularMode,
+	VST3KnobLinearMode
+};
 
 } // namespace ARDOUR
 
@@ -941,4 +1022,3 @@ struct ProcessedRanges {
 
 using ARDOUR::samplepos_t;
 
-#endif /* __ardour_types_h__ */

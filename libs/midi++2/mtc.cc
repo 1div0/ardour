@@ -19,7 +19,6 @@
  */
 
 #include <cstdlib>
-#include <unistd.h>
 #include <cstring>
 #include <iostream>
 
@@ -185,7 +184,7 @@ Parser::process_mtc_quarter_frame (MIDI::byte *msg)
 			   true, just ignore this in terms of it being an error.
 			*/
 
-			boost::optional<bool> res = mtc_skipped ();
+			std::optional<bool> res = mtc_skipped ();
 
 			if (res.value_or (false)) {
 

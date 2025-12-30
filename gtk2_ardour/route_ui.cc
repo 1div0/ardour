@@ -30,7 +30,7 @@
 #include <map>
 #include <boost/algorithm/string.hpp>
 
-#include <gtkmm/stock.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/controllable.h"
 #include "pbd/enumwriter.h"
@@ -53,6 +53,7 @@
 #include "ardour/phase_control.h"
 #include "ardour/send.h"
 #include "ardour/route.h"
+#include "ardour/selection.h"
 #include "ardour/session.h"
 #include "ardour/session_playlists.h"
 #include "ardour/solo_mute_release.h"
@@ -75,12 +76,14 @@
 #include "keyboard.h"
 #include "mixer_strip.h"
 #include "mixer_ui.h"
+#include "opts.h"
 #include "patch_change_widget.h"
 #include "playlist_selector.h"
 #include "plugin_pin_dialog.h"
 #include "rgb_macros.h"
 #include "route_time_axis.h"
 #include "route_ui.h"
+#include "rta_manager.h"
 #include "save_template_dialog.h"
 #include "timers.h"
 #include "ui_config.h"
@@ -96,7 +99,7 @@ using namespace PBD;
 using namespace std;
 
 uint32_t RouteUI::_max_invert_buttons = 3;
-PBD::Signal1<void, std::shared_ptr<Route> > RouteUI::BusSendDisplayChanged;
+PBD::Signal<void(std::shared_ptr<Route> )> RouteUI::BusSendDisplayChanged;
 std::weak_ptr<Route> RouteUI::_showing_sends_to;
 std::string RouteUI::program_port_prefix;
 
@@ -127,8 +130,6 @@ RouteUI::RouteUI (ARDOUR::Session* sess)
 	, playlist_action_menu (0)
 	, _playlist_selector(0)
 	, _record_menu(0)
-	, _comment_window(0)
-	, _comment_area(0)
 	, _invert_menu(0)
 {
 	if (program_port_prefix.empty()) {
@@ -165,7 +166,6 @@ RouteUI::~RouteUI()
 	delete monitor_disk_button;
 	delete playlist_action_menu;
 	delete _record_menu;
-	delete _comment_window;
 	delete _invert_menu;
 	delete _playlist_selector;
 
@@ -196,7 +196,6 @@ RouteUI::init ()
 	denormal_menu_item = 0;
 	_step_edit_item = 0;
 	_rec_safe_item = 0;
-	_ignore_comment_edit = false;
 	_i_am_the_modifier = 0;
 	_n_polarity_invert = 0;
 
@@ -215,6 +214,11 @@ RouteUI::init ()
 	solo_button = manage (new ArdourButton);
 	solo_button->set_name ("solo button");
 	solo_button->set_no_show_all (true);
+
+	rta_button = manage (new ArdourButton);
+	rta_button->set_name ("rta button");
+	rta_button->set_act_on_release (true);
+	rta_button->set_text (_("RTA"));
 
 	rec_enable_button = manage (new ArdourButton);
 	rec_enable_button->set_name ("record enable button");
@@ -236,27 +240,30 @@ RouteUI::init ()
 
 	monitor_input_button = new ArdourButton (ArdourButton::default_elements);
 	monitor_input_button->set_name ("monitor button");
-	monitor_input_button->set_text (_("In"));
+	monitor_input_button->set_text (S_("Monitor|In"));
 	UI::instance()->set_tip (monitor_input_button, _("Monitor input"), "");
 	monitor_input_button->set_no_show_all (true);
 
 	monitor_disk_button = new ArdourButton (ArdourButton::default_elements);
 	monitor_disk_button->set_name ("monitor button");
-	monitor_disk_button->set_text (_("Disk"));
+	monitor_disk_button->set_text (S_("Monitor|Disk"));
 	UI::instance()->set_tip (monitor_disk_button, _("Monitor playback"), "");
 	monitor_disk_button->set_no_show_all (true);
 
-	_session->SoloChanged.connect (_session_connections, invalidator (*this), boost::bind (&RouteUI::solo_changed_so_update_mute, this), gui_context());
-	_session->TransportStateChange.connect (_session_connections, invalidator (*this), boost::bind (&RouteUI::check_rec_enable_sensitivity, this), gui_context());
-	_session->RecordStateChanged.connect (_session_connections, invalidator (*this), boost::bind (&RouteUI::session_rec_enable_changed, this), gui_context());
-	_session->MonitorBusAddedOrRemoved.connect (_session_connections, invalidator (*this), boost::bind (&RouteUI::update_solo_button, this), gui_context());
+	_session->SoloChanged.connect (_session_connections, invalidator (*this), std::bind (&RouteUI::solo_changed_so_update_mute, this), gui_context());
+	_session->TransportStateChange.connect (_session_connections, invalidator (*this), std::bind (&RouteUI::check_rec_enable_sensitivity, this), gui_context());
+	_session->RecordStateChanged.connect (_session_connections, invalidator (*this), std::bind (&RouteUI::session_rec_enable_changed, this), gui_context());
+	_session->MonitorBusAddedOrRemoved.connect (_session_connections, invalidator (*this), std::bind (&RouteUI::update_solo_button, this), gui_context());
 
-	_session->config.ParameterChanged.connect (*this, invalidator (*this), boost::bind (&RouteUI::parameter_changed, this, _1), gui_context());
-	Config->ParameterChanged.connect (*this, invalidator (*this), boost::bind (&RouteUI::parameter_changed, this, _1), gui_context());
+	_session->config.ParameterChanged.connect (*this, invalidator (*this), std::bind (&RouteUI::parameter_changed, this, _1), gui_context());
+	Config->ParameterChanged.connect (*this, invalidator (*this), std::bind (&RouteUI::parameter_changed, this, _1), gui_context());
 	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (this, &RouteUI::parameter_changed));
 
 	rec_enable_button->signal_button_press_event().connect (sigc::mem_fun(*this, &RouteUI::rec_enable_press), false);
 	rec_enable_button->signal_button_release_event().connect (sigc::mem_fun(*this, &RouteUI::rec_enable_release), false);
+
+	rta_button->signal_button_press_event().connect (sigc::mem_fun(*this, &RouteUI::rta_press), false);
+	rta_button->signal_button_release_event().connect (sigc::mem_fun(*this, &RouteUI::rta_release), false);
 
 	show_sends_button->signal_button_press_event().connect (sigc::mem_fun(*this, &RouteUI::show_sends_press), false);
 	show_sends_button->signal_button_release_event().connect (sigc::mem_fun(*this, &RouteUI::show_sends_release), false);
@@ -275,7 +282,7 @@ RouteUI::init ()
 	monitor_disk_button->signal_button_press_event().connect (sigc::mem_fun(*this, &RouteUI::monitor_disk_press), false);
 	monitor_disk_button->signal_button_release_event().connect (sigc::mem_fun(*this, &RouteUI::monitor_disk_release), false);
 
-	BusSendDisplayChanged.connect_same_thread (*this, boost::bind(&RouteUI::bus_send_display_changed, this, _1));
+	BusSendDisplayChanged.connect_same_thread (*this, std::bind(&RouteUI::bus_send_display_changed, this, _1));
 }
 
 void
@@ -366,49 +373,58 @@ RouteUI::set_route (std::shared_ptr<Route> rp)
 	}
 
 	if (set_color_from_route()) {
-		set_color (gdk_color_to_rgba (AxisView::unique_random_color ()));
+		if (_route->is_track() && UIConfiguration::instance().get_use_palette_for_new_track ()) {
+			set_color (gdk_color_to_rgba (AxisView::round_robin_palette_color ()));
+		} else if (!_route->is_track() && UIConfiguration::instance().get_use_palette_for_new_bus ()) {
+			set_color (gdk_color_to_rgba (AxisView::round_robin_palette_color ()));
+		} else {
+			string cp = UIConfiguration::instance().get_stripable_color_palette ();
+			Gdk::ArrayHandle_Color gc = ColorSelection::palette_from_string (cp);
+			std::vector<Gdk::Color> c (gc);
+			set_color (gdk_color_to_rgba (c[0]));
+		}
 	}
 
 	if (self_destruct) {
-		rp->DropReferences.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::self_delete, this), gui_context());
+		rp->DropReferences.connect (route_connections, invalidator (*this), std::bind (&RouteUI::self_delete, this), gui_context());
 	}
 
 	mute_button->set_controllable (_route->mute_control());
 	solo_button->set_controllable (_route->solo_control());
 
-	_route->active_changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::route_active_changed, this), gui_context());
+	_route->active_changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::route_active_changed, this), gui_context());
 
-	_route->comment_changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::comment_changed, this), gui_context());
+	_route->mute_control()->Changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::update_mute_display, this), gui_context());
+	_route->solo_control()->Changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::update_solo_display, this), gui_context());
+	_route->solo_safe_control()->Changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::update_solo_display, this), gui_context());
+	_route->solo_isolate_control()->Changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::update_solo_display, this), gui_context());
+	_route->phase_control()->Changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::update_polarity_display, this), gui_context());
 
-	_route->mute_control()->Changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::update_mute_display, this), gui_context());
-	_route->solo_control()->Changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::update_solo_display, this), gui_context());
-	_route->solo_safe_control()->Changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::update_solo_display, this), gui_context());
-	_route->solo_isolate_control()->Changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::update_solo_display, this), gui_context());
-	_route->phase_control()->Changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::update_polarity_display, this), gui_context());
+	_route->gui_changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::handle_gui_changes, this, _1), gui_context());
 
 	if (is_track()) {
-		track()->FreezeChange.connect (*this, invalidator (*this), boost::bind (&RouteUI::map_frozen, this), gui_context());
+		track()->FreezeChange.connect (*this, invalidator (*this), std::bind (&RouteUI::map_frozen, this), gui_context());
 		track_mode_changed();
 	}
 
 
-	_route->PropertyChanged.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::route_property_changed, this, _1), gui_context());
-	_route->presentation_info().PropertyChanged.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::route_gui_changed, this, _1), gui_context ());
+	_route->PropertyChanged.connect (route_connections, invalidator (*this), std::bind (&RouteUI::route_property_changed, this, _1), gui_context());
+	_route->presentation_info().PropertyChanged.connect (route_connections, invalidator (*this), std::bind (&RouteUI::route_gui_changed, this, _1), gui_context ());
 
-	_route->polarity()->ConfigurationChanged.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::setup_invert_buttons, this), gui_context());
+	_route->polarity()->ConfigurationChanged.connect (route_connections, invalidator (*this), std::bind (&RouteUI::setup_invert_buttons, this), gui_context());
 
 	if (_session->writable() && is_track()) {
 		std::shared_ptr<Track> t = std::dynamic_pointer_cast<Track>(_route);
 
-		t->rec_enable_control()->Changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::route_rec_enable_changed, this), gui_context());
-		t->rec_safe_control()->Changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::route_rec_enable_changed, this), gui_context());
+		t->rec_enable_control()->Changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::route_rec_enable_changed, this), gui_context());
+		t->rec_safe_control()->Changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::route_rec_enable_changed, this), gui_context());
 
 		rec_enable_button->show();
 		rec_enable_button->set_controllable (t->rec_enable_control());
 
 		if (is_midi_track()) {
 			midi_track()->StepEditStatusChange.connect (route_connections, invalidator (*this),
-					boost::bind (&RouteUI::step_edit_changed, this, _1), gui_context());
+					std::bind (&RouteUI::step_edit_changed, this, _1), gui_context());
 		}
 
 	}
@@ -419,17 +435,18 @@ RouteUI::set_route (std::shared_ptr<Route> rp)
 
 	if (is_track()) {
 		std::shared_ptr<Track> t = std::dynamic_pointer_cast<Track>(_route);
-		t->monitoring_control()->Changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::update_monitoring_display, this), gui_context());
+		t->monitoring_control()->Changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::update_monitoring_display, this), gui_context());
 
 		update_monitoring_display ();
 	}
 
 	if (_route->triggerbox ()) {
-		_route->triggerbox ()->EmptyStatusChanged.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::update_monitoring_display, this), gui_context());
+		_route->triggerbox ()->EmptyStatusChanged.connect (route_connections, invalidator (*this), std::bind (&RouteUI::update_monitoring_display, this), gui_context());
 	}
 
 	mute_button->set_can_focus (false);
 	solo_button->set_can_focus (false);
+	rta_button->set_can_focus (false);
 
 	mute_button->show();
 
@@ -449,6 +466,7 @@ RouteUI::set_route (std::shared_ptr<Route> rp)
 	update_mute_display ();
 	update_solo_display ();
 	update_solo_button ();
+	handle_gui_changes ("rta");
 
 	if (!UIConfiguration::instance().get_blink_rec_arm()) {
 		blink_rec_display(true); // set initial rec-en button state
@@ -477,7 +495,7 @@ RouteUI::mute_press (GdkEventButton* ev)
 			build_mute_menu();
 		}
 
-		mute_menu->popup(0,ev->time);
+		mute_menu->popup (ev->button, ev->time);
 
 		return true;
 
@@ -501,12 +519,12 @@ RouteUI::mute_press (GdkEventButton* ev)
 				 * on a copy.
 				 */
 
-				std::shared_ptr<RouteList> copy (new RouteList);
+				std::shared_ptr<StripableList> copy (new StripableList);
 
-				*copy = *_session->get_routes ();
+				*copy = _session->get_stripables ();
 
-				for (RouteList::iterator i = copy->begin(); i != copy->end(); ) {
-					if ((*i)->is_master() || (*i)->is_monitor()) {
+				for (StripableList::iterator i = copy->begin(); i != copy->end(); ) {
+					if ((*i)->is_singleton ()) {
 						i = copy->erase (i);
 					} else {
 						++i;
@@ -517,7 +535,7 @@ RouteUI::mute_press (GdkEventButton* ev)
 					_mute_release->set (copy);
 				}
 
-				_session->set_controls (route_list_to_control_list (copy, &Stripable::mute_control), _route->muted_by_self() ? 0.0 : 1.0, Controllable::UseGroup);
+				_session->set_controls (stripable_list_to_control_list (copy, &Stripable::mute_control), _route->muted_by_self() ? 0.0 : 1.0, Controllable::NoGroup);
 
 			} else if (Keyboard::is_group_override_event (ev)) {
 
@@ -534,36 +552,32 @@ RouteUI::mute_press (GdkEventButton* ev)
 				   NOTE: Primary-button2 is MIDI learn.
 				*/
 
-				std::shared_ptr<RouteList> rl;
 
 				if (ev->button == 1) {
-
-					rl.reset (new RouteList);
-					rl->push_back (_route);
+					std::shared_ptr<StripableList> sl (new StripableList);
+					sl->push_back (_route);
 
 					if (_mute_release) {
-						_mute_release->set (rl);
+						_mute_release->set (sl);
 					}
 
 					std::shared_ptr<MuteControl> mc = _route->mute_control();
 					mc->start_touch (timepos_t (_session->audible_sample ()));
-					_session->set_controls (route_list_to_control_list (rl, &Stripable::mute_control), _route->muted_by_self() ? 0.0 : 1.0, Controllable::InverseGroup);
+					_session->set_controls (stripable_list_to_control_list (sl, &Stripable::mute_control), _route->muted_by_self() ? 0.0 : 1.0, Controllable::InverseGroup);
 				}
 
 			} else {
 
 				/* plain click applies change to this route */
 
-				std::shared_ptr<RouteList> rl (new RouteList);
-				rl->push_back (_route);
+				std::shared_ptr<StripableList> sl (new StripableList);
+				_session->selection().get_stripables_for_op (sl, _route,  &RouteGroup::is_mute);
 
 				if (_mute_release) {
-					_mute_release->set (rl);
+					_mute_release->set (sl);
 				}
 
-				std::shared_ptr<MuteControl> mc = _route->mute_control();
-				mc->start_touch (timepos_t (_session->audible_sample ()));
-				mc->set_value (!_route->muted_by_self(), Controllable::UseGroup);
+				_session->set_controls (stripable_list_to_control_list (sl, &Stripable::mute_control), _route->muted_by_self() ? 0.0 : 1.0, Controllable::NoGroup);
 			}
 		}
 	}
@@ -647,7 +661,7 @@ RouteUI::solo_press(GdkEventButton* ev)
 			build_solo_menu ();
 		}
 
-		solo_menu->popup (1, ev->time);
+		solo_menu->popup (ev->button, ev->time);
 
 	} else {
 
@@ -663,11 +677,15 @@ RouteUI::solo_press(GdkEventButton* ev)
 
 				/* Primary-Tertiary-click applies change to all routes */
 
+				std::shared_ptr<StripableList> sl (new StripableList);
+				_session->get_stripables (*sl, PresentationInfo::Route);
+
+
 				if (_solo_release) {
-					_solo_release->set (_session->get_routes ());
+					_solo_release->set (sl);
 				}
 
-				_session->set_controls (route_list_to_control_list (_session->get_routes(), &Stripable::solo_control), !_route->solo_control()->get_value(), Controllable::UseGroup);
+				_session->set_controls (stripable_list_to_control_list (sl, &Stripable::solo_control), !_route->solo_control()->get_value(), Controllable::NoGroup);
 
 			} else if (Keyboard::modifier_state_contains (ev->state, Keyboard::ModifierMask (Keyboard::PrimaryModifier|Keyboard::SecondaryModifier)) || (!_route->self_soloed() && Config->get_exclusive_solo ())) {
 
@@ -682,6 +700,18 @@ RouteUI::solo_press(GdkEventButton* ev)
 
 				DisplaySuspender ds;
 				_route->solo_control()->set_value (1.0, Controllable::NoGroup);
+
+				/* select exclusively soloed track */
+				if (!_solo_release && UIConfiguration::instance().get_exclusive_solo_selects_route ()) {
+					PublicEditor& pe  = PublicEditor::instance();
+					TimeAxisView* tav = pe.time_axis_view_from_stripable (_route);
+					if (tav) {
+						TrackViewList selected;
+						selected.push_back (tav);
+						pe.get_selection().set (selected);
+						pe.set_selected_mixer_strip (*tav);
+					}
+				}
 
 /*			} else if (Keyboard::modifier_state_equals (ev->state, Keyboard::PrimaryModifier)) {   do not explicitly implement Primary Modifier; this is the default for Momentary */
 
@@ -723,14 +753,15 @@ RouteUI::solo_press(GdkEventButton* ev)
 
 				/* click: solo this route */
 
-				std::shared_ptr<RouteList> rl (new RouteList);
-				rl->push_back (route());
+				std::shared_ptr<StripableList> sl (new StripableList);
+
+				_session->selection().get_stripables_for_op (sl, _route, &RouteGroup::is_solo);
 
 				if (_solo_release) {
-					_solo_release->set (rl);
+					_solo_release->set (sl);
 				}
 
-				_session->set_controls (route_list_to_control_list (rl, &Stripable::solo_control), !_route->self_soloed(), Controllable::UseGroup);
+				_session->set_controls (stripable_list_to_control_list (sl, &Stripable::solo_control), !_route->self_soloed(), Controllable::NoGroup);
 			}
 		}
 	}
@@ -758,8 +789,9 @@ RouteUI::rec_enable_press(GdkEventButton* ev)
 	}
 
 	//if this is a binding action, let the ArdourButton handle it
-	if (BindingProxy::is_bind_action(ev) )
+	if (BindingProxy::is_bind_action(ev)) {
 		return false;
+	}
 
 	if (!ARDOUR_UI_UTILS::engine_is_running ()) {
 		return false;
@@ -808,8 +840,11 @@ RouteUI::rec_enable_press(GdkEventButton* ev)
 
 		} else {
 
-			std::shared_ptr<Track> trk = track();
-			trk->rec_enable_control()->set_value (!trk->rec_enable_control()->get_value(), Controllable::UseGroup);
+			if (ev->button == 1) {
+				StripableList sl;
+				_session->selection().get_stripables_for_op (sl, _route, &RouteGroup::is_recenable);
+				_session->set_controls (stripable_list_to_control_list (sl, &Stripable::rec_enable_control), !track()->rec_enable_control()->get_value(), Controllable::NoGroup);
+			}
 		}
 	}
 
@@ -890,7 +925,6 @@ RouteUI::monitor_release (GdkEventButton* ev, MonitorChoice monitor_choice)
 	}
 
 	MonitorChoice mc;
-	std::shared_ptr<RouteList> rl;
 
 	if (t->monitoring_control()->monitoring_choice() & monitor_choice) {
 		mc = MonitorChoice (t->monitoring_control()->monitoring_choice() & ~monitor_choice);
@@ -900,17 +934,19 @@ RouteUI::monitor_release (GdkEventButton* ev, MonitorChoice monitor_choice)
 
 	if (Keyboard::modifier_state_equals (ev->state, Keyboard::ModifierMask (Keyboard::PrimaryModifier|Keyboard::TertiaryModifier))) {
 		/* Primary-Tertiary-click applies change to all routes */
-		rl = _session->get_routes ();
+		std::shared_ptr<RouteList const> rl = _session->get_routes ();
 		_session->set_controls (route_list_to_control_list (rl, &Stripable::monitoring_control), (double) mc, Controllable::NoGroup);
 	} else if (Keyboard::is_group_override_event (ev)) {
 		/* Tertiary-click overrides group */
-		rl.reset (new RouteList);
+		std::shared_ptr<RouteList> rl (new RouteList);
 		rl->push_back (route());
 		_session->set_controls (route_list_to_control_list (rl, &Stripable::monitoring_control), (double) mc, GROUP_ACTION);
 	} else {
-		rl.reset (new RouteList);
-		rl->push_back (route());
-		_session->set_controls (route_list_to_control_list (rl, &Stripable::monitoring_control), (double) mc, Controllable::UseGroup);
+
+		StripableList sl;
+		_session->selection().get_stripables_for_op (sl, _route, &RouteGroup::is_monitoring);
+		_session->set_controls (stripable_list_to_control_list (sl, &Stripable::monitoring_control), (double) mc, Controllable::NoGroup);
+
 	}
 
 	return false;
@@ -1011,7 +1047,7 @@ RouteUI::rec_enable_release (GdkEventButton* ev)
 	if (Keyboard::is_context_menu_event (ev)) {
 		build_record_menu ();
 		if (_record_menu) {
-			_record_menu->popup (1, ev->time);
+			_record_menu->popup (ev->button, ev->time);
 		}
 		return false;
 	}
@@ -1138,7 +1174,7 @@ RouteUI::show_sends_press(GdkEventButton* ev)
 				build_sends_menu ();
 			}
 
-			sends_menu->popup (0, ev->time);
+			sends_menu->popup (ev->button, ev->time);
 
 		} else if (ev->button == 1) {
 
@@ -1175,6 +1211,44 @@ RouteUI::send_blink (bool onoff)
 		show_sends_button->set_active_state (Gtkmm2ext::ExplicitActive);
 	} else {
 		show_sends_button->unset_active_state ();
+	}
+}
+
+bool
+RouteUI::rta_press (GdkEventButton*)
+{
+	return false;
+}
+
+bool
+RouteUI::rta_release (GdkEventButton* ev)
+{
+	if (ev->button == 3) {
+		Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action ("Window", "toggle-rtawindow");
+		tact->set_active (!tact->get_active ());
+		return true;
+	}
+
+	if (ev->button != 1) {
+		return false;
+	}
+
+	bool attached = RTAManager::instance ()->attached (_route);
+	if (attached) {
+		RTAManager::instance ()->remove (_route);
+	} else {
+		RTAManager::instance ()->attach (_route);
+		ARDOUR_UI::instance()->show_realtime_analyzer ();
+	}
+	return true;
+}
+
+void
+RouteUI::handle_gui_changes (std::string const& what)
+{
+	if (what == "rta") {
+		bool attached = RTAManager::instance ()->attached (_route);
+		rta_button->set_active_state (attached ? Gtkmm2ext::ExplicitActive : Gtkmm2ext::Off);
 	}
 }
 
@@ -1371,13 +1445,13 @@ RouteUI::blink_rec_display (bool blinkOn)
 
 	if (track()->rec_enable_control()->get_value()) {
 		switch (_session->record_status ()) {
-			case Session::Recording:
+			case Recording:
 				rec_enable_button->set_active_state (Gtkmm2ext::ExplicitActive);
 				break;
 
-			case Session::Disabled:
-			case Session::Enabled:
-				if (UIConfiguration::instance().get_blink_rec_arm()) {
+			case Disabled:
+			case Enabled:
+				if (!UIConfiguration::instance().get_no_strobe() && UIConfiguration::instance().get_blink_rec_arm()) {
 					rec_enable_button->set_active_state ( blinkOn ? Gtkmm2ext::ExplicitActive : Gtkmm2ext::Off );
 				} else {
 					rec_enable_button->set_active_state ( ImplicitActive );
@@ -1459,7 +1533,13 @@ RouteUI::build_mute_menu(void)
 	items.push_back (CheckMenuElem(*main_mute_check));
 	main_mute_check->show_all();
 
-	_route->mute_points_changed.connect (route_connections, invalidator (*this), boost::bind (&RouteUI::muting_change, this), gui_context());
+	surround_mute_check = manage (new Gtk::CheckMenuItem(_("Surround Send")));
+	init_mute_menu(MuteMaster::SurroundSend, surround_mute_check);
+	surround_mute_check->signal_toggled().connect(sigc::bind (sigc::mem_fun (*this, &RouteUI::toggle_mute_menu), MuteMaster::SurroundSend, surround_mute_check));
+	items.push_back (CheckMenuElem(*surround_mute_check));
+	surround_mute_check->show_all();
+
+	_route->mute_points_changed.connect (route_connections, invalidator (*this), std::bind (&RouteUI::muting_change, this), gui_context());
 }
 
 void
@@ -1537,12 +1617,9 @@ RouteUI::solo_isolate_button_release (GdkEventButton* ev)
 		} else {
 
 			if (model == view) {
-
-				/* flip just this route */
-
-				std::shared_ptr<RouteList> rl (new RouteList);
-				rl->push_back (_route);
-				_session->set_controls (route_list_to_control_list (rl, &Stripable::solo_isolate_control), view ? 0.0 : 1.0, Controllable::NoGroup);
+				StripableList sl;
+				_session->selection().get_stripables_for_op (sl, _route, &RouteGroup::is_solo);
+				_session->set_controls (stripable_list_to_control_list (sl, &Stripable::solo_isolate_control), view ? 0.0 : 1.0, Controllable::NoGroup);
 			}
 		}
 	}
@@ -1561,26 +1638,19 @@ RouteUI::solo_safe_button_release (GdkEventButton* ev)
 	bool model = _route->solo_safe_control()->solo_safe();
 
 	if (ev->button == 1) {
+
 		if (Keyboard::modifier_state_equals (ev->state, Keyboard::ModifierMask (Keyboard::PrimaryModifier|Keyboard::TertiaryModifier))) {
-			std::shared_ptr<RouteList> rl (_session->get_routes());
-			if (model) {
-				/* disable solo safe for all routes */
-				DisplaySuspender ds;
-				for (RouteList::iterator i = rl->begin(); i != rl->end(); ++i) {
-					(*i)->solo_safe_control()->set_value (0.0, Controllable::NoGroup);
-				}
-			} else {
-				/* enable solo safe for all routes */
-				DisplaySuspender ds;
-				for (RouteList::iterator i = rl->begin(); i != rl->end(); ++i) {
-					(*i)->solo_safe_control()->set_value (1.0, Controllable::NoGroup);
-				}
-			}
-		}
-		else {
+
+			std::shared_ptr<RouteList const> rl (_session->get_routes());
+			/* toggle solo safe for all routes */
+			_session->set_controls (route_list_to_control_list (rl, &Stripable::solo_safe_control), model ? 0.0 : 1.0, Controllable::NoGroup);
+
+		} else {
+
 			if (model == view) {
-				/* flip just this route */
-				_route->solo_safe_control()->set_value (view ? 0.0 : 1.0, Controllable::NoGroup);
+				StripableList sl;
+				_session->selection().get_stripables_for_op (sl, _route, &RouteGroup::is_solo);
+				_session->set_controls (stripable_list_to_control_list (sl, &Stripable::solo_safe_control), view ? 0.0 : 1.0, Controllable::NoGroup);
 			}
 		}
 	}
@@ -1642,9 +1712,9 @@ RouteUI::select_midi_patch ()
 
 /** Ask the user to choose a colour, and then apply that color to my route */
 void
-RouteUI::choose_color ()
+RouteUI::choose_color (Gtk::Window* parent)
 {
-	_color_picker.popup (_route);
+	_color_picker.popup (_route, parent);
 }
 
 /** Set the route's own color.  This may not be used for display if
@@ -1677,19 +1747,16 @@ RouteUI::set_color_from_route ()
 bool
 RouteUI::verify_new_route_name (const std::string& name)
 {
-	if (name.find (':') == string::npos) {
+	if (name == legalize_for_universal_path (name)) {
 		return true;
 	}
 
-	MessageDialog colon_msg (
-		_("The use of colons (':') is discouraged in track and bus names.\nDo you want to use this new name?"),
-		false, MESSAGE_QUESTION, BUTTONS_NONE
-		);
+	MessageDialog (
+		_("The name includes special characters (<>:\"/\\|?*) which is discouraged in track and bus names, due to filename restrictions on some systems.\n"),
+		false, MESSAGE_INFO, BUTTONS_OK
+		).run ();
 
-	colon_msg.add_button (_("Use the new name"), Gtk::RESPONSE_ACCEPT);
-	colon_msg.add_button (_("Re-edit the name"), Gtk::RESPONSE_CANCEL);
-
-	return (colon_msg.run () == Gtk::RESPONSE_ACCEPT);
+	return false;
 }
 
 void
@@ -1741,76 +1808,22 @@ RouteUI::route_rename ()
 void
 RouteUI::toggle_comment_editor ()
 {
-	if (_comment_window && _comment_window->get_visible ()) {
-		_comment_window->hide ();
-	} else {
-		open_comment_editor ();
-	}
+	_comment_editor.toggle (_route);
 }
 
 
 void
 RouteUI::open_comment_editor ()
 {
-	if (_comment_window == 0) {
-		setup_comment_editor ();
-	}
-
-	string title;
-	title = _route->name();
-	title += _(": comment editor");
-
-	_comment_window->set_title (title);
-	_comment_window->present();
-}
-
-void
-RouteUI::setup_comment_editor ()
-{
-	_comment_window = new ArdourWindow (""); // title will be reset to show route
-	_comment_window->set_skip_taskbar_hint (true);
-	_comment_window->signal_hide().connect (sigc::mem_fun(*this, &MixerStrip::comment_editor_done_editing));
-	_comment_window->set_default_size (400, 200);
-
-	_comment_area = manage (new TextView());
-	_comment_area->set_name ("MixerTrackCommentArea");
-	_comment_area->set_wrap_mode (WRAP_WORD);
-	_comment_area->set_editable (true);
-	_comment_area->get_buffer()->set_text (_route->comment());
-	_comment_area->show ();
-
-	_comment_window->add (*_comment_area);
-}
-
-void
-RouteUI::comment_changed ()
-{
-	_ignore_comment_edit = true;
-	if (_comment_area) {
-		_comment_area->get_buffer()->set_text (_route->comment());
-	}
-	_ignore_comment_edit = false;
-}
-
-void
-RouteUI::comment_editor_done_editing ()
-{
-	ENSURE_GUI_THREAD (*this, &MixerStrip::comment_editor_done_editing, src)
-
-	string const str = _comment_area->get_buffer()->get_text();
-	if (str == _route->comment ()) {
-		return;
-	}
-
-	_route->set_comment (str, this);
+	_comment_editor.open (_route);
 }
 
 void
 RouteUI::set_route_active (bool a, bool apply_to_selection)
 {
 	if (apply_to_selection) {
-		ARDOUR_UI::instance()->the_editor().get_selection().tracks.foreach_route_ui (boost::bind (&RouteUI::set_route_active, _1, a, false));
-	} else if (!is_master ()
+		ARDOUR_UI::instance()->the_editor().get_selection().tracks.foreach_route_ui (std::bind (&RouteUI::set_route_active, _1, a, false));
+	} else if (!is_singleton ()
 #ifdef MIXBUS
 		         && !_route->mixbus()
 #endif
@@ -1873,6 +1886,12 @@ RouteUI::is_master () const
 }
 
 bool
+RouteUI::is_singleton () const
+{
+	return _route && _route->is_singleton ();
+}
+
+bool
 RouteUI::is_foldbackbus () const
 {
 	return _route && _route->is_foldbackbus ();
@@ -1932,7 +1951,7 @@ RouteUI::save_as_template_dialog_response (int response, SaveTemplateDialog* d)
 	if (response == RESPONSE_ACCEPT) {
 		const string name = d->get_template_name ();
 		const string desc = d->get_description ();
-		const string path = Glib::build_filename(ARDOUR::user_route_template_directory (), legalize_for_path (name) + ARDOUR::template_suffix);
+		const string path = Glib::build_filename(ARDOUR::user_route_template_directory (), legalize_for_universal_path (name) + ARDOUR::template_suffix);
 
 		if (Glib::file_test (path, Glib::FILE_TEST_EXISTS)) { /* file already exists. */
 			bool overwrite = overwrite_file_dialog (*d,
@@ -2058,9 +2077,9 @@ RouteUI::setup_invert_buttons ()
 		std::shared_ptr<AutomationControl> ac = send->polarity_control ();
 		if (ac) {
 			N = 1;
-			ac->Changed.connect (send_connections, invalidator (*this), boost::bind (&RouteUI::update_polarity_display, this), gui_context());
+			ac->Changed.connect (send_connections, invalidator (*this), std::bind (&RouteUI::update_polarity_display, this), gui_context());
 			if (ac->alist ()) {
-				ac->alist()->automation_state_changed.connect (send_connections, invalidator (*this), boost::bind (&RouteUI::update_phase_invert_sensitivty, this), gui_context());
+				ac->alist()->automation_state_changed.connect (send_connections, invalidator (*this), std::bind (&RouteUI::update_phase_invert_sensitivty, this), gui_context());
 				update_phase_invert_sensitivty ();
 			}
 		} else {
@@ -2227,7 +2246,7 @@ RouteUI::invert_press (GdkEventButton* ev)
 		--_i_am_the_modifier;
 	}
 
-	_invert_menu->popup (0, ev->time);
+	_invert_menu->popup (ev->button, ev->time);
 
 	return true;
 }
@@ -2270,6 +2289,9 @@ RouteUI::route_gui_changed (PropertyChange const& what_changed)
 			route_color_changed ();
 		}
 	}
+	if (what_changed.contains (Properties::hidden) && _route->is_hidden ()) {
+		_session->selection().select_stripable_and_maybe_group (_route, SelectionRemove, false, false);
+	}
 }
 
 void
@@ -2287,7 +2309,7 @@ Gdk::Color
 RouteUI::route_color () const
 {
 	Gdk::Color c;
-	RouteGroup* g = _route->route_group ();
+	std::shared_ptr<RouteGroup> g = _route->route_group ();
 	string p;
 
 	if (g && g->is_color()) {
@@ -2334,7 +2356,7 @@ RouteUI::bus_send_display_changed (std::shared_ptr<Route> send_to)
 	}
 }
 
-RouteGroup*
+std::shared_ptr<RouteGroup>
 RouteUI::route_group() const
 {
 	return _route->route_group();
@@ -2362,7 +2384,7 @@ RoutePinWindowProxy::RoutePinWindowProxy(std::string const &name, std::shared_pt
 	: WM::ProxyBase (name, string())
 	, _route (std::weak_ptr<Route> (route))
 {
-	route->DropReferences.connect (going_away_connection, MISSING_INVALIDATOR, boost::bind (&RoutePinWindowProxy::route_going_away, this), gui_context());
+	route->DropReferences.connect (going_away_connection, MISSING_INVALIDATOR, std::bind (&RoutePinWindowProxy::route_going_away, this), gui_context());
 }
 
 RoutePinWindowProxy::~RoutePinWindowProxy()
@@ -2484,7 +2506,7 @@ RouteUI::playlist_tip () const
 		return "";
 	}
 
-	RouteGroup* rg = route_group ();
+	std::shared_ptr<RouteGroup> rg = route_group ();
 	if (rg && rg->is_active() && rg->enabled_property (ARDOUR::Properties::group_select.property_id)) {
 		string group_string = "." + rg->name() + ".";
 
@@ -2554,13 +2576,28 @@ RouteUI::use_new_playlist (std::string name, std::string gid, vector<std::shared
 		return;
 	}
 
+	XMLNode* before = &tr->playlist_state ();
+
 	if (copy) {
 		tr->use_copy_playlist ();
 	} else {
 		tr->use_default_new_playlist ();
 	}
+
+	tr->playlist()->clear_changes ();
+	tr->playlist()->clear_owned_changes ();
 	tr->playlist()->set_name (name);
 	tr->playlist()->set_pgroup_id (gid);
+
+	XMLNode* after = &tr->playlist_state ();
+	if (*before != *after) {
+		_session->begin_reversible_command (string_compose (_("New Playlist for track %1"), tr->name ()));
+		tr->playlist()->rdiff_and_add_command (_session);
+		_session->commit_reversible_command (new MementoCommand<Track>(*tr, before, after));
+	} else {
+		delete before;
+		delete after;
+	}
 }
 
 void
@@ -2684,24 +2721,26 @@ RouteUI::select_playlist_matching (std::weak_ptr<Playlist> wpl)
 		return;
 	}
 
-	if (track()->id() == pl->get_orig_track_id()) {
+	std::shared_ptr<Playlist> ipl;
+	std::shared_ptr<Track> t = track ();
+	XMLNode* before = &t->playlist_state ();
+
+	if (t->id() == pl->get_orig_track_id()) {
 		/* this playlist is one of this track's own, no need to match by pgroup-id or name */
-		track()->use_playlist(track()->data_type(), pl);
-		return;
+		t->use_playlist(t->data_type(), pl);
+		goto checkdiff;
 	}
 
 	/* Search for a matching playlist .. either by pgroup_id or name */
-	std::string pgrp_id = pl->pgroup_id();
-	std::shared_ptr<Playlist> ipl = session()->playlists()->for_pgroup(pgrp_id, track()->id());
-	if (ipl) {
-		//found a playlist that matches the pgroup_id, use it
-		track()->use_playlist (track()->data_type(), ipl);
-	} else {  //fallback to prior behavior ... try to find matching names /*DEPRECATED*/
+	if (0 != (ipl = session()->playlists()->for_pgroup(pl->pgroup_id(), t->id()))) {
+		// found a playlist that matches the pgroup_id, use it
+		t->use_playlist (t->data_type(), ipl);
+	} else { // fallback to prior behavior ... try to find matching names /*DEPRECATED*/
 
 		std::string take_name = pl->name();
 		std::string group_name;
-		if (track()->route_group()) {
-			group_name = track()->route_group()->name();
+		if (t->route_group()) {
+			group_name = t->route_group()->name();
 		}
 		std::string group_string = "." + group_name + ".";
 
@@ -2709,14 +2748,24 @@ RouteUI::select_playlist_matching (std::weak_ptr<Playlist> wpl)
 
 		if (idx != std::string::npos) {
 			take_name = take_name.substr(idx + group_string.length()); // find the bit containing the take number / name
-			std::string playlist_name = track()->name()+group_string+take_name;
+			std::string playlist_name = t->name()+group_string+take_name;
 
 			std::shared_ptr<Playlist> ipl = session()->playlists()->by_name(playlist_name);
 			if (ipl) {
-				track()->use_playlist(track()->data_type(), ipl);
+				t->use_playlist(t->data_type(), ipl);
 			}
 		}
-	} //fallback
+	}
+
+checkdiff:
+	XMLNode* after = &t->playlist_state ();
+	if (*before != *after) {
+		_session->begin_reversible_command (string_compose (_("Switch Playlist for track %1"), t->name ()));
+		_session->commit_reversible_command (new MementoCommand<Track>(*t, before, after));
+	} else {
+		delete before;
+		delete after;
+	}
 }
 
 void
@@ -2810,4 +2859,27 @@ RouteUI::rename_current_playlist ()
 			(*i)->set_name (name);
 		}
 	}
+}
+
+void
+RouteUI::set_time_domain (Temporal::TimeDomain td, bool apply_to_selection)
+{
+	if (apply_to_selection) {
+		std::cerr << "change route TD to " << td << std::endl;
+		ARDOUR_UI::instance()->the_editor().get_selection().tracks.foreach_route_ui (std::bind (&RouteUI::set_time_domain, _1, td, false));
+	} else {
+		route()->set_time_domain (td);
+	}
+}
+
+
+void
+RouteUI::clear_time_domain (bool apply_to_selection)
+{
+	if (apply_to_selection) {
+		ARDOUR_UI::instance()->the_editor().get_selection().tracks.foreach_route_ui (std::bind (&RouteUI::clear_time_domain, _1, false));
+	} else {
+		route()->clear_time_domain ();
+	}
+
 }

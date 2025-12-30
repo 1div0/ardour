@@ -34,8 +34,9 @@
 
 #include <cstdio> // Needed so that libraptor (included in lrdf) won't complain
 #include <cstdlib>
+#include <sstream>
+
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #ifndef PLATFORM_WINDOWS
 #include <sys/resource.h>
@@ -43,7 +44,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <time.h>
-#include <unistd.h>
 
 #include <glib.h>
 #include "pbd/gstdio_compat.h"
@@ -84,6 +84,7 @@
 #include "pbd/cpus.h"
 #include "pbd/enumwriter.h"
 #include "pbd/error.h"
+#include "pbd/failed_constructor.h"
 #include "pbd/file_utils.h"
 #include "pbd/fpu.h"
 #include "pbd/id.h"
@@ -155,20 +156,24 @@ mix_buffers_with_gain_t ARDOUR::mix_buffers_with_gain = 0;
 mix_buffers_no_gain_t   ARDOUR::mix_buffers_no_gain   = 0;
 copy_vector_t           ARDOUR::copy_vector           = 0;
 
-PBD::Signal1<void, std::string>                    ARDOUR::BootMessage;
-PBD::Signal3<void, std::string, std::string, bool> ARDOUR::PluginScanMessage;
-PBD::Signal1<void, int>                            ARDOUR::PluginScanTimeout;
-PBD::Signal0<void>                                 ARDOUR::GUIIdle;
-PBD::Signal3<bool, std::string, std::string, int>  ARDOUR::CopyConfigurationFiles;
+PBD::Signal<void(std::string)>                    ARDOUR::BootMessage;
+PBD::Signal<void(std::string, std::string, bool)> ARDOUR::PluginScanMessage;
+PBD::Signal<void(int)>                            ARDOUR::PluginScanTimeout;
+PBD::Signal<void()>                                 ARDOUR::GUIIdle;
+PBD::Signal<bool(std::string, std::string, int)>  ARDOUR::CopyConfigurationFiles;
 
 std::map<std::string, bool> ARDOUR::reserved_io_names;
 
 float ARDOUR::ui_scale_factor = 1.0;
 
+Glib::Threads::Mutex ARDOUR::fft_planner_lock;
+
 static bool have_old_configuration_files = false;
 static bool running_from_gui             = false;
-static int  cpu_dma_latency_fd           = -1;
 
+#if !(defined PLATFORM_WINDOWS || defined __APPLE__)
+static int  cpu_dma_latency_fd           = -1;
+#endif
 
 namespace ARDOUR {
 extern void setup_enum_writer ();
@@ -422,12 +427,19 @@ copy_configuration_files (string const& old_dir, string const& new_dir, int old_
 
 		copy_file (old_name, new_name);
 
+		old_name = Glib::build_filename (old_dir, X_("recent_templates"));
+		new_name = Glib::build_filename (new_dir, X_("recent_templates"));
+
+		copy_file (old_name, new_name);
+
 		old_name = Glib::build_filename (old_dir, X_("sfdb"));
 		new_name = Glib::build_filename (new_dir, X_("sfdb"));
 
 		copy_file (old_name, new_name);
 
-		/* can only copy ardour.rc/config - UI config is not compatible */
+		/* can only copy ardour.rc/config unconditionally, there are
+		 * issues with old ui_config versions.
+		 */
 
 		/* users who have been using git/nightlies since the last
 		 * release of 3.5 will have $CONFIG/config rather than
@@ -435,13 +447,20 @@ copy_configuration_files (string const& old_dir, string const& new_dir, int old_
 		 * to avoid confusion.
 		 */
 
-		string old_name = Glib::build_filename (old_dir, X_("config"));
+		old_name = Glib::build_filename (old_dir, X_("config"));
 
 		if (!Glib::file_test (old_name, Glib::FILE_TEST_EXISTS)) {
 			old_name = Glib::build_filename (old_dir, X_("ardour.rc"));
 		}
 
 		new_name = Glib::build_filename (new_dir, X_("config"));
+
+		copy_file (old_name, new_name);
+
+		/* default Session Properties */
+
+		old_name = Glib::build_filename (old_dir, X_("session.rc"));
+		new_name = Glib::build_filename (new_dir, X_("session.rc"));
 
 		copy_file (old_name, new_name);
 
@@ -457,7 +476,7 @@ copy_configuration_files (string const& old_dir, string const& new_dir, int old_
 
 		copy_recurse (old_name, new_name);
 
-		/* presets */
+		/* plugin presets (VST2, Lua) */
 
 		old_name = Glib::build_filename (old_dir, X_("presets"));
 		new_name = Glib::build_filename (new_dir, X_("presets"));
@@ -481,20 +500,71 @@ copy_configuration_files (string const& old_dir, string const& new_dir, int old_
 
 		copy_file (old_name, new_name);
 
-		/* export formats */
+
+		/* export formats and presets */
 
 		old_name = Glib::build_filename (old_dir, export_formats_dir_name);
 		new_name = Glib::build_filename (new_dir, export_formats_dir_name);
 
-		vector<string> export_formats;
+		vector<string> export_settings;
 		g_mkdir_with_parents (Glib::build_filename (new_dir, export_formats_dir_name).c_str (), 0755);
-		find_files_matching_pattern (export_formats, old_name, X_("*.format"));
-		for (vector<string>::iterator i = export_formats.begin (); i != export_formats.end (); ++i) {
-			std::string from = *i;
-			std::string to   = Glib::build_filename (new_name, Glib::path_get_basename (*i));
+		find_files_matching_pattern (export_settings, old_name, X_("*.format"));
+		find_files_matching_pattern (export_settings, old_name, X_("*.preset"));
+		for (auto const& from: export_settings) {
+			std::string to   = Glib::build_filename (new_name, Glib::path_get_basename (from));
 			copy_file (from, to);
 		}
 	}
+
+	if (old_version >= 7) {
+		/* Lua scripts  - older scripts are no longer compatible */
+		old_name = Glib::build_filename (old_dir, X_("scripts"));
+		new_name = Glib::build_filename (new_dir, X_("scripts"));
+		copy_recurse (old_name, new_name);
+
+		old_name = Glib::build_filename (old_dir, X_("ui_scripts"));
+		new_name = Glib::build_filename (new_dir, X_("ui_scripts"));
+		copy_file (old_name, new_name);
+
+		old_name = Glib::build_filename (old_dir, X_("luahist"));
+		new_name = Glib::build_filename (new_dir, X_("luahist"));
+		copy_file (old_name, new_name);
+
+		/* Port Metadata (since v7.0) */
+		old_name = Glib::build_filename (old_dir, X_("port_metadata"));
+		new_name = Glib::build_filename (new_dir, X_("port_metadata"));
+		copy_file (old_name, new_name);
+
+		/* UIConfig v7 compatible */
+		old_name = Glib::build_filename (old_dir, X_("ui_config"));
+		new_name = Glib::build_filename (new_dir, X_("ui_config"));
+		copy_file (old_name, new_name);
+	}
+
+	return 0;
+}
+
+static int
+copy_cache_files (string const& old_dir, string const& new_dir, int old_version)
+{
+	if (g_mkdir_with_parents (new_dir.c_str (), 0755)) {
+		return -1;
+	}
+	/* since v7 plugin cache files are versioned */
+	if (old_version < 7) {
+		return 0;
+	}
+
+	/* copy complete cache:
+	 * - blacklist files
+	 * - vst/.*v2i (VST2 Cache - Intel)
+	 * - vst/.*v3i (VST3 Cache - Intel or Apple/Rosetta)
+	 * - vst-arm64/.*v3i (Apple/ARM native VST3 Cache)
+	 * - auv2/.*a3i (Audio Unit Cache)
+	 * - vst*_blacklist.txt
+	 * - auv2_*blacklist.txt
+	 */
+	copy_recurse (old_dir, new_dir, true);
 
 	return 0;
 }
@@ -522,7 +592,7 @@ ARDOUR::check_for_old_configuration_files ()
 }
 
 int
-ARDOUR::handle_old_configuration_files (boost::function<bool(std::string const&, std::string const&, int)> ui_handler)
+ARDOUR::handle_old_configuration_files (std::function<bool(std::string const&, std::string const&, int)> ui_handler)
 {
 	if (have_old_configuration_files) {
 		int current_version = atoi (X_(PROGRAM_VERSION));
@@ -530,9 +600,12 @@ ARDOUR::handle_old_configuration_files (boost::function<bool(std::string const&,
 		int    old_version        = current_version - 1;
 		string old_config_dir     = user_config_directory (old_version);
 		string current_config_dir = user_config_directory (current_version);
+		string old_cache_dir      = user_cache_directory (old_version);
+		string current_cache_dir  = user_cache_directory (current_version);
 
 		if (ui_handler (old_config_dir, current_config_dir, old_version)) {
 			copy_configuration_files (old_config_dir, current_config_dir, old_version);
+			copy_cache_files (old_cache_dir, current_cache_dir, old_version);
 			return 1;
 		}
 	}
@@ -618,6 +691,14 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 
 	Profile = new RuntimeProfile;
 
+	if (g_getenv ("MIXBUS")) {
+		ARDOUR::Profile->set_mixbus ();
+	}
+
+#ifdef LIVETRAX
+	ARDOUR::Profile->set_livetrax ();
+#endif
+
 #ifdef WINDOWS_VST_SUPPORT
 	if (Config->get_use_windows_vst () && fst_init (0)) {
 		return false;
@@ -651,29 +732,22 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 
 	ControlProtocolManager::instance ().discover_control_protocols ();
 
-	/* for each control protocol, check for a request buffer factory method
-	   and if it exists, store it in the EventLoop list of such
-	   methods. This allows the relevant threads to register themselves
-	   with EventLoops so that signal emission can be RT-safe.
-	*/
-
-	ControlProtocolManager::instance ().register_request_buffer_factories ();
-	/* it would be nice if this could auto-register itself in the
-	   constructor, since MidiControlUI is a singleton, but it can't be
-	   created until after the engine is running. Therefore we have to
-	   explicitly register it here.
-	*/
-	EventLoop::register_request_buffer_factory (X_("midiUI"), MidiControlUI::request_factory);
-
 	/* Every Process Graph thread (up to hardware_concurrency) keeps a buffer.
 	 * The main engine callback uses one (but returns it after use
 	 * each cycle). Session Export uses one, and the GUI requires
 	 * buffers (for plugin-analysis, auditioner updates) but not
 	 * concurrently.
 	 *
-	 * In theory (hw + 3) should be sufficient, let's add one for luck.
+	 * Last but not least, the butler needs one for RegionFX for
+	 * each I/O thread (up to hardware_concurrency) and one for itself
+	 * (butler's main thread).
+	 *
+	 * In theory (2 * hw + 4) should be sufficient, were it not for
+	 * AudioPlaylistSource and AudioRegionEditor::peak_amplitude_thread(s).
+	 * WaveViewThreads::start_threads adds `min (8, hw - 1)`
+	 *
 	 */
-	BufferManager::init (hardware_concurrency () + 4);
+	BufferManager::init (PBD::hardware_concurrency () * 3 + 6);
 
 	PannerManager::instance ().discover_panners ();
 
@@ -694,6 +768,7 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 
 	reserved_io_names[_("Monitor")]             = true;
 	reserved_io_names[_("Master")]              = true;
+	reserved_io_names[_("Surround")]            = true;
 	reserved_io_names[X_("auditioner")]         = true; // auditioner.cc  Track (s, "auditioner",...)
 	reserved_io_names[X_("x-virtual-keyboard")] = false;
 	reserved_io_names[X_("MIDI Tracer 1")]      = false;
@@ -713,10 +788,12 @@ ARDOUR::init (bool try_optimization, const char* localedir, bool with_gui)
 	reserved_io_names[_("FaderPort8 Send")]  = false;
 	reserved_io_names[_("FaderPort16 Recv")] = false;
 	reserved_io_names[_("FaderPort16 Send")] = false;
+	reserved_io_names[_("Console1 Recv")]    = false;
+	reserved_io_names[_("Console1 Send")]    = false;
 
 	MIDI::Name::MidiPatchManager::instance ().load_midnams_in_thread ();
 
-	Config->ParameterChanged.connect_same_thread (config_connection, boost::bind (&config_changed, _1));
+	Config->ParameterChanged.connect_same_thread (config_connection, std::bind (&config_changed, _1));
 
 	libardour_initialized = true;
 
@@ -744,7 +821,8 @@ ARDOUR::init_post_engine (uint32_t start_cnt)
 		}
 	}
 
-	BaseUI::set_thread_priority (pbd_absolute_rt_priority (PBD_SCHED_FIFO, AudioEngine::instance()->client_real_time_priority () - 2));
+	/* set/update thread priority relative to backend's [jack_]client_real_time_priority */
+	BaseUI::set_thread_priority (PBD_RT_PRI_CTRL);
 
 	TransportMasterManager::instance ().restart ();
 }
@@ -766,6 +844,7 @@ ARDOUR::cleanup ()
 	engine_startup_connection.disconnect ();
 
 	delete &ControlProtocolManager::instance ();
+	ARDOUR::TransportMasterManager::instance ().clear (false);
 	ARDOUR::AudioEngine::destroy ();
 	ARDOUR::TransportMasterManager::destroy ();
 
@@ -868,6 +947,9 @@ ARDOUR::setup_fpu ()
 		    : "=r"(cw)::"memory");
 	}
 
+#elif defined(__ARMEL__)
+	/* no FTZ instructions on that platform */
+#warning you do not want to compile Arodur on armel.
 #elif defined(__arm__)
 	/* http://infocenter.arm.com/help/topic/com.arm.doc.dui0068b/BCFHFBGA.html
 	 * bit 24: flush-to-zero */
@@ -886,7 +968,13 @@ ARDOUR::setup_fpu ()
 /* this can be changed to modify the translation behaviour for
    cases where the user has never expressed a preference.
 */
+
+
+#if defined(PLATFORM_WINDOWS) || defined(__APPLE__)
+static const bool translate_by_default = false;
+#else
 static const bool translate_by_default = true;
+#endif
 
 string
 ARDOUR::translation_enable_path ()
@@ -946,7 +1034,7 @@ ARDOUR::get_available_sync_options ()
 	vector<SyncSource> ret;
 
 	std::shared_ptr<AudioBackend> backend = AudioEngine::instance ()->current_backend ();
-	if (backend && backend->name () == "JACK") {
+	if (backend && backend->is_jack ()) {
 		ret.push_back (Engine);
 	}
 
@@ -992,3 +1080,70 @@ ARDOUR::reset_performance_meters (Session *session)
 		AudioEngine::instance()->current_backend()->dsp_stats[n].queue_reset ();
 	}
 }
+
+ARDOUR::AnyTime::AnyTime (std::string const & str)
+{
+	char c;
+	std::stringstream ss;
+
+	ss << str;
+	ss >> c;
+
+	switch (c) {
+	case 't':
+		type = Timecode;
+		if (!Timecode::parse_timecode_format (str.substr (1), timecode)) {
+			throw failed_constructor ();
+		}
+		break;
+	case 'b':
+		type = BBT;
+		ss >> bbt;
+		break;
+	case 'B':
+		type = BBT_Offset;
+		ss >> bbt_offset;
+		break;
+	case 's':
+		type = Samples;
+		ss >> samples;
+		break;
+	case 'S':
+		type = Seconds;
+		ss >> seconds;
+		break;
+	default:
+		throw failed_constructor();
+	}
+}
+
+std::string
+ARDOUR::AnyTime::str() const
+{
+	std::stringstream ss;
+	switch (type) {
+	case Timecode:
+		ss << 't';
+		ss << timecode;
+		break;
+	case BBT:
+		ss << 'b';
+		ss << bbt;
+		break;
+	case BBT_Offset:
+		ss << 'B';
+		ss << bbt_offset;
+		break;
+	case Samples:
+		ss << 's';
+		ss << samples;
+		break;
+	case Seconds:
+		ss << 'S';
+		ss << seconds;
+		break;
+	}
+
+	return ss.str ();
+}
+

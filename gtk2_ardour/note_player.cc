@@ -34,27 +34,24 @@ NotePlayer::NotePlayer (std::shared_ptr<MidiTrack> mt)
 
 NotePlayer::~NotePlayer ()
 {
-	clear ();
 }
 
 void
 NotePlayer::add (std::shared_ptr<NoteType> note)
 {
+	/* Must not be called once play() has been called */
 	notes.push_back (note);
-}
-
-void
-NotePlayer::clear ()
-{
-	off ();
-	notes.clear ();
 }
 
 void
 NotePlayer::on ()
 {
-	for (Notes::iterator n = notes.begin(); n != notes.end(); ++n) {
-		track->write_immediate_event (Evoral::MIDI_EVENT, (*n)->on_event().size(), (*n)->on_event().buffer());
+	MidiChannelFilter& filter = track->playback_filter ();
+	for (auto const& n : notes) {
+		Evoral::Event ev (n->on_event(), true);
+		if (!filter.filter(ev.buffer(), ev.size())) {
+			track->write_immediate_event (Evoral::MIDI_EVENT, ev.size(), ev.buffer());
+		}
 	}
 }
 
@@ -63,8 +60,7 @@ NotePlayer::play ()
 {
 	on ();
 
-	/* note: if there is more than 1 note, we will silence them all at the same time
-	 */
+	/* note: if there is more than 1 note, we will silence them all at the same time */
 
 	const uint32_t note_length_ms = 100;
 
@@ -83,7 +79,11 @@ NotePlayer::_off (NotePlayer* np)
 void
 NotePlayer::off ()
 {
-	for (Notes::iterator n = notes.begin(); n != notes.end(); ++n) {
-		track->write_immediate_event (Evoral::MIDI_EVENT, (*n)->off_event().size(), (*n)->off_event().buffer());
+	MidiChannelFilter& filter = track->playback_filter ();
+	for (auto const& n : notes) {
+		Evoral::Event ev (n->off_event(), true);
+		if (!filter.filter(ev.buffer(), ev.size())) {
+			track->write_immediate_event (Evoral::MIDI_EVENT, ev.size(), ev.buffer());
+		}
 	}
 }

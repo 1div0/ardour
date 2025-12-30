@@ -62,8 +62,10 @@ DEFINE_ENUM_CONVERT(ARDOUR::ShuttleUnits)
 DEFINE_ENUM_CONVERT(ARDOUR::ClockDeltaMode)
 DEFINE_ENUM_CONVERT(ARDOUR::DenormalModel)
 DEFINE_ENUM_CONVERT(ARDOUR::FadeShape)
+DEFINE_ENUM_CONVERT(ARDOUR::SnapTarget)
 DEFINE_ENUM_CONVERT(ARDOUR::RegionSelectionAfterSplit)
 DEFINE_ENUM_CONVERT(ARDOUR::RangeSelectionAfterSplit)
+DEFINE_ENUM_CONVERT(ARDOUR::TimeSelectionAfterSectionPaste)
 DEFINE_ENUM_CONVERT(ARDOUR::BufferingPreset)
 DEFINE_ENUM_CONVERT(ARDOUR::AutoReturnTarget)
 DEFINE_ENUM_CONVERT(ARDOUR::MeterType)
@@ -72,6 +74,7 @@ DEFINE_ENUM_CONVERT(ARDOUR::DiskIOPoint)
 DEFINE_ENUM_CONVERT(ARDOUR::NoteMode)
 DEFINE_ENUM_CONVERT(ARDOUR::ChannelMode)
 DEFINE_ENUM_CONVERT(ARDOUR::MonitorChoice)
+DEFINE_ENUM_CONVERT(ARDOUR::FastWindOp)
 DEFINE_ENUM_CONVERT(ARDOUR::PluginType)
 DEFINE_ENUM_CONVERT(ARDOUR::AlignStyle)
 DEFINE_ENUM_CONVERT(ARDOUR::AlignChoice)
@@ -88,8 +91,35 @@ DEFINE_ENUM_CONVERT(ARDOUR::MidiPortFlags)
 DEFINE_ENUM_CONVERT(ARDOUR::TransportRequestType)
 DEFINE_ENUM_CONVERT(ARDOUR::LoopFadeChoice)
 DEFINE_ENUM_CONVERT(ARDOUR::CueBehavior)
+DEFINE_ENUM_CONVERT(ARDOUR::VST3KnobMode)
 
 DEFINE_ENUM_CONVERT(MusicalMode::Type)
+
+template <>
+inline bool to_string (ARDOUR::AnyTime const & at, std::string & str)
+{
+	str = at.str();
+	return true;
+}
+
+template <>
+inline bool string_to (std::string const & str, ARDOUR::AnyTime & at)
+{
+	at = ARDOUR::AnyTime (str);
+	return true;
+}
+
+template <>
+inline std::string to_string (ARDOUR::AnyTime at)
+{
+	return at.str();
+}
+
+template <>
+inline ARDOUR::AnyTime string_to (std::string const & str)
+{
+	return ARDOUR::AnyTime (str);
+}
 
 template <>
 inline std::string to_string (ARDOUR::timepos_t val)

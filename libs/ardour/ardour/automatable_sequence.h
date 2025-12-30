@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_automatable_sequence_h__
-#define __ardour_automatable_sequence_h__
+#pragma once
 
 #include "evoral/Sequence.h"
 #include "ardour/automatable.h"
@@ -30,15 +29,15 @@ namespace ARDOUR {
 template<typename T>
 class /*LIBARDOUR_API*/ AutomatableSequence : public Automatable, public Evoral::Sequence<T> {
 public:
-	AutomatableSequence(Session& s, Temporal::TimeDomain td)
+	AutomatableSequence(Session& s, Temporal::TimeDomainProvider const & tdp)
 		: Evoral::ControlSet()
-		, Automatable(s, td)
+		, Automatable(s, tdp)
 		, Evoral::Sequence<T>(EventTypeMap::instance())
 	{}
 
 	AutomatableSequence(const AutomatableSequence<T>& other)
 		: Evoral::ControlSet(other)
-		, Automatable(other._a_session, other.time_domain())
+		, Automatable(other._a_session, other)
 		, Evoral::Sequence<T>(other)
 	{}
 
@@ -46,5 +45,4 @@ public:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_automatable_sequence_h__ */
 

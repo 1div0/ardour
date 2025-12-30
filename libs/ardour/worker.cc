@@ -18,7 +18,6 @@
  */
 
 #include <stdlib.h>
-#include <unistd.h>
 
 #include <glibmm/timer.h>
 
@@ -41,7 +40,7 @@ Worker::Worker(Workee* workee, uint32_t ring_size, bool threaded)
 	, _synchronous(!threaded)
 {
 	if (threaded) {
-		_thread = PBD::Thread::create (boost::bind (&Worker::run, this));
+		_thread = PBD::Thread::create (std::bind (&Worker::run, this), "LV2Worker");
 	}
 }
 
@@ -137,8 +136,6 @@ Worker::emit_responses()
 void
 Worker::run()
 {
-	pthread_set_name ("LV2Worker");
-
 	void*  buf      = NULL;
 	size_t buf_size = 0;
 	while (true) {

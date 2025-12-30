@@ -31,6 +31,7 @@
 
 #include "ardour/delivery.h"
 #include "ardour/disk_io.h"
+#include "ardour/dsp_filter.h"
 #include "ardour/export_channel.h"
 #include "ardour/export_filename.h"
 #include "ardour/export_format_base.h"
@@ -86,6 +87,7 @@ setup_enum_writer ()
 	Placement _Placement;
 	MonitorModel _MonitorModel;
 	MonitorChoice _MonitorChoice;
+	FastWindOp _FastWindOp;
 	MonitorState _MonitorState;
 	PFLPosition _PFLPosition;
 	AFLPosition _AFLPosition;
@@ -101,14 +103,16 @@ setup_enum_writer ()
 	SyncSource _SyncSource;
 	TransportRequestType _TransportRequestType;
 	ShuttleUnits _ShuttleUnits;
-	Session::RecordState _Session_RecordState;
+	RecordState _RecordState;
 	SessionEvent::Type _SessionEvent_Type;
 	SessionEvent::Action _SessionEvent_Action;
 	TimecodeFormat _Session_TimecodeFormat;
 	Session::PullupFormat _Session_PullupFormat;
 	FadeShape _FadeShape;
+	SnapTarget _SnapTarget;
 	RegionSelectionAfterSplit _RegionSelectionAfterSplit;
 	RangeSelectionAfterSplit _RangeSelectionAfterSplit;
+	TimeSelectionAfterSectionPaste _TimeSelectionAfterSectionPaste;
 	IOChange _IOChange;
 	AutomationType _AutomationType;
 	AutoState _AutoState;
@@ -164,6 +168,9 @@ setup_enum_writer ()
 	FollowAction::Type _FollowAction;
 	Trigger::StretchMode _TriggerStretchMode;
 	CueBehavior _CueBehavior;
+	VST3KnobMode _VST3KnobMode;
+	DSP::PerceptualAnalyzer::Speed _DSPAnalyzerSpeed;
+	DSP::PerceptualAnalyzer::Warp _DSPAnalyzerWarp;
 
 #define REGISTER(e) enum_writer.register_distinct (typeid(e).name(), i, s); i.clear(); s.clear()
 #define REGISTER_BITS(e) enum_writer.register_bits (typeid(e).name(), i, s); i.clear(); s.clear()
@@ -205,8 +212,19 @@ setup_enum_writer ()
 	REGISTER_ENUM (MonitoringAutomation);
 	REGISTER_ENUM (BusSendLevel);
 	REGISTER_ENUM (BusSendEnable);
+	REGISTER_ENUM (SurroundSendLevel);
 	REGISTER_ENUM (InsertReturnLevel);
 	REGISTER_ENUM (MainOutVolume);
+	REGISTER_ENUM (MidiVelocityAutomation);
+	REGISTER_ENUM (PanSurroundX);
+	REGISTER_ENUM (PanSurroundY);
+	REGISTER_ENUM (PanSurroundZ);
+	REGISTER_ENUM (PanSurroundSize);
+	REGISTER_ENUM (PanSurroundSnap);
+	REGISTER_ENUM (BinauralRenderMode);
+	REGISTER_ENUM (PanSurroundElevationEnable);
+	REGISTER_ENUM (PanSurroundZones);
+	REGISTER_ENUM (PanSurroundRamp);
 	REGISTER (_AutomationType);
 
 	REGISTER_ENUM (Off);
@@ -367,6 +385,11 @@ setup_enum_writer ()
 	REGISTER_ENUM (DeltaOriginMarker);
 	REGISTER (_ClockDeltaMode);
 
+	REGISTER_ENUM (FastWindOff);
+	REGISTER_ENUM (FastWindVarispeed);
+	REGISTER_ENUM (FastWindLocate);
+	REGISTER (_FastWindOp);
+
 	REGISTER_ENUM (DenormalNone);
 	REGISTER_ENUM (DenormalFTZ);
 	REGISTER_ENUM (DenormalDAZ);
@@ -452,10 +475,10 @@ setup_enum_writer ()
 	REGISTER_ENUM (Semitones);
 	REGISTER (_ShuttleUnits);
 
-	REGISTER_CLASS_ENUM (Session, Disabled);
-	REGISTER_CLASS_ENUM (Session, Enabled);
-	REGISTER_CLASS_ENUM (Session, Recording);
-	REGISTER (_Session_RecordState);
+	REGISTER_ENUM (Disabled);
+	REGISTER_ENUM (Enabled);
+	REGISTER_ENUM (Recording);
+	REGISTER (_RecordState);
 
 	REGISTER_CLASS_ENUM (SessionEvent, SetTransportSpeed);
 	REGISTER_CLASS_ENUM (SessionEvent, SetDefaultPlaySpeed);
@@ -572,6 +595,17 @@ setup_enum_writer ()
 	REGISTER (_RegionSelectionAfterSplit);
 	REGISTER (_RangeSelectionAfterSplit);
 
+	REGISTER_ENUM (SnapTargetGrid);
+	REGISTER_ENUM (SnapTargetOther);
+	REGISTER_ENUM (SnapTargetBoth);
+	REGISTER (_SnapTarget);
+
+	REGISTER_ENUM(SectionSelectNoop);
+	REGISTER_ENUM(SectionSelectClear);
+	REGISTER_ENUM(SectionSelectRetain);
+	REGISTER_ENUM(SectionSelectRetainAndMovePlayhead);
+	REGISTER (_TimeSelectionAfterSectionPaste);
+
 	REGISTER_CLASS_ENUM (DiskIOProcessor, Recordable);
 	REGISTER_CLASS_ENUM (DiskIOProcessor, Hidden);
 	REGISTER_BITS (_DiskIOProcessor_Flag);
@@ -587,6 +621,8 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (Location, IsClockOrigin);
 	REGISTER_CLASS_ENUM (Location, IsXrun);
 	REGISTER_CLASS_ENUM (Location, IsCueMarker);
+	REGISTER_CLASS_ENUM (Location, IsSection);
+	REGISTER_CLASS_ENUM (Location, IsScene);
 	REGISTER_BITS (_Location_Flags);
 
 	REGISTER_CLASS_ENUM (Track, NoFreeze);
@@ -706,12 +742,14 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (Delivery, Main);
 	REGISTER_CLASS_ENUM (Delivery, Aux);
 	REGISTER_CLASS_ENUM (Delivery, Foldback);
+	REGISTER_CLASS_ENUM (Delivery, DirectOuts);
 	REGISTER_BITS (_Delivery_Role);
 
 	REGISTER_CLASS_ENUM (MuteMaster, PreFader);
 	REGISTER_CLASS_ENUM (MuteMaster, PostFader);
 	REGISTER_CLASS_ENUM (MuteMaster, Listen);
 	REGISTER_CLASS_ENUM (MuteMaster, Main);
+	REGISTER_CLASS_ENUM (MuteMaster, SurroundSend);
 	REGISTER_BITS (_MuteMaster_MutePoint);
 
 	REGISTER_CLASS_ENUM (IO, Input);
@@ -731,6 +769,7 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (MidiModel::PatchChangeDiffCommand, Time);
 	REGISTER_CLASS_ENUM (MidiModel::PatchChangeDiffCommand, Program);
 	REGISTER_CLASS_ENUM (MidiModel::PatchChangeDiffCommand, Bank);
+	REGISTER_CLASS_ENUM (MidiModel::PatchChangeDiffCommand, Channel);
 	REGISTER (_MidiModel_PatchChangeDiffCommand_Property);
 
 	REGISTER_ENUM(MidiPortMusic);
@@ -791,8 +830,15 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (PresentationInfo, OrderSet);
 	REGISTER_CLASS_ENUM (PresentationInfo, FoldbackBus);
 	REGISTER_CLASS_ENUM (PresentationInfo, TriggerTrack);
+	REGISTER_CLASS_ENUM (PresentationInfo, SurroundMaster);
 #ifdef MIXBUS
 	REGISTER_CLASS_ENUM (PresentationInfo, MixbusEditorHidden);
+#endif
+#ifdef VBM
+	REGISTER_CLASS_ENUM (PresentationInfo, Program);
+	REGISTER_CLASS_ENUM (PresentationInfo, MixMinus);
+	REGISTER_CLASS_ENUM (PresentationInfo, VBMProgram);
+	REGISTER_CLASS_ENUM (PresentationInfo, VBMMixMinus);
 #endif
 	REGISTER_BITS (_PresentationInfo_Flag);
 
@@ -912,6 +958,24 @@ setup_enum_writer ()
 	REGISTER_ENUM (FollowCues);
 	REGISTER_ENUM (ImplicitlyIgnoreCues);
 	REGISTER_BITS (_CueBehavior);
+
+	REGISTER_ENUM (VST3KnobPluginDefault);
+	REGISTER_ENUM (VST3KnobCircularMode);
+	REGISTER_ENUM (VST3KnobRelativCircularMode);
+	REGISTER_ENUM (VST3KnobLinearMode);
+	REGISTER (_VST3KnobMode);
+
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Rapid);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Fast);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Moderate);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Slow);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Noise);
+	REGISTER (_DSPAnalyzerSpeed);
+
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Bark);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Medium);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, High);
+	REGISTER (_DSPAnalyzerWarp);
 }
 
 } /* namespace ARDOUR */

@@ -355,6 +355,28 @@ struct CFunc
     }
   };
 
+  template <class MemFnPtr, class T,
+           class ReturnType = typename FuncTraits <MemFnPtr>::ReturnType>
+  struct CallMemberCPtr
+  {
+    typedef typename FuncTraits <MemFnPtr>::Params Params;
+
+    static int f (lua_State* L)
+    {
+      assert (isfulluserdata (L, lua_upvalueindex (1)));
+      std::shared_ptr<T const>* const t = Userdata::get <std::shared_ptr<T const> > (L, 1, true);
+      T* const tt = const_cast<T*> (t->get());
+      if (!tt) {
+        return luaL_error (L, "shared_ptr is nil");
+      }
+      MemFnPtr const& fnptr = *static_cast <MemFnPtr const*> (lua_touserdata (L, lua_upvalueindex (1)));
+      assert (fnptr != 0);
+      ArgList <Params, 2> args (L);
+      Stack <ReturnType>::push (L, FuncTraits <MemFnPtr>::call (tt, fnptr, args));
+      return 1;
+    }
+  };
+
   template <class T, class R>
   struct CastMemberPtr
   {
@@ -638,6 +660,31 @@ struct CFunc
 
   template <class MemFnPtr, class T,
             class ReturnType = typename FuncTraits <MemFnPtr>::ReturnType>
+  struct CallMemberRefCPtr
+  {
+    typedef typename FuncTraits <MemFnPtr>::Params Params;
+
+    static int f (lua_State* L)
+    {
+      assert (isfulluserdata (L, lua_upvalueindex (1)));
+      std::shared_ptr<T const>* const t = Userdata::get <std::shared_ptr<T const> > (L, 1, true);
+      T* const tt = const_cast<T*> (t->get());
+      if (!tt) {
+        return luaL_error (L, "shared_ptr is nil");
+      }
+      MemFnPtr const& fnptr = *static_cast <MemFnPtr const*> (lua_touserdata (L, lua_upvalueindex (1)));
+      assert (fnptr != 0);
+      ArgList <Params, 2> args (L);
+      Stack <ReturnType>::push (L, FuncTraits <MemFnPtr>::call (tt, fnptr, args));
+      LuaRef v (newTable (L));
+      FuncArgs <Params, 0>::refs (v, args);
+      v.push(L);
+      return 2;
+    }
+  };
+
+  template <class MemFnPtr, class T,
+            class ReturnType = typename FuncTraits <MemFnPtr>::ReturnType>
   struct CallMemberRefWPtr
   {
     typedef typename FuncTraits <MemFnPtr>::Params Params;
@@ -727,6 +774,24 @@ struct CFunc
   };
 
   template <class MemFnPtr, class T>
+  struct CallMemberCPtr <MemFnPtr, T, void>
+  {
+    typedef typename FuncTraits <MemFnPtr>::Params Params;
+
+    static int f (lua_State* L)
+    {
+      assert (isfulluserdata (L, lua_upvalueindex (1)));
+      std::shared_ptr<T const>* const t = Userdata::get <std::shared_ptr<T const> > (L, 1, true);
+      T* const tt = const_cast<T*> (t->get());
+      MemFnPtr const& fnptr = *static_cast <MemFnPtr const*> (lua_touserdata (L, lua_upvalueindex (1)));
+      assert (fnptr != 0);
+      ArgList <Params, 2> args (L);
+      FuncTraits <MemFnPtr>::call (tt, fnptr, args);
+      return 0;
+    }
+  };
+
+  template <class MemFnPtr, class T>
   struct CallMemberWPtr <MemFnPtr, T, void>
   {
     typedef typename FuncTraits <MemFnPtr>::Params Params;
@@ -803,6 +868,30 @@ struct CFunc
       assert (isfulluserdata (L, lua_upvalueindex (1)));
       std::shared_ptr<T>* const t = Userdata::get <std::shared_ptr<T> > (L, 1, false);
       T* const tt = t->get();
+      if (!tt) {
+        return luaL_error (L, "shared_ptr is nil");
+      }
+      MemFnPtr const& fnptr = *static_cast <MemFnPtr const*> (lua_touserdata (L, lua_upvalueindex (1)));
+      assert (fnptr != 0);
+      ArgList <Params, 2> args (L);
+      FuncTraits <MemFnPtr>::call (tt, fnptr, args);
+      LuaRef v (newTable (L));
+      FuncArgs <Params, 0>::refs (v, args);
+      v.push(L);
+      return 1;
+    }
+  };
+
+  template <class MemFnPtr, class T>
+  struct CallMemberRefCPtr <MemFnPtr, T, void>
+  {
+    typedef typename FuncTraits <MemFnPtr>::Params Params;
+
+    static int f (lua_State* L)
+    {
+      assert (isfulluserdata (L, lua_upvalueindex (1)));
+      std::shared_ptr<T const>* const t = Userdata::get <std::shared_ptr<T const> > (L, 1, true);
+      T* const tt = const_cast<T*> (t->get());
       if (!tt) {
         return luaL_error (L, "shared_ptr is nil");
       }
@@ -928,6 +1017,30 @@ struct CFunc
     {
       new (lua_newuserdata (L, sizeof (MemFnPtr))) MemFnPtr (mf);
       lua_pushcclosure (L, &CallMemberRefPtr <MemFnPtr, T>::f, 1);
+      rawsetfield (L, -3, name); // class table
+    }
+  };
+
+  template <class MemFnPtr>
+  struct CallMemberCPtrFunctionHelper
+  {
+    typedef typename FuncTraits <MemFnPtr>::ClassType T;
+    static void add (lua_State* L, char const* name, MemFnPtr mf)
+    {
+      new (lua_newuserdata (L, sizeof (MemFnPtr))) MemFnPtr (mf);
+      lua_pushcclosure (L, &CallMemberCPtr <MemFnPtr, T>::f, 1);
+      rawsetfield (L, -3, name); // class table
+    }
+  };
+
+  template <class MemFnPtr>
+  struct CallMemberRefCPtrFunctionHelper
+  {
+    typedef typename FuncTraits <MemFnPtr>::ClassType T;
+    static void add (lua_State* L, char const* name, MemFnPtr mf)
+    {
+      new (lua_newuserdata (L, sizeof (MemFnPtr))) MemFnPtr (mf);
+      lua_pushcclosure (L, &CallMemberRefCPtr <MemFnPtr, T>::f, 1);
       rawsetfield (L, -3, name); // class table
     }
   };
@@ -1125,10 +1238,14 @@ struct CFunc
     lua_pushvalue (L, -1);
     lua_pushnil (L);
     while (lua_next (L, -2)) {
+#if 0
       lua_pushvalue (L, -2);
-      T const value = Stack<T>::get (L, -2);
+      lua_pop (L, 1);
+#endif
+      // lua_gettop is used because Userdata::getClass() doesn't handle negative stack indexes.
+      T const value = Stack<T>::get (L, lua_gettop (L));
       t->push_back (value);
-      lua_pop (L, 2);
+      lua_pop (L, 1);
     }
     lua_pop (L, 1);
     lua_pop (L, 2);
@@ -1275,11 +1392,13 @@ struct CFunc
     lua_pushnil (L);
     while (lua_next (L, -2)) {
       lua_pushvalue (L, -2);
-      K const key = Stack<K>::get (L, -1);
-      V const value = Stack<V>::get (L, -2);
+      // lua_gettop is used because Userdata::getClass() doesn't handle negative stack indexes.
+      K const key = Stack<K>::get (L, lua_gettop (L));
+      lua_pop (L, 1);
+      V const value = Stack<V>::get (L, lua_gettop (L));
+      lua_pop (L, 1);
       t->insert (std::pair<K,V> (key, value));
       //(*t)[key] = value;
-      lua_pop (L, 2);
     }
     lua_pop (L, 1);
     lua_pop (L, 2);
@@ -1369,12 +1488,14 @@ struct CFunc
     lua_pushnil (L);
     while (lua_next (L, -2)) {
       lua_pushvalue (L, -2);
-      T const member = Stack<T>::get (L, -1);
-      bool const v = Stack<bool>::get (L, -2);
+      // lua_gettop is used because Userdata::getClass() doesn't handle negative stack indexes.
+      T const member = Stack<T>::get (L, lua_gettop (L));
+      lua_pop (L, 1);
+      bool const v = Stack<bool>::get (L, lua_gettop (L));
+      lua_pop (L, 1);
       if (v) {
         t->insert (member);
       }
-      lua_pop (L, 2);
     }
     lua_pop (L, 1);
     lua_pop (L, 2);

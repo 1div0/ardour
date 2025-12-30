@@ -25,7 +25,7 @@
 #include <cmath>
 #include <errno.h>
 #include <sys/types.h>
-#include <unistd.h>
+
 #include "pbd/error.h"
 #include "pbd/failed_constructor.h"
 #include "pbd/pthread_utils.h"
@@ -104,18 +104,18 @@ MIDIClock_TransportMaster::set_session (Session* s)
 	 */
 
 	if (_session) {
-		parser.timing.connect_same_thread (port_connections, boost::bind (&MIDIClock_TransportMaster::update_midi_clock, this, _1, _2));
-		parser.start.connect_same_thread (port_connections, boost::bind (&MIDIClock_TransportMaster::start, this, _1, _2));
-		parser.contineu.connect_same_thread (port_connections, boost::bind (&MIDIClock_TransportMaster::contineu, this, _1, _2));
-		parser.stop.connect_same_thread (port_connections, boost::bind (&MIDIClock_TransportMaster::stop, this, _1, _2));
-		parser.position.connect_same_thread (port_connections, boost::bind (&MIDIClock_TransportMaster::position, this, _1, _2, _3, _4));
+		parser.timing.connect_same_thread (port_connections, std::bind (&MIDIClock_TransportMaster::update_midi_clock, this, _1, _2));
+		parser.start.connect_same_thread (port_connections, std::bind (&MIDIClock_TransportMaster::start, this, _1, _2));
+		parser.contineu.connect_same_thread (port_connections, std::bind (&MIDIClock_TransportMaster::contineu, this, _1, _2));
+		parser.stop.connect_same_thread (port_connections, std::bind (&MIDIClock_TransportMaster::stop, this, _1, _2));
+		parser.position.connect_same_thread (port_connections, std::bind (&MIDIClock_TransportMaster::position, this, _1, _2, _3, _4));
 
 		reset (true);
 	}
 }
 
 void
-MIDIClock_TransportMaster::pre_process (MIDI::pframes_t nframes, samplepos_t now, boost::optional<samplepos_t> session_pos)
+MIDIClock_TransportMaster::pre_process (MIDI::pframes_t nframes, samplepos_t now, std::optional<samplepos_t> session_pos)
 {
 	/* Read and parse incoming MIDI */
 	if (!_midi_port) {
@@ -155,7 +155,7 @@ MIDIClock_TransportMaster::pre_process (MIDI::pframes_t nframes, samplepos_t now
 void
 MIDIClock_TransportMaster::calculate_one_ppqn_in_samples_at(samplepos_t time)
 {
-	const Temporal::TempoMetric& metric = Temporal::TempoMap::use()->metric_at (time);
+	const Temporal::TempoMetric& metric = Temporal::TempoMap::use()->metric_at (timepos_t (time));
 	const double samples_per_quarter_note = metric.tempo().samples_per_quarter_note (ENGINE->sample_rate());
 
 	one_ppqn_in_samples = samples_per_quarter_note / double (ppqn);

@@ -27,17 +27,15 @@
 #include <map>
 #include <vector>
 
-#include <boost/scoped_ptr.hpp>
-
 #include "pbd/error.h"
 #include "pbd/failed_constructor.h"
 #include "pbd/locale_guard.h"
 #include "pbd/unwind.h"
 #include "pbd/xml++.h"
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/stock.h>
 #include <gtkmm2ext/utils.h>
 
 #include "widgets/tooltips.h"
@@ -133,7 +131,9 @@ EngineControl::EngineControl ()
 	AttachOptions  xopt = AttachOptions (FILL | EXPAND);
 	int            row;
 
-	set_resizable (false);
+	if (UIConfiguration::instance().get_allow_to_resize_engine_dialog ()) {
+		set_resizable (false);
+	}
 	set_name (X_("AudioMIDISetup"));
 
 	/* the backend combo is the one thing that is ALWAYS visible */
@@ -319,16 +319,16 @@ EngineControl::EngineControl ()
 	set_tooltip (try_autostart_button,
 	             string_compose (_("Always try these settings when starting %1, if the same device is available"), PROGRAM_NAME));
 
-	ARDOUR::Config->ParameterChanged.connect (*this, invalidator (*this), boost::bind (&EngineControl::config_parameter_changed, this, _1), gui_context ());
+	ARDOUR::Config->ParameterChanged.connect (*this, invalidator (*this), std::bind (&EngineControl::config_parameter_changed, this, _1), gui_context ());
 
 	/* Pick up any existing audio setup configuration, if appropriate */
 
 	XMLNode* audio_setup = ARDOUR::Config->extra_xml ("AudioMIDISetup");
 
-	ARDOUR::AudioEngine::instance ()->Running.connect (running_connection, MISSING_INVALIDATOR, boost::bind (&EngineControl::engine_running, this), gui_context ());
-	ARDOUR::AudioEngine::instance ()->Stopped.connect (stopped_connection, MISSING_INVALIDATOR, boost::bind (&EngineControl::engine_stopped, this), gui_context ());
-	ARDOUR::AudioEngine::instance ()->Halted.connect (stopped_connection, MISSING_INVALIDATOR, boost::bind (&EngineControl::engine_stopped, this), gui_context ());
-	ARDOUR::AudioEngine::instance ()->DeviceListChanged.connect (devicelist_connection, MISSING_INVALIDATOR, boost::bind (&EngineControl::device_list_changed, this), gui_context ());
+	ARDOUR::AudioEngine::instance ()->Running.connect (running_connection, MISSING_INVALIDATOR, std::bind (&EngineControl::engine_running, this), gui_context ());
+	ARDOUR::AudioEngine::instance ()->Stopped.connect (stopped_connection, MISSING_INVALIDATOR, std::bind (&EngineControl::engine_stopped, this), gui_context ());
+	ARDOUR::AudioEngine::instance ()->Halted.connect (stopped_connection, MISSING_INVALIDATOR, std::bind (&EngineControl::engine_stopped, this), gui_context ());
+	ARDOUR::AudioEngine::instance ()->DeviceListChanged.connect (devicelist_connection, MISSING_INVALIDATOR, std::bind (&EngineControl::device_list_changed, this), gui_context ());
 
 	config_parameter_changed ("try-autostart-engine");
 	config_parameter_changed ("monitoring-model");
@@ -582,6 +582,9 @@ EngineControl::build_full_control_notebook ()
 		settings_table.attach (update_devices_button, 3, 4, btn, btn + ht, xopt, xopt);
 	}
 
+	settings_table.attach (*manage (new ArdourHSpacer(1.0)),   0, 4, row, row + 1, xopt, SHRINK, 4, 12);
+	row++;
+
 	if (backend->requires_driver_selection ()) {
 		settings_table.attach (lbl_driver,   0, 1, row, row + 1, xopt, SHRINK);
 		settings_table.attach (driver_combo, 1, 2, row, row + 1, xopt, SHRINK);
@@ -628,6 +631,9 @@ EngineControl::build_full_control_notebook ()
 
 	/* button spans 2 or 3 rows: Sample rate, Buffer size, Periods */
 	settings_table.attach (control_app_button, 3, 4, row - ctrl_btn_span, row + 1, xopt, xopt);
+	++row;
+
+	settings_table.attach (*manage (new ArdourHSpacer(1.0)),   0, 4, row, row + 1, xopt, SHRINK, 4, 12);
 	++row;
 
 	/* Monitor settings */
@@ -899,7 +905,7 @@ EngineControl::midi_latency_adjustment_changed (Gtk::Adjustment* a, MidiDeviceSe
 	if (ARDOUR::AudioEngine::instance ()->running () && !_measure_midi) {
 		std::shared_ptr<ARDOUR::AudioBackend> backend = ARDOUR::AudioEngine::instance ()->current_backend ();
 		assert (backend);
-		if (backend->can_change_systemic_latency_when_running () && device->enabled) {
+		if (device->enabled) {
 			if (for_input) {
 				backend->set_systemic_midi_input_latency (device->name, device->input_latency);
 			} else {
@@ -920,7 +926,7 @@ EngineControl::midi_device_enabled_toggled (ArdourButton* b, MidiDeviceSettings 
 		std::shared_ptr<ARDOUR::AudioBackend> backend = ARDOUR::AudioEngine::instance ()->current_backend ();
 		assert (backend);
 		backend->set_midi_device_enabled (device->name, device->enabled);
-		if (backend->can_change_systemic_latency_when_running () && device->enabled) {
+		if (device->enabled) {
 			backend->set_systemic_midi_input_latency (device->name, device->input_latency);
 			backend->set_systemic_midi_output_latency (device->name, device->output_latency);
 		}
@@ -1079,6 +1085,10 @@ EngineControl::backend_changed ()
 
 	if (!ignore_changes) {
 		maybe_display_saved_state ();
+	}
+
+	if (!UIConfiguration::instance().get_allow_to_resize_engine_dialog ()) {
+		resize (1, 1); // shrink window
 	}
 }
 
@@ -1778,12 +1788,20 @@ EngineControl::State
 EngineControl::get_matching_state (
     const string& backend,
     const string& driver,
-    const string& device)
+    const string& device,
+    const float   sample_rate)
 {
-	for (StateList::iterator i = states.begin (); i != states.end (); ++i) {
-		if ((*i)->backend == backend &&
-		    (!_have_control || ((*i)->driver == driver && (*i)->device == device))) {
-			return (*i);
+	for (auto const& i : states) {
+		if (i->backend != backend) {
+			continue;
+		}
+		if (!_have_control) {
+			return i;
+		}
+		if (i->driver == driver && i->device == device) {
+			if (sample_rate == 0 || i->sample_rate == sample_rate) {
+				return i;
+			}
 		}
 	}
 	return State ();
@@ -1794,12 +1812,20 @@ EngineControl::get_matching_state (
     const string& backend,
     const string& driver,
     const string& input_device,
-    const string& output_device)
+    const string& output_device,
+    const float   sample_rate)
 {
-	for (StateList::iterator i = states.begin (); i != states.end (); ++i) {
-		if ((*i)->backend == backend &&
-		    (!_have_control || ((*i)->driver == driver && ((*i)->input_device == input_device) && (*i)->output_device == output_device))) {
-			return (*i);
+	for (auto const& i : states) {
+		if (i->backend != backend) {
+			continue;
+		}
+		if (!_have_control) {
+			return i;
+		}
+		if (i->driver == driver && i->input_device == input_device && i->output_device == output_device) {
+			if (sample_rate == 0 || i->sample_rate == sample_rate) {
+				return i;
+			}
 		}
 	}
 	return State ();
@@ -1815,17 +1841,20 @@ EngineControl::get_saved_state_for_currently_displayed_backend_and_device ()
 			return get_matching_state (backend_combo.get_active_text (),
 			                           (backend->requires_driver_selection () ? (std::string)driver_combo.get_active_text () : string ()),
 			                           input_device_combo.get_active_text (),
-			                           output_device_combo.get_active_text ());
+			                           output_device_combo.get_active_text (),
+			                           get_rate ());
 		} else {
 			return get_matching_state (backend_combo.get_active_text (),
 			                           (backend->requires_driver_selection () ? (std::string)driver_combo.get_active_text () : string ()),
-			                           device_combo.get_active_text ());
+			                           device_combo.get_active_text (),
+			                           get_rate ());
 		}
 	}
 
 	return get_matching_state (backend_combo.get_active_text (),
 	                           string (),
-	                           device_combo.get_active_text ());
+	                           device_combo.get_active_text (),
+	                           get_rate ());
 }
 
 bool
@@ -1836,7 +1865,8 @@ EngineControl::equivalent_states (const EngineControl::State& state1,
 	    state1->driver == state2->driver &&
 	    state1->device == state2->device &&
 	    state1->input_device == state2->input_device &&
-	    state1->output_device == state2->output_device) {
+	    state1->output_device == state2->output_device &&
+	    state1->sample_rate == state2->sample_rate) {
 		return true;
 	}
 	return false;
@@ -1941,12 +1971,8 @@ EngineControl::maybe_display_saved_state ()
 		}
 	} else {
 		DEBUG_ECONTROL ("Unable to find saved state for backend and devices");
-
-		std::shared_ptr<ARDOUR::AudioBackend> backend = ARDOUR::AudioEngine::instance ()->current_backend ();
-		if (backend) {
-			input_latency.set_value (backend->systemic_hw_input_latency ());
-			output_latency.set_value (backend->systemic_hw_output_latency ());
-		}
+		input_latency.set_value (0);
+		output_latency.set_value (0);
 	}
 }
 
@@ -2581,8 +2607,9 @@ EngineControl::get_buffer_size () const
 	uint32_t samples;
 
 	if (sscanf (txt.c_str (), "%d", &samples) != 1) {
-		fprintf (stderr, "Find a trout and repeatedly slap the nearest C++ who throws exceptions without catching them.\n");
+		fprintf (stderr, "Find a trout and repeatedly slap the nearest C++ developer who throws exceptions without catching them.\n");
 		fprintf (stderr, "Ardour will likely crash now, giving you time to get the trout.\n");
+		fprintf (stderr, "the buffer size combo said [%s]\n", txt.c_str());
 		throw exception ();
 	}
 
@@ -2679,7 +2706,9 @@ EngineControl::on_response (int r)
 	 * StartupFSM does hide us after response(); Window > Audio/MIDI Setup
 	 * does not.
 	 */
-	pop_splash ();
+	if (r == RESPONSE_OK) {
+		pop_splash ();
+	}
 	Gtk::Dialog::on_response (r);
 }
 
@@ -2696,16 +2725,18 @@ EngineControl::start_stop_button_clicked ()
 		return;
 	}
 
+	int rv = RESPONSE_OK;
+
 	if (ARDOUR::AudioEngine::instance ()->running ()) {
 		ARDOUR::AudioEngine::instance ()->stop ();
 	} else {
 		/* whoever displayed this dialog is expected to do its own
 		   check on whether or not the engine is running.
 		*/
-		start_engine ();
+		rv = start_engine () ? RESPONSE_OK : RESPONSE_ACCEPT;
 	}
 
-	response (RESPONSE_OK);
+	response (rv);
 }
 
 void
@@ -2836,6 +2867,9 @@ EngineControl::on_latency_expand ()
 		lbl_midi_system.hide ();
 		midi_option_combo.hide ();
 		midi_devices_button.hide ();
+		if (!UIConfiguration::instance().get_allow_to_resize_engine_dialog ()) {
+			resize (1, 1); // shrink window
+		}
 	}
 }
 
@@ -2857,10 +2891,8 @@ EngineControl::on_switch_page (GtkNotebookPage*, guint page_num)
 		/* undo special case from push_state_to_backend() when measuring midi latency */
 		if (_measure_midi && ARDOUR::AudioEngine::instance ()->running ()) {
 			std::shared_ptr<ARDOUR::AudioBackend> backend = ARDOUR::AudioEngine::instance ()->current_backend ();
-			if (backend->can_change_systemic_latency_when_running ()) {
-				for (vector<MidiDeviceSettings>::const_iterator p = _midi_devices.begin (); p != _midi_devices.end (); ++p) {
-					backend->set_midi_device_enabled ((*p)->name, (*p)->enabled);
-				}
+			for (vector<MidiDeviceSettings>::const_iterator p = _midi_devices.begin (); p != _midi_devices.end (); ++p) {
+				backend->set_midi_device_enabled ((*p)->name, (*p)->enabled);
 			}
 		}
 		_measure_midi.reset ();
@@ -3171,10 +3203,8 @@ EngineControl::use_latency_button_clicked ()
 		uint32_t            one_way       = max ((ARDOUR::samplecnt_t)0, extra / 2);
 		_measure_midi->input_latency      = one_way;
 		_measure_midi->output_latency     = one_way;
-		if (backend->can_change_systemic_latency_when_running ()) {
-			backend->set_systemic_midi_input_latency (_measure_midi->name, one_way);
-			backend->set_systemic_midi_output_latency (_measure_midi->name, one_way);
-		}
+		backend->set_systemic_midi_input_latency (_measure_midi->name, one_way);
+		backend->set_systemic_midi_output_latency (_measure_midi->name, one_way);
 		notebook.set_current_page (midi_tab);
 	} else {
 		MTDM* mtdm = ARDOUR::AudioEngine::instance ()->mtdm ();

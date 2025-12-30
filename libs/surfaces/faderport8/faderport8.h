@@ -67,13 +67,9 @@ public:
 	FaderPort8 (ARDOUR::Session&);
 	virtual ~FaderPort8();
 
-	int set_active (bool yn);
+	static bool probe (std::string&, std::string&);
 
-	/* we probe for a device when our ports are connected. Before that,
-	 * there's no way to know if the device exists or not.
-	 */
-	static bool  probe() { return true; }
-	static void* request_factory (uint32_t);
+	int set_active (bool yn);
 
 	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
@@ -82,7 +78,7 @@ public:
 	bool  has_editor () const { return true; }
 	void* get_gui () const;
 	void  tear_down_gui ();
-	PBD::Signal0<void> ConnectionChange;
+	PBD::Signal<void()> ConnectionChange;
 
 	void set_button_action (FP8Controls::ButtonId, bool, std::string const&);
 	std::string get_button_action (FP8Controls::ButtonId, bool);
@@ -347,7 +343,7 @@ private:
 
 		ActionType _type;
 		std::string _action_name;
-		//boost::function<void()> function; // unused
+		//std::function<void()> function; // unused
 
 		void clear ()
 		{

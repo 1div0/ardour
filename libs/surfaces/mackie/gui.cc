@@ -20,21 +20,22 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/box.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treeview.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/treestore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/cellrenderercombo.h>
-#include <gtkmm/scale.h>
-#include <gtkmm/alignment.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/box.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
+#include <ytkmm/treeview.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/treestore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/cellrenderercombo.h>
+#include <ytkmm/scale.h>
+#include <ytkmm/alignment.h>
 
 #include "pbd/error.h"
 #include "pbd/unwind.h"
 #include "pbd/strsplit.h"
+#include "pbd/file_utils.h"
 
 #include "gtkmm2ext/actions.h"
 #include "gtkmm2ext/action_model.h"
@@ -43,6 +44,7 @@
 #include "gtkmm2ext/utils.h"
 
 #include "ardour/audioengine.h"
+#include "ardour/filesystem_paths.h"
 #include "ardour/port.h"
 #include "ardour/rc_configuration.h"
 
@@ -57,7 +59,7 @@
 using namespace std;
 using namespace Gtk;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 void*
 MackieControlProtocol::get_gui () const
@@ -97,13 +99,14 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	, touch_sensitivity_scale (touch_sensitivity_adjustment)
 	, recalibrate_fader_button (_("Recalibrate Faders"))
 	, ipmidi_base_port_adjustment (_cp.ipmidi_base(), 0, 32767, 1, 1000)
-	, discover_button (_("Discover Mackie Devices"))
 	, _device_dependent_widget (0)
 	, _ignore_profile_changed (false)
 	, ignore_active_change (false)
 {
 	Gtk::Label* l;
+#ifndef UF8
 	Gtk::Alignment* align;
+#endif
 	int row = 0;
 
 	set_border_width (12);
@@ -112,6 +115,17 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	table.set_col_spacings (6);
 	table.set_border_width (12);
 	table.set_homogeneous (false);
+#ifdef UF8
+	std::string data_file_path;
+	string name = "ssl-uf8-small.png";
+	PBD::Searchpath spath(ARDOUR::ardour_data_search_path());
+	spath.add_subdirectory_to_paths ("icons");
+	find_file (spath, name, data_file_path);
+	if (!data_file_path.empty()) {
+		image.set (data_file_path);
+		hpacker.pack_start (image, false, false);
+	}
+#endif
 
 	l = manage (new Gtk::Label (_("Device Type:")));
 	l->set_alignment (1.0, 0.5);
@@ -127,12 +141,12 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	Gtkmm2ext::set_popdown_strings (_surface_combo, surfaces);
 	_surface_combo.signal_changed().connect (sigc::mem_fun (*this, &MackieControlProtocolGUI::surface_combo_changed));
 
-	_cp.DeviceChanged.connect (device_change_connection, invalidator (*this), boost::bind (&MackieControlProtocolGUI::device_changed, this), gui_context());
+	_cp.DeviceChanged.connect (device_change_connection, invalidator (*this), std::bind (&MackieControlProtocolGUI::device_changed, this), gui_context());
 
 	/* catch future changes to connection state */
-	ARDOUR::AudioEngine::instance()->PortRegisteredOrUnregistered.connect (_port_connections, invalidator (*this), boost::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
-	ARDOUR::AudioEngine::instance()->PortPrettyNameChanged.connect (_port_connections, invalidator (*this), boost::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
-	_cp.ConnectionChange.connect (_port_connections, invalidator (*this), boost::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
+	ARDOUR::AudioEngine::instance()->PortRegisteredOrUnregistered.connect (_port_connections, invalidator (*this), std::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
+	ARDOUR::AudioEngine::instance()->PortPrettyNameChanged.connect (_port_connections, invalidator (*this), std::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
+	_cp.ConnectionChange.connect (_port_connections, invalidator (*this), std::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
 
 	ipmidi_base_port_adjustment.signal_value_changed().connect (sigc::mem_fun (*this, &MackieControlProtocolGUI::ipmidi_spinner_changed));
 
@@ -149,6 +163,7 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	table.attach (*_device_dependent_widget, 0, 12, row, row+1, AttachOptions(0), AttachOptions(0), 0, 0);
 	row++;
 
+#ifndef UF8
 	/* back to the boilerplate */
 
 	RadioButtonGroup rb_group = absolute_touch_mode_button.get_group();
@@ -206,11 +221,6 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	table.attach (recalibrate_fader_button, 1, 2, row, row+1, AttachOptions(FILL|EXPAND), AttachOptions (0));
 	row++;
 
-
-	table.attach (discover_button, 1, 2, row, row+1, AttachOptions(FILL|EXPAND), AttachOptions (0));
-	discover_button.signal_clicked().connect (sigc::mem_fun (*this, &MackieControlProtocolGUI::discover_clicked));
-	row++;
-
 	vector<string> profiles;
 
 	for (std::map<std::string,DeviceProfile>::iterator i = DeviceProfile::device_profiles.begin(); i != DeviceProfile::device_profiles.end(); ++i) {
@@ -222,8 +232,11 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	_profile_combo.set_active_text (p.device_profile().name());
 	_profile_combo.signal_changed().connect (sigc::mem_fun (*this, &MackieControlProtocolGUI::profile_combo_changed));
 
-	append_page (table, _("Device Setup"));
-	table.show_all();
+#endif
+	hpacker.pack_start(table, false, false);
+	append_page (hpacker, _("Device Setup"));
+	hpacker.show_all();
+
 
 	/* function key editor */
 
@@ -274,7 +287,7 @@ MackieControlProtocolGUI::connection_handler ()
 
 	for (ic = input_combos.begin(), oc = output_combos.begin(); ic != input_combos.end() && oc != output_combos.end(); ++ic, ++oc) {
 
-		std::shared_ptr<Surface> surface = _cp.get_surface_by_raw_pointer ((*ic)->get_data ("surface"));
+		std::shared_ptr<MACKIE_NAMESPACE::Surface> surface = _cp.get_surface_by_raw_pointer ((*ic)->get_data ("surface"));
 
 		if (surface) {
 			update_port_combos (midi_inputs, midi_outputs, *ic, *oc, surface);
@@ -286,7 +299,7 @@ void
 MackieControlProtocolGUI::update_port_combos (vector<string> const& midi_inputs, vector<string> const& midi_outputs,
                                               Gtk::ComboBox* input_combo,
                                               Gtk::ComboBox* output_combo,
-                                              std::shared_ptr<Surface> surface)
+                                              std::shared_ptr<MACKIE_NAMESPACE::Surface> surface)
 {
 	Glib::RefPtr<Gtk::ListStore> input = build_midi_port_list (midi_inputs, true);
 	Glib::RefPtr<Gtk::ListStore> output = build_midi_port_list (midi_outputs, false);
@@ -370,7 +383,7 @@ MackieControlProtocolGUI::device_dependent_widget ()
 
 		for (uint32_t n = 0; n < n_surfaces; ++n) {
 
-			std::shared_ptr<Surface> surface = _cp.nth_surface (n);
+			std::shared_ptr<MACKIE_NAMESPACE::Surface> surface = _cp.nth_surface (n);
 
 			if (!surface) {
 				PBD::fatal << string_compose (_("programming error: %1\n"), string_compose ("n=%1 surface not found!", n)) << endmsg;
@@ -389,7 +402,7 @@ MackieControlProtocolGUI::device_dependent_widget ()
 			output_combo->set_data ("surface", surface.get());
 			output_combos.push_back (output_combo);
 
-			std::weak_ptr<Surface> ws (surface);
+			std::weak_ptr<MACKIE_NAMESPACE::Surface> ws (surface);
 			input_combo->signal_changed().connect (sigc::bind (sigc::mem_fun (*this, &MackieControlProtocolGUI::active_port_changed), input_combo, ws, true));
 			output_combo->signal_changed().connect (sigc::bind (sigc::mem_fun (*this, &MackieControlProtocolGUI::active_port_changed), output_combo, ws, false));
 
@@ -503,13 +516,13 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 	DeviceProfile dp (_cp.device_profile());
 	DeviceInfo di (_cp.device_info());
 
-	for (int n = 0; n < Mackie::Button::FinalGlobalButton; ++n) {
+	for (int n = 0; n < MACKIE_NAMESPACE::Button::FinalGlobalButton; ++n) {
 
-		Mackie::Button::ID bid = (Mackie::Button::ID) n;
+		MACKIE_NAMESPACE::Button::ID bid = (MACKIE_NAMESPACE::Button::ID) n;
 
 		row = *(function_key_model->append());
 		if (di.global_buttons().find (bid) == di.global_buttons().end()) {
-			row[function_key_columns.name] = Mackie::Button::id_to_name (bid);
+			row[function_key_columns.name] = MACKIE_NAMESPACE::Button::id_to_name (bid);
 		} else {
 			row[function_key_columns.name] = di.get_global_button_name (bid) + "*";
 		}
@@ -523,7 +536,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 		 * reserved for hard-coded actions.
 		 */
 
-		if (bid >= Mackie::Button::F1 && bid <= Mackie::Button::F8) {
+		if (bid >= MACKIE_NAMESPACE::Button::F1 && bid <= MACKIE_NAMESPACE::Button::F8) {
 
 			action = dp.get_button_action (bid, 0);
 			if (action.empty()) {
@@ -548,7 +561,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 		 * reserved for hard-coded actions.
 		 */
 
-		if (bid >= Mackie::Button::F1 && bid <= Mackie::Button::F8) {
+		if (bid >= MACKIE_NAMESPACE::Button::F1 && bid <= MACKIE_NAMESPACE::Button::F8) {
 
 			action = dp.get_button_action (bid, MackieControlProtocol::MODIFIER_SHIFT);
 			if (action.empty()) {
@@ -700,10 +713,11 @@ MackieControlProtocolGUI::action_changed (const Glib::ustring &sPath, const Tree
 				modifier = 0;
 			}
 
+			int id = (*row)[function_key_columns.id];
 			if (remove) {
-				_cp.device_profile().set_button_action ((*row)[function_key_columns.id], modifier, "");
+				_cp.device_profile().set_button_action ((Button::ID)id, modifier, "");
 			} else {
-				_cp.device_profile().set_button_action ((*row)[function_key_columns.id], modifier, action_path);
+				_cp.device_profile().set_button_action ((Button::ID)id, modifier, action_path);
 			}
 
 			_ignore_profile_changed = true;
@@ -757,13 +771,6 @@ MackieControlProtocolGUI::ipmidi_spinner_changed ()
 }
 
 void
-MackieControlProtocolGUI::discover_clicked ()
-{
-	/* this should help to get things started */
-	_cp.ping_devices ();
-}
-
-void
 MackieControlProtocolGUI::recalibrate_faders ()
 {
 	_cp.recalibrate_faders ();
@@ -806,13 +813,13 @@ MackieControlProtocolGUI::build_midi_port_list (vector<string> const & ports, bo
 }
 
 void
-MackieControlProtocolGUI::active_port_changed (Gtk::ComboBox* combo, std::weak_ptr<Surface> ws, bool for_input)
+MackieControlProtocolGUI::active_port_changed (Gtk::ComboBox* combo, std::weak_ptr<MACKIE_NAMESPACE::Surface> ws, bool for_input)
 {
 	if (ignore_active_change) {
 		return;
 	}
 
-	std::shared_ptr<Surface> surface = ws.lock();
+	std::shared_ptr<MACKIE_NAMESPACE::Surface> surface = ws.lock();
 
 	if (!surface) {
 		return;

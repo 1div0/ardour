@@ -21,8 +21,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtk_ardour_region_view_h__
-#define __gtk_ardour_region_view_h__
+#pragma once
 
 #ifdef interface
 #undef interface
@@ -36,12 +35,12 @@
 #include "canvas/fwd.h"
 
 #include "time_axis_view_item.h"
-#include "automation_line.h"
+#include "editor_automation_line.h"
 #include "enums.h"
 #include "marker.h"
 
 class TimeAxisView;
-class RegionEditor;
+class ArdourWindow;
 class GhostRegion;
 class AutomationTimeAxisView;
 class AutomationRegionView;
@@ -66,7 +65,7 @@ public:
 
 	~RegionView ();
 
-	void set_selected (bool yn);
+	virtual void set_selected (bool yn);
 
 	virtual void init (bool what_changed);
 
@@ -82,13 +81,14 @@ public:
 
 	void move (double xdelta, double ydelta);
 
+	void visual_layer_on_top();
 	void raise_to_top ();
 	void lower_to_bottom ();
 
 	bool set_position(Temporal::timepos_t const & pos, void* src, double* delta = 0);
 
 	virtual void show_region_editor ();
-	void hide_region_editor ();
+	virtual void hide_region_editor ();
 
 	virtual void region_changed (const PBD::PropertyChange&);
 
@@ -100,12 +100,13 @@ public:
 	virtual void exited () {}
 
 	bool display_enabled() const;
-	void redisplay (bool view_only = true) {
-		_redisplay (view_only);
+	virtual void redisplay (bool) = 0;
+	void redisplay () {
+		redisplay (true);
 	}
 
 	virtual void tempo_map_changed () {
-		_redisplay (true);
+		redisplay (true);
 	}
 
 	struct DisplaySuspender {
@@ -126,7 +127,7 @@ public:
 
 	virtual void update_coverage_frame (LayerDisplay);
 
-	static PBD::Signal1<void,RegionView*> RegionViewGoingAway;
+	static PBD::Signal<void(RegionView*)> RegionViewGoingAway;
 
 	/** Called when a front trim is about to begin */
 	virtual void trim_front_starting () {}
@@ -156,6 +157,8 @@ public:
 
 	ARDOUR::CueMarker find_model_cue_marker (ArdourMarker*);
 	void drop_cue_marker (ArdourMarker*);
+
+	virtual void color_handler() { set_colors(); }
 
 protected:
 
@@ -188,7 +191,6 @@ protected:
 	virtual void set_sync_mark_color ();
 	virtual void reset_width_dependent_items (double pixel_width);
 
-	virtual void color_handler () {}
 	virtual void parameter_changed (std::string const&);
 
 	void maybe_raise_cue_markers ();
@@ -200,7 +202,7 @@ protected:
 	ArdourCanvas::Polygon* sync_mark; ///< polygon for sync position
 	ArdourCanvas::Line* sync_line; ///< polygon for sync position
 
-	RegionEditor* editor;
+	ArdourWindow* _editor;
 
 	std::vector<ControlPoint *> control_points;
 	double current_visible_sync_position;
@@ -236,6 +238,8 @@ private:
 
 	void update_cue_markers ();
 
+	void clear_coverage_frame ();
+
 	struct ViewCueMarker {
 		ArdourMarker* view_marker;
 		ARDOUR::CueMarker     model_marker;
@@ -247,7 +251,6 @@ private:
 	typedef std::list<ViewCueMarker*> ViewCueMarkers;
 	ViewCueMarkers _cue_markers;
 	bool _cue_markers_visible;
-	virtual void _redisplay (bool) = 0;
 
   private:
 	friend struct DisplaySuspender;
@@ -256,4 +259,3 @@ private:
 
 };
 
-#endif /* __gtk_ardour_region_view_h__ */

@@ -74,7 +74,7 @@ using namespace Glib;
 using namespace ArdourSurface;
 using namespace Gtkmm2ext;
 
-#include "pbd/abstract_ui.cc" // instantiate template
+#include "pbd/abstract_ui.inc.cc" // instantiate template
 
 #define ABLETON 0x2982
 #define PUSH2   0x1967
@@ -94,6 +94,47 @@ row_interval_semitones (const Push2::RowInterval row_interval, const bool inkey)
 	}
 
 	return 5;
+}
+
+bool
+Push2::available ()
+{
+	bool rv = LIBUSB_SUCCESS == libusb_init (0);
+	if (rv) {
+		libusb_exit (0);
+	}
+	return rv;
+}
+
+bool
+Push2::match_usb (uint16_t vendor, uint16_t device)
+{
+	return vendor == ABLETON && device == PUSH2;
+}
+
+bool
+Push2::probe (std::string& i, std::string& o)
+{
+	vector<string> midi_inputs;
+	vector<string> midi_outputs;
+	AudioEngine::instance()->get_ports ("", DataType::MIDI, PortFlags (IsOutput|IsTerminal), midi_inputs);
+	AudioEngine::instance()->get_ports ("", DataType::MIDI, PortFlags (IsInput|IsTerminal), midi_outputs);
+
+	auto has_push2 = [](string const& s) {
+		std::string pn = AudioEngine::instance()->get_hardware_port_name_by_name (s);
+		return pn.find ("Ableton Push 2 MIDI 1") != string::npos;
+	};
+
+	auto pi = std::find_if (midi_inputs.begin (), midi_inputs.end (), has_push2);
+	auto po = std::find_if (midi_outputs.begin (), midi_outputs.end (), has_push2);
+
+	if (pi == midi_inputs.end () || po == midi_outputs.end ()) {
+		return false;
+	}
+
+	i = *pi;
+	o = *po;
+	return true;
 }
 
 Push2::Push2 (ARDOUR::Session& s)
@@ -139,11 +180,19 @@ Push2::Push2 (ARDOUR::Session& s)
 
 	run_event_loop ();
 	port_setup ();
+
+	std::string  pn_in, pn_out;
+	if (probe (pn_in, pn_out)) {
+		_async_in->connect (pn_in);
+		_async_out->connect (pn_out);
+	}
 }
 
 Push2::~Push2 ()
 {
 	DEBUG_TRACE (DEBUG::Push2, "push2 control surface object being destroyed\n");
+
+	stop_event_loop ();
 
 	MIDISurface::drop ();
 
@@ -162,10 +211,7 @@ Push2::~Push2 ()
 	_track_mix_layout = 0;
 	delete _cue_layout;
 	_cue_layout = 0;
-
-	stop_event_loop ();
 }
-
 
 void
 Push2::run_event_loop ()
@@ -197,7 +243,7 @@ Push2::begin_using_device ()
 	vblank_timeout->attach (main_loop()->get_context());
 
 	init_buttons (true);
-	init_touch_strip ();
+	init_touch_strip (false);
 	reset_pad_colors ();
 	splash ();
 
@@ -342,12 +388,6 @@ Push2::init_buttons (bool startup)
 	}
 }
 
-bool
-Push2::probe ()
-{
-	return true;
-}
-
 void
 Push2::splash ()
 {
@@ -414,16 +454,10 @@ Push2::set_active (bool yn)
 }
 
 void
-Push2::init_touch_strip ()
+Push2::init_touch_strip (bool shift)
 {
-	MidiByteArray msg (9, 0xf0, 0x00, 0x21, 0x1d, 0x01, 0x01, 0x17, 0x00, 0xf7);
-	/* flags are the final byte (ignore end-of-sysex */
-
-	/* show bar, not point
-	   autoreturn to center
-	   bar starts at center
-	*/
-	msg[7] = (1<<4) | (1<<5) | (1<<6);
+	const int bits = (shift ? 0xc : 0x68);
+	const MidiByteArray msg (9, 0xf0, 0x00, 0x21, 0x1d, 0x01, 0x01, 0x17, bits, 0xf7);
 	write (msg);
 }
 
@@ -621,7 +655,7 @@ Push2::handle_midi_note_on_message (MIDI::Parser& parser, MIDI::EventTwoBytes* e
 	std::shared_ptr<const Pad> pad_pressed = pm->second;
 
 	if (_current_layout == _cue_layout) {
-		_current_layout->pad_press (pad_pressed->x, pad_pressed->y);
+		_current_layout->pad_press (pad_pressed->x, pad_pressed->y, ev->velocity);
 		return;
 	}
 
@@ -702,15 +736,15 @@ Push2::notify_record_state_changed ()
 	}
 
 	switch (session->record_status ()) {
-	case Session::Disabled:
+	case Disabled:
 		b->second->set_color (LED::White);
 		b->second->set_state (LED::NoTransition);
 		break;
-	case Session::Enabled:
+	case Enabled:
 		b->second->set_color (LED::Red);
 		b->second->set_state (LED::Blinking4th);
 		break;
-	case Session::Recording:
+	case Recording:
 		b->second->set_color (LED::Red);
 		b->second->set_state (LED::OneShot24th);
 		break;
@@ -885,6 +919,7 @@ Push2::start_shift ()
 	b->set_color (LED::White);
 	b->set_state (LED::Blinking16th);
 	write (b->state_msg());
+	init_touch_strip (true);
 }
 
 void
@@ -897,6 +932,7 @@ Push2::end_shift ()
 		b->set_color (LED::White);
 		b->set_state (LED::OneShot24th);
 		write (b->state_msg());
+		init_touch_strip (false);
 	}
 }
 

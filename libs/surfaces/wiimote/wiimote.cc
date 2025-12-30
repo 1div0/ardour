@@ -31,7 +31,7 @@ using namespace ARDOUR;
 using namespace PBD;
 using namespace std;
 
-#include "pbd/abstract_ui.cc" // instantiate template
+#include "pbd/abstract_ui.inc.cc" // instantiate template
 
 void wiimote_control_protocol_mesg_callback (cwiid_wiimote_t *wiimote, int mesg_count, union cwiid_mesg mesg[], timespec *t);
 
@@ -48,12 +48,6 @@ WiimoteControlProtocol::WiimoteControlProtocol (Session& session)
 WiimoteControlProtocol::~WiimoteControlProtocol ()
 {
 	stop ();
-}
-
-bool
-WiimoteControlProtocol::probe ()
-{
-	return true;
 }
 
 int
@@ -118,8 +112,8 @@ WiimoteControlProtocol::start ()
 	DEBUG_TRACE (DEBUG::WiimoteControl, "WiimoteControlProtocol::start init\n");
 
 	// update LEDs whenever the transport or recording state changes
-	session->TransportStateChange.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&WiimoteControlProtocol::update_led_state, this), this);
-	session->RecordStateChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&WiimoteControlProtocol::update_led_state, this), this);
+	session->TransportStateChange.connect (session_connections, MISSING_INVALIDATOR, std::bind (&WiimoteControlProtocol::update_led_state, this), this);
+	session->RecordStateChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&WiimoteControlProtocol::update_led_state, this), this);
 
 	// start the Wiimote control UI; it will run in its own thread context
 	BaseUI::run ();
@@ -159,8 +153,6 @@ void
 WiimoteControlProtocol::thread_init ()
 {
 	DEBUG_TRACE (DEBUG::WiimoteControl, "WiimoteControlProtocol::thread_init init\n");
-
-	pthread_set_name (X_("wiimote"));
 
 	// allow to make requests to the GUI and RT thread(s)
 	PBD::notify_event_loops_about_thread_creation (pthread_self (), X_("wiimote"), 2048);
@@ -425,12 +417,12 @@ WiimoteControlProtocol::wiimote_callback (int mesg_count, union cwiid_mesg mesg[
 
 			// + = zoom in
 			if (b & CWIID_BTN_PLUS) {
-				access_action ("Editor/temporal-zoom-in");
+				access_action ("Editing/temporal-zoom-in");
 			}
 
 			// - = zoom out
 			if (b & CWIID_BTN_MINUS) {
-				access_action ("Editor/temporal-zoom-out");
+				access_action ("Editing/temporal-zoom-out");
 			}
 
 			// home = no-op
@@ -455,14 +447,3 @@ wiimote_control_protocol_mesg_callback (cwiid_wiimote_t *wiimote, int mesg_count
 	DEBUG_TRACE (DEBUG::WiimoteControl, "WiimoteControlProtocol::mesg_callback done\n");
 }
 
-
-void*
-WiimoteControlProtocol::request_factory (uint32_t num_requests)
-{
-	/* AbstractUI<T>::request_buffer_factory() is a template method only
-	   instantiated in this source module. To provide something visible for
-	   use in the interface/descriptor, we have this static method that is
-	   template-free.
-	*/
-	return request_buffer_factory (num_requests);
-}

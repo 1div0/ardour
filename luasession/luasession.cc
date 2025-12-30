@@ -57,9 +57,9 @@ static bool keep_running          = true;
 static bool terminate_when_halted = false;
 
 /* extern VST functions */
-int vstfx_init (void*) { return 0; }
-void vstfx_exit () {}
-void vstfx_destroy_editor (VSTState*) {}
+int  vstfx_init (void*) { return 0; }
+void vstfx_exit () { }
+void vstfx_destroy_editor (VSTState*) { }
 
 class LuaReceiver : public Receiver
 {
@@ -109,7 +109,7 @@ public:
 		run_loop_thread = Glib::Threads::Thread::self ();
 	}
 
-	bool call_slot (InvalidationRecord* ir, const boost::function<void()>& f)
+	bool call_slot (InvalidationRecord* ir, const std::function<void ()>& f)
 	{
 		if (Glib::Threads::Thread::self () == run_loop_thread) {
 			cout << string_compose ("%1/%2 direct dispatch of call slot via functor @ %3, invalidation %4\n", event_loop_name (), pthread_name (), &f, ir);
@@ -127,14 +127,14 @@ public:
 		; // TODO process Events, if any
 	}
 
-	Glib::Threads::Mutex& slot_invalidation_mutex ()
+	Glib::Threads::RWLock& slot_invalidation_rwlock ()
 	{
 		return request_buffer_map_lock;
 	}
 
 private:
 	Glib::Threads::Thread* run_loop_thread;
-	Glib::Threads::Mutex   request_buffer_map_lock;
+	Glib::Threads::RWLock  request_buffer_map_lock;
 };
 
 static MyEventLoop* event_loop = NULL;
@@ -146,7 +146,8 @@ static void
 init ()
 {
 	if (!ARDOUR::init (true, localedir)) {
-		cerr << "Ardour failed to initialize\n" << endl;
+		cerr << "Ardour failed to initialize\n"
+		     << endl;
 		console_madness_end ();
 		::exit (EXIT_FAILURE);
 	}
@@ -416,13 +417,13 @@ setup_lua ()
 {
 	assert (!lua);
 
-	lua = new LuaState ();
+	lua = new LuaState (false, false);
 	lua->Print.connect (&my_lua_print);
 	lua_State* L = lua->getState ();
 
 	LuaBindings::stddef (L);
 	LuaBindings::common (L);
-	LuaBindings::session (L);
+	LuaBindings::non_rt (L);
 	LuaBindings::osc (L);
 
 	luabridge::getGlobalNamespace (L)
@@ -449,7 +450,7 @@ setup_lua ()
 
 	AudioEngine::instance ()->stop ();
 
-	AudioEngine::instance()->Halted.connect_same_thread (engine_connections, boost::bind (&engine_halted, _1));
+	AudioEngine::instance ()->Halted.connect_same_thread (engine_connections, std::bind (&engine_halted, _1));
 }
 
 static int
@@ -491,7 +492,7 @@ interactive_interpreter ()
 		}
 
 		do {
-			LuaState   lt;
+			LuaState   lt (false, false);
 			lua_State* L      = lt.getState ();
 			int        status = luaL_loadbuffer (L, line, strlen (line), "=stdin");
 			if (!incomplete (L, status)) {
@@ -542,6 +543,7 @@ usage ()
 {
 	printf ("ardour-lua - interactive Ardour Lua interpreter.\n\n");
 	printf ("Usage: ardour-lua [ OPTIONS ] [ file [args] ]\n\n");
+	/* clang-format off */
 /*        1         2         3         4         5         6         7         8
  *2345678901234567890123456789012345678901234567890123456789012345678901234567890*/
   printf ("Options:\n\
@@ -555,6 +557,7 @@ usage ()
 	printf ("\n\
 Ardour at your finger tips...\n\
 \n");
+	/* clang-format on */
 	printf ("Report bugs to <https://tracker.ardour.org/>\n"
 	        "Website: <https://ardour.org/>\n");
 	console_madness_end ();
@@ -566,12 +569,14 @@ main (int argc, char** argv)
 {
 	const char* optstring = "hiVX";
 
+	/* clang-format off */
 	const struct option longopts[] = {
 		{ "help",             0, 0, 'h' },
 		{ "interactive",      0, 0, 'i' },
 		{ "version",          0, 0, 'V' },
 		{ "exit-when-halted", 0, 0, 'X' },
 	};
+	/* clang-format on */
 
 	bool interactive = false;
 	console_madness_begin ();
@@ -612,7 +617,7 @@ main (int argc, char** argv)
 
 	{
 		/* push arguments to script, use scoped LuaRef */
-		lua_State* L = lua->getState ();
+		lua_State*        L = lua->getState ();
 		luabridge::LuaRef arg (luabridge::newTable (L));
 		for (int i = 1; i < argc - optind; ++i) {
 			arg[i] = std::string (argv[i + optind]);
@@ -648,7 +653,6 @@ main (int argc, char** argv)
 	lua = NULL;
 
 	AudioEngine::instance ()->stop ();
-	AudioEngine::destroy ();
 
 	ARDOUR::cleanup ();
 	delete event_loop;

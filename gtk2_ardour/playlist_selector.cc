@@ -20,8 +20,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/button.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/button.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/unwind.h"
 
@@ -161,19 +161,19 @@ PlaylistSelector::prepare (RouteUI* ruix, plMode mode)
 			this_track->PlaylistChanged.connect (
 			    _track_connections,
 			    invalidator (*this),
-			    boost::bind (&PlaylistSelector::redisplay, this),
+			    std::bind (&PlaylistSelector::redisplay, this),
 			    gui_context ());
 
 			this_track->PlaylistAdded.connect (
 			    _track_connections,
 			    invalidator (*this),
-			    boost::bind (&PlaylistSelector::redisplay, this),
+			    std::bind (&PlaylistSelector::redisplay, this),
 			    gui_context ());
 
 			this_track->DropReferences.connect (
 			    _track_connections,
 			    invalidator (*this),
-			    boost::bind (&PlaylistSelector::ok_button_click, this),
+			    std::bind (&PlaylistSelector::ok_button_click, this),
 			    gui_context ());
 		}
 	}
@@ -268,7 +268,7 @@ PlaylistSelector::redisplay ()
 		sort (pls.begin (), pls.end (), cmp);
 
 		for (vector<std::shared_ptr<Playlist> >::iterator p = pls.begin (); p != pls.end (); ++p) {
-			(*p)->PropertyChanged.connect (_playlist_connections, invalidator (*this), boost::bind (&PlaylistSelector::pl_property_changed, this, _1), gui_context ());
+			(*p)->PropertyChanged.connect (_playlist_connections, invalidator (*this), std::bind (&PlaylistSelector::pl_property_changed, this, _1), gui_context ());
 
 			TreeModel::Row child_row;
 
@@ -397,9 +397,11 @@ PlaylistSelector::selection_changed ()
 			return;
 		}
 
+		XMLNode* before = &_rui->track ()->playlist_state ();
 		switch (_mode) {
 			/*  @Robin:  I dont see a way to undo these playlist actions
 			 *  @Ben: me neither :)
+			 *  @Robin: Now I do.
 			 */
 			case plCopy:
 				{
@@ -425,6 +427,15 @@ PlaylistSelector::selection_changed ()
 					PublicEditor::instance ().mapover_grouped_routes (sigc::bind (sigc::mem_fun (PublicEditor::instance (), &PublicEditor::mapped_select_playlist_matching), pl), _rui, ARDOUR::Properties::group_select.property_id);
 				}
 				break;
+		}
+
+		XMLNode* after = &_rui->track ()->playlist_state ();
+		if (*before != *after) {
+			_session->begin_reversible_command (string_compose (_("Switch Playlist for track %1"), _rui->track ()->name ()));
+			_session->commit_reversible_command (new MementoCommand<Track>(*_rui->track (), before, after));
+		} else {
+			delete before;
+			delete after;
 		}
 	}
 }

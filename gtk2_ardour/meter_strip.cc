@@ -61,9 +61,9 @@ using namespace Gtkmm2ext;
 using namespace std;
 using namespace ArdourMeter;
 
-PBD::Signal1<void,MeterStrip*> MeterStrip::CatchDeletion;
-PBD::Signal0<void> MeterStrip::MetricChanged;
-PBD::Signal0<void> MeterStrip::ConfigurationChanged;
+PBD::Signal<void(MeterStrip*)> MeterStrip::CatchDeletion;
+PBD::Signal<void()> MeterStrip::MetricChanged;
+PBD::Signal<void()> MeterStrip::ConfigurationChanged;
 
 #define PX_SCALE(pxmin, dflt) rint(std::max((double)pxmin, (double)dflt * UIConfiguration::instance().get_ui_scale()))
 
@@ -155,8 +155,8 @@ MeterStrip::MeterStrip (Session* sess, std::shared_ptr<ARDOUR::Route> rt)
 	level_meter->set_meter (_route->shared_peak_meter().get());
 	level_meter->clear_meters();
 	level_meter->setup_meters (220, meter_width, 6);
-	level_meter->ButtonPress.connect_same_thread (level_meter_connection, boost::bind (&MeterStrip::level_meter_button_press, this, _1));
-	_route->shared_peak_meter()->MeterTypeChanged.connect (meter_route_connections, invalidator (*this), boost::bind (&MeterStrip::meter_type_changed, this, _1), gui_context());
+	level_meter->ButtonPress.connect_same_thread (level_meter_connection, std::bind (&MeterStrip::level_meter_button_press, this, _1));
+	_route->shared_peak_meter()->MeterTypeChanged.connect (meter_route_connections, invalidator (*this), std::bind (&MeterStrip::meter_type_changed, this, _1), gui_context());
 
 	meter_align.set(0.5, 0.5, 0.0, 1.0);
 	meter_align.add(*level_meter);
@@ -299,7 +299,7 @@ MeterStrip::MeterStrip (Session* sess, std::shared_ptr<ARDOUR::Route> rt)
 	}
 
 	_route->shared_peak_meter()->ConfigurationChanged.connect (
-			meter_route_connections, invalidator (*this), boost::bind (&MeterStrip::meter_configuration_changed, this, _1), gui_context()
+			meter_route_connections, invalidator (*this), std::bind (&MeterStrip::meter_configuration_changed, this, _1), gui_context()
 			);
 
 	ResetAllPeakDisplays.connect (sigc::mem_fun(*this, &MeterStrip::reset_peak_display));
@@ -315,7 +315,7 @@ MeterStrip::MeterStrip (Session* sess, std::shared_ptr<ARDOUR::Route> rt)
 	meter_ticks1_area.signal_expose_event().connect (sigc::mem_fun(*this, &MeterStrip::meter_ticks1_expose));
 	meter_ticks2_area.signal_expose_event().connect (sigc::mem_fun(*this, &MeterStrip::meter_ticks2_expose));
 
-	_route->DropReferences.connect (meter_route_connections, invalidator (*this), boost::bind (&MeterStrip::self_delete, this), gui_context());
+	_route->DropReferences.connect (meter_route_connections, invalidator (*this), std::bind (&MeterStrip::self_delete, this), gui_context());
 
 	peak_display.signal_button_release_event().connect (sigc::mem_fun(*this, &MeterStrip::peak_button_release), false);
 	name_label.signal_button_release_event().connect (sigc::mem_fun(*this, &MeterStrip::name_label_button_release), false);
@@ -706,7 +706,7 @@ MeterStrip::reset_route_peak_display (Route* route)
 }
 
 void
-MeterStrip::reset_group_peak_display (RouteGroup* group)
+MeterStrip::reset_group_peak_display (std::shared_ptr<RouteGroup> group)
 {
 	if (_route && group == _route->route_group()) {
 		reset_peak_display ();
@@ -978,7 +978,7 @@ MeterStrip::meter_type_changed (MeterType type)
 }
 
 void
-MeterStrip::set_meter_type_multi (int what, RouteGroup* group, MeterType type)
+MeterStrip::set_meter_type_multi (int what, std::shared_ptr<RouteGroup> group, MeterType type)
 {
 	switch (what) {
 		case -1:
@@ -1010,13 +1010,13 @@ MeterStrip::color () const
 }
 
 void
-MeterStrip::gain_start_touch ()
+MeterStrip::gain_start_touch (int)
 {
 	_route->gain_control ()->start_touch (timepos_t (_session->transport_sample ()));
 }
 
 void
-MeterStrip::gain_end_touch ()
+MeterStrip::gain_end_touch (int)
 {
 	_route->gain_control ()->stop_touch (timepos_t (_session->transport_sample ()));
 }

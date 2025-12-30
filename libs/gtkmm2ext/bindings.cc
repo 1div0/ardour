@@ -21,8 +21,8 @@
 #include <iostream>
 
 #include "pbd/gstdio_compat.h"
-#include <gtkmm/accelmap.h>
-#include <gtkmm/uimanager.h>
+#include <ytkmm/accelmap.h>
+#include <ytkmm/uimanager.h>
 
 #include "pbd/convert.h"
 #include "pbd/debug.h"
@@ -45,7 +45,7 @@ using namespace Gtkmm2ext;
 using namespace PBD;
 
 list<Bindings*> Bindings::bindings; /* global. Gulp */
-PBD::Signal1<void,Bindings*> Bindings::BindingsChanged;
+PBD::Signal<void(Bindings*)> Bindings::BindingsChanged;
 int Bindings::_drag_active = 0;
 
 template <typename IteratorValueType>
@@ -373,8 +373,20 @@ KeyboardKey::make_key (const string& str, KeyboardKey& k)
 
 /*================================= Bindings =================================*/
 Bindings::Bindings (std::string const& name)
-	: _name (name)
+	: _parent (nullptr)
+	, _name (name)
 {
+	bindings.push_back (this);
+}
+
+Bindings::Bindings (std::string const & name, Bindings & other)
+	: _parent (&other)
+	, _name (name)
+{
+	copy_from_parent (false);
+
+	BindingsChanged.connect_same_thread (bc, std::bind (&Bindings::parent_changed, this, _1));
+
 	bindings.push_back (this);
 }
 
@@ -481,7 +493,7 @@ Bindings::activate (KeyboardKey kb, Operation op)
 
 	if (k == kbm.end()) {
 		/* no entry for this key in the state map */
-		DEBUG_TRACE (DEBUG::Bindings, string_compose ("no binding for %1 (of %2)\n", unshifted, kbm.size()));
+		DEBUG_TRACE (DEBUG::Bindings, string_compose ("no binding for %1 (of %2) within %3\n", unshifted, kbm.size(), _name));
 		return false;
 	}
 
@@ -507,14 +519,14 @@ Bindings::activate (KeyboardKey kb, Operation op)
 	if (action) {
 		/* lets do it ... */
 		if (action->get_sensitive()) {
-			DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1: %2\n", unshifted, k->second.action_name));
+			DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1: %2 within %3\n", unshifted, k->second.action_name, _name));
 			action->activate ();
 		} else {
-			DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1: %2 - insensitive, skipped\n", unshifted, k->second.action_name));
+			DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1: %2 - insensitive, skipped within %3\n", unshifted, k->second.action_name, _name));
 			return false;
 		}
 	} else {
-		DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1 is known but has no action\n", unshifted));
+		DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1 is known but has no action within %2\n", unshifted, _name));
 	}
 	/* return true even if the action could not be found */
 
@@ -522,7 +534,24 @@ Bindings::activate (KeyboardKey kb, Operation op)
 }
 
 void
-Bindings::associate ()
+Bindings::relativize ()
+{
+	for (auto & [key,action_info] : press_bindings) {
+		action_info.action_name = _name + action_info.action_name;
+	}
+	for (auto & [key,action_info] : release_bindings) {
+		action_info.action_name = _name + action_info.action_name;
+	}
+	for (auto & [mb,action_info] : button_press_bindings) {
+		action_info.action_name = _name + action_info.action_name;
+	}
+	for (auto & [mb,action_info] : button_release_bindings) {
+		action_info.action_name = _name + action_info.action_name;
+	}
+}
+
+void
+Bindings::associate (bool force)
 {
 	KeybindingMap::iterator k;
 
@@ -560,6 +589,55 @@ Bindings::dissociate ()
 	for (k = release_bindings.begin(); k != release_bindings.end(); ++k) {
 		k->second.action.clear ();
 	}
+}
+
+void
+Bindings::copy_from_parent (bool assoc)
+{
+	assert (_parent);
+	press_bindings.clear ();
+	release_bindings.clear ();
+
+	_parent->clone_press (press_bindings);
+	_parent->clone_release (release_bindings);
+
+	dissociate ();
+	relativize ();
+
+	if (assoc) {
+		associate (true);
+	}
+}
+
+void
+Bindings::parent_changed (Bindings* changed)
+{
+	if (_parent != changed) {
+		return;
+	}
+
+	press_bindings.clear();
+	release_bindings.clear();
+
+	copy_from_parent (true);
+}
+
+void
+Bindings::clone_press (KeybindingMap& target) const
+{
+	clone_kbd_bindings (press_bindings, target);
+}
+
+void
+Bindings::clone_release (KeybindingMap& target) const
+{
+	clone_kbd_bindings (release_bindings, target);
+}
+
+void
+Bindings::clone_kbd_bindings (KeybindingMap const & src, KeybindingMap& target) const
+{
+	target = src;
 }
 
 void
@@ -628,8 +706,8 @@ Bindings::add (KeyboardKey kb, Operation op, string const& action_name, XMLPrope
 		(void) kbm.insert (new_pair).first;
 	}
 
-	DEBUG_TRACE (DEBUG::Bindings, string_compose ("add binding between %1 (%3) and %2, group [%3]\n",
-	                                              kb, action_name, (group ? group->value() : string()), op));
+	DEBUG_TRACE (DEBUG::Bindings, string_compose ("%5: add binding between %1 (%3) and %2, group [%3]\n",
+	                                              kb, action_name, (group ? group->value() : string()), op, _name));
 
 	if (can_save) {
 		Keyboard::keybindings_changed ();
@@ -777,15 +855,21 @@ Bindings::save_all_bindings_as_html (ostream& ostr)
 		return;
 	}
 
-
+	ostr << "<!DOCTYPE html>\n";
 	ostr << "<html>\n<head>\n<title>";
 	ostr << PROGRAM_NAME;
 	ostr << "</title>\n";
 	ostr << "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n";
+	ostr << "<style>\n";
+	ostr << "  table { border: 2px outset gray; line-height: 0.8em; box-sizing: border-box; }\n";
+	ostr << "  h2 { margin: 1em 0; }\n";
+	ostr << "  td, th { padding: 6px; border: 1px inset; }\n";
+	ostr << "  span { font-family:monospace; margin: 0px; }\n";
+	ostr << "</style>\n";
 
 	ostr << "</head>\n<body>\n";
 
-	ostr << "<table border=\"2\" cellpadding=\"6\"><tbody>\n\n";
+	ostr << "<table><tbody>\n\n";
 	ostr << "<tr>\n\n";
 
 	/* first column: separate by group */
@@ -806,7 +890,8 @@ Bindings::save_all_bindings_as_html (ostream& ostr)
 	ostr << "</tr>\n\n";
 	ostr << "</tbody></table>\n\n";
 
-	ostr << "</br></br>\n\n";
+	ostr << "<br/>\n\n";
+	ostr << "<div style=\"page-break-before: always;\"></div>\n\n";
 	ostr << "<table border=\"2\" cellpadding=\"6\"><tbody>\n\n";
 	ostr << "<tr>\n\n";
 	ostr << "<td>\n\n";
@@ -827,9 +912,9 @@ Bindings::save_all_bindings_as_html (ostream& ostr)
 		for (p = paths.begin(), k = keys.begin(), l = labels.begin(); p != paths.end(); ++k, ++p, ++l) {
 
 			if ((*k).empty()) {
-				ostr << *p  << " ( " << *l << " ) "  << "</br>" << endl;
+				ostr << *p  << " ( " << *l << " ) "  << "<br/>" << endl;
 			} else {
-				ostr << *p << " ( " << *l << " ) " << " => " << *k << "</br>" << endl;
+				ostr << *p << " ( " << *l << " ) " << " => " << *k << "<br/>" << endl;
 			}
 		}
 	}
@@ -942,8 +1027,8 @@ Bindings::save_as_html (ostream& ostr, bool categorize) const
 				while (key_name.length()<28)
 					key_name.append("-");
 
-				ostr << "<span style=\"font-family:monospace;\">" << key_name;
-				ostr << "<i>" << action->get_label() << "</i></span></br>\n";
+				ostr << "<span>" << key_name;
+				ostr << "<i>" << action->get_label() << "</i></span><br/>\n";
 			}
 			ostr << "\n\n";
 
@@ -1157,3 +1242,25 @@ std::ostream& operator<<(std::ostream& out, Gtkmm2ext::KeyboardKey const & k) {
 	return out << "Key " << k.key() << " (" << (gdk_name ? gdk_name : "no-key") << ") state "
 	           << hex << k.state() << dec << ' ' << show_gdk_event_state (k.state());
 }
+
+static void
+delete_binding_set (void* p)
+{
+	delete (BindingSet*) p;
+}
+
+void
+Gtkmm2ext::set_widget_bindings (Gtk::Widget& w, Bindings& b, char const * const name)
+{
+	BindingSet* bs = new BindingSet;
+	bs->push_back (&b);
+	g_object_set_data_full (G_OBJECT(w.gobj()), name, bs, (GDestroyNotify) delete_binding_set);
+}
+
+void
+Gtkmm2ext::set_widget_bindings (Gtk::Widget& w, BindingSet& bs, char const * const name)
+{
+	w.set_data (name, &bs);
+}
+
+

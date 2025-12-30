@@ -19,8 +19,8 @@
 #ifndef _virtual_keyboard_window_h_
 #define _virtual_keyboard_window_h_
 
-#include <gtkmm/box.h>
-#include <gtkmm/spinbutton.h>
+#include <ytkmm/box.h>
+#include <ytkmm/spinbutton.h>
 
 #include "pbd/controllable.h"
 #include "pbd/signals.h"
@@ -30,13 +30,16 @@
 #include "widgets/ardour_button.h"
 #include "widgets/ardour_dropdown.h"
 #include "widgets/ardour_knob.h"
-#include "widgets/slider_controller.h"
 
 #include "ardour_window.h"
 #include "pianokeyboard.h"
 
 namespace ARDOUR {
 	class Session;
+}
+
+namespace ArdourWidgets {
+	class VSliderController;
 }
 
 class VKBDControl : public PBD::Controllable
@@ -72,7 +75,7 @@ public:
 	double upper () const { return _upper; }
 	double normal () const { return _normal; }
 
-	PBD::Signal1<void, int> ValueChanged;
+	PBD::Signal<void(int)> ValueChanged;
 
 protected:
 	double _lower;
@@ -111,11 +114,12 @@ private:
 	void modwheel_slider_adjusted ();
 
 	void octave_key_event_handler (bool);
+	void velocity_key_event_handler (int);
 	void pitch_bend_key_event_handler (int, bool);
 	bool pitch_bend_timeout ();
 
 	void pitch_bend_event_handler (int);
-	void pitch_bend_release ();
+	void pitch_bend_release (int);
 	void pitch_bend_update_tooltip (int);
 	void pitch_slider_adjusted ();
 

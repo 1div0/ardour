@@ -3,13 +3,8 @@ from waflib.extras import autowaf as autowaf
 import os
 import sys
 
-top = '.'
-out = 'build'
-
-path_prefix = 'libs/clearlooks-newer'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     pass
@@ -20,9 +15,6 @@ def build(bld):
     animation.c
     cairo-support.c
     clearlooks_draw.c
-    clearlooks_draw_glossy.c
-    clearlooks_draw_gummy.c
-    clearlooks_draw_inverted.c
     clearlooks_rc_style.c
     clearlooks_style.c
     clearlooks_theme_main.c
@@ -32,10 +24,12 @@ def build(bld):
 
     obj.name = 'clearlooks-newer'
     obj.target = 'clearlooks'
-    obj.uselib = 'GTK'
     obj.includes = '.'
     obj.install_path = os.path.join(bld.env['LIBDIR'], 'engines')
     autowaf.ensure_visible_symbols (obj, True)
+
+    obj.use     = [ 'libztk', 'libytk', 'libydk-pixbuf' ]
+    obj.uselib  = ' CAIRO PANGO'
 
     if sys.platform == 'darwin':
         # Bit of a hack: make a symlink to the .dylib that meets GTK's criteria for finding it (namely that the library must be a *.so
@@ -44,6 +38,3 @@ def build(bld):
     elif bld.env['build_target'] != 'mingw':
         # this is a hack so that running ./ardev will work, since it sets GTK_PATH to include this dir and GTK will search {thisdir}/engines
         obj = bld(target = 'engines', rule = 'mkdir -p ${TGT} && rm -f ${TGT}/libclearlooks.so && ln -s ../libclearlooks.so ${TGT}/libclearlooks.so')
-
-def shutdown():
-    autowaf.shutdown()

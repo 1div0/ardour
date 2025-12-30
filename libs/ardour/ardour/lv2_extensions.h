@@ -17,7 +17,13 @@
 #ifndef _ardour_lv2_extensions_h_
 #define _ardour_lv2_extensions_h_
 
-#include "lv2/lv2plug.in/ns/lv2core/lv2.h"
+#ifdef HAVE_LV2_1_18_6
+#include <lv2/core/lv2.h>
+#include <lv2/options/options.h>
+#else
+#include <lv2/lv2plug.in/ns/lv2core/lv2.h>
+#include <lv2/lv2plug.in/ns/ext/options/options.h>
+#endif
 
 /**
    @defgroup lv2inlinedisplay Inline-Display
@@ -148,38 +154,6 @@ typedef struct _LV2_License_Interface {
    @}
 */
 
-/**
-   @defgroup lv2bypass Plugin-provided bypass
-
-	 A port with the designation "processing#enable" must
-	 control a plugin's internal bypass mode.
-
-	 If the port value is larger than zero the plugin processes
-	 normally.
-
-	 If the port value is zero, the plugin is expected to bypass
-	 all signals unmodified.
-
-	 The plugin is responsible for providing a click-free transition
-	 between the states.
-
-	 (values less than zero are reserved for future use:
-	 e.g click-free insert/removal of latent plugins.
-	 Generally values <= 0 are to be treated as bypassed.)
-
-   lv2:designation <http://ardour.org/lv2/processing#enable> ;
-
-   @{
-*/
-
-#define LV2_PROCESSING_URI "http://ardour.org/lv2/processing"
-#define LV2_PROCESSING_URI_PREFIX LV2_PROCESSING_URI "#"
-#define LV2_PROCESSING_URI__enable LV2_PROCESSING_URI_PREFIX "enable"
-
-/**
-   @}
-*/
-
 
 /**
    @defgroup lv2routing plugin port/routing control
@@ -275,6 +249,31 @@ typedef struct {
 	/** Info from plugin's run(), notify host that bank/program changed */
 	void (*notify)(LV2_BankPatch_Handle handle, uint8_t channel, uint32_t bank, uint8_t pgm);
 } LV2_BankPatch;
+
+/**
+   @}
+*/
+
+/**
+   @defgroup lv2 export Extension
+
+	 Notify plugin to write data to disk
+
+   @{
+*/
+
+
+#define LV2_EXPORT_URI "http://ardour.org/lv2/export"
+#define LV2_EXPORT_PREFIX LV2_EXPORT_URI "#"
+#define LV2_EXPORT__interface LV2_EXPORT_PREFIX "interface"
+
+/** Export interface */
+typedef struct {
+	/** ..  */
+	int (*setup)(LV2_Handle, const char*, LV2_Options_Option const*);
+	/** ..  */
+	int (*finalize)(LV2_Handle);
+} LV2_Export_Interface;
 
 /**
    @}

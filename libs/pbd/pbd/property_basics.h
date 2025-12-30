@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libpbd_property_basics_h__
-#define __libpbd_property_basics_h__
+#pragma once
 
 #include <glib.h>
 #include <set>
@@ -29,10 +28,8 @@
 #include "pbd/libpbd_visibility.h"
 #include "pbd/xml++.h"
 
-class Command;
-
 namespace PBD {
-
+class LIBPBD_API Command;
 class LIBPBD_API PropertyList;
 class LIBPBD_API StatefulDiffCommand;
 
@@ -140,7 +137,7 @@ public:
 	virtual void get_changes_as_properties (PropertyList& changes, Command *) const = 0;
 
 	/** Collect StatefulDiffCommands for changes to anything that we own */
-	virtual void rdiff (std::vector<Command*> &) const {}
+	virtual void rdiff (std::vector<PBD::Command*> &) const {}
 
 	/** Look in an XML node written by get_changes_as_xml and, if XML from this property
 	 *  is found, create a property with the changes from the XML.
@@ -175,4 +172,7 @@ private:
 
 }
 
-#endif /* __libpbd_property_basics_h__ */
+namespace std {
+	LIBPBD_API ostream& operator<< (std::ostream& os, PBD::PropertyChange const & pc);
+}
+

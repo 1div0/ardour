@@ -16,17 +16,15 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_gtk_trigger_ui_h__
-#define __ardour_gtk_trigger_ui_h__
+#pragma once
 
-#include "gtkmm/colorselection.h"
+#include "ytkmm/entry.h"
 
 #include "gtkmm2ext/actions.h"
 #include "gtkmm2ext/bindings.h"
 
 #include "ardour/triggerbox.h"
 #include "widgets/ardour_button.h"
-#include "widgets/slider_controller.h"
 #include "widgets/frame.h"
 
 namespace Gtk
@@ -36,6 +34,7 @@ namespace Gtk
 }
 
 class TriggerJumpDialog;
+class StripableColorDialog;
 
 class TriggerUI : virtual public sigc::trackable
 {
@@ -68,12 +67,12 @@ public:
 	ARDOUR::TriggerPtr       trigger() const;
 	ARDOUR::TriggerBox&		 triggerbox() const { return trigger()->box(); }
 
-	void choose_color ();
+	void choose_color (Gtk::Window*);
 	void choose_sample (bool allow_multiple_select);
 	void sample_chosen (int r);
 
 	void launch_context_menu ();
-	void follow_context_menu ();
+	void follow_context_menu (GdkEventButton*);
 	void context_menu ();
 
 	void edit_jump_done (int r, TriggerJumpDialog* d);
@@ -122,15 +121,15 @@ protected:
 	Gtk::Menu*              _context_menu;
 	bool                    _ignore_menu_action;
 
-	Gtk::ColorSelectionDialog   _color_dialog;
+	StripableColorDialog*   _color_dialog;
 
 	void                  trigger_swap (uint32_t);
 	PBD::ScopedConnection trigger_swap_connection;
 
 	ARDOUR::TriggerReference tref;
+	sigc::connection          color_connection;
 	PBD::ScopedConnectionList trigger_connections;
 };
 
 
 
-#endif /* __ardour_gtk_trigger_ui_h__ */

@@ -22,10 +22,10 @@
 
 #include <sigc++/bind.h>
 
-#include <gtkmm/box.h>
-#include <gtkmm/filechooserdialog.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
+#include <ytkmm/box.h>
+#include <ytkmm/filechooserdialog.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "pbd/error.h"
 #include "pbd/file_utils.h"
@@ -67,7 +67,7 @@ VideoServerDialog::VideoServerDialog (Session* s)
 	, listenport_spinner (listenport_adjustment)
 	, cachesize_adjustment (256, 32, 32768, 1, 32, 0)
 	, cachesize_spinner (cachesize_adjustment)
-	, showagain_checkbox (_("Don't show this dialog again. (Reset in Edit->Preferences)."))
+	, showagain_checkbox (_("Do not show this dialog again (reset in Preferences > Video)."))
 {
 	set_session (s);
 
@@ -161,7 +161,7 @@ VideoServerDialog::VideoServerDialog (Session* s)
 	t->attach (cachesize_spinner, 1, 2, 2, 3);
 
 	l = manage (new Label (string_compose(
-					_("%1 relies on an external video server for the videotimeline.\nThe server configured in Edit -> Preferences -> Video is not reachable.\nDo you want %1 to launch 'harvid' on this machine?"), PROGRAM_NAME)
+					_("%1 relies on an external video server for the videotimeline.\nThe server configured in Preferences -> Video is not reachable.\nDo you want %1 to launch 'harvid' on this machine?"), PROGRAM_NAME)
 				, Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	l->set_max_width_chars(80);
 	l->set_line_wrap();

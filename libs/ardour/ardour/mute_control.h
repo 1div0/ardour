@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_mute_control_h__
-#define __ardour_mute_control_h__
+#pragma once
 
 #include <memory>
 #include <string>
@@ -36,7 +35,7 @@ class Muteable;
 class LIBARDOUR_API MuteControl : public SlavableAutomationControl
 {
 public:
-	MuteControl (Session& session, std::string const& name, Muteable&, Temporal::TimeDomain td);
+	MuteControl (Session& session, std::string const& name, Muteable&, Temporal::TimeDomainProvider const &);
 
 	double get_value () const;
 	double get_save_value() const { return muted_by_self(); }
@@ -83,4 +82,3 @@ private:
 
 } /* namespace */
 
-#endif /* __libardour_mute_control_h__ */

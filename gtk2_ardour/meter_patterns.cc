@@ -18,7 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/drawingarea.h>
+#include <ytkmm/drawingarea.h>
 
 #include <gtkmm2ext/cairo_widget.h>
 #include <gtkmm2ext/gtk_ui.h>
@@ -48,11 +48,10 @@ static const int max_pattern_metric_size = 1026;
 
 sigc::signal<void> ArdourMeter::ResetAllPeakDisplays;
 sigc::signal<void,ARDOUR::Route*> ArdourMeter::ResetRoutePeakDisplays;
-sigc::signal<void,ARDOUR::RouteGroup*> ArdourMeter::ResetGroupPeakDisplays;
+sigc::signal<void,std::shared_ptr<ARDOUR::RouteGroup>> ArdourMeter::ResetGroupPeakDisplays;
 sigc::signal<void> ArdourMeter::RedrawMetrics;
 
-sigc::signal<void, int, ARDOUR::RouteGroup*, ARDOUR::MeterType> ArdourMeter::SetMeterTypeMulti;
-
+sigc::signal<void, int, std::shared_ptr<ARDOUR::RouteGroup>, ARDOUR::MeterType> ArdourMeter::SetMeterTypeMulti;
 
 /* pattern cache */
 

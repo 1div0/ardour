@@ -1,18 +1,13 @@
 #!/usr/bin/env python
 from waflib.extras import autowaf as autowaf
-from waflib import Options
 import os
 import sys
-import re
+import platform as PLATFORM
 
 I18N_PACKAGE = 'portaudio-backend'
 
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     autowaf.check_pkg(conf, 'portaudio-2.0', uselib_store='PORTAUDIO', atleast_version='19')
@@ -32,6 +27,9 @@ def build_portaudio (bld, name, defines):
     obj.target   = name
     obj.use      = 'libardour libpbd'
     obj.uselib   = 'PORTAUDIO GLIBMM XML'
+    if bld.env['build_target'] == 'mingw' and sys.platform == "win32":
+        obj.stlib = ['portaudio']
+        obj.lib = ['ole32', 'setupapi', 'uuid', 'winmm', 'ksuser', 'jack64']
     obj.install_path  = os.path.join(bld.env['LIBDIR'], 'backends')
     obj.defines = ['PACKAGE="' + I18N_PACKAGE + '"',
                    'ARDOURBACKEND_DLL_EXPORTS',

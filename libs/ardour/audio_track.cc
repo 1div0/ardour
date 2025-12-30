@@ -23,8 +23,6 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <boost/scoped_array.hpp>
-
 #include "pbd/enumwriter.h"
 #include "pbd/error.h"
 
@@ -91,7 +89,7 @@ AudioTrack::set_state (const XMLNode& node, int version)
 	pending_state = const_cast<XMLNode*> (&node);
 
 	if (_session.loading ()) {
-		_session.StateReady.connect_same_thread (*this, boost::bind (&AudioTrack::set_state_part_two, this));
+		_session.StateReady.connect_same_thread (*this, std::bind (&AudioTrack::set_state_part_two, this));
 	} else {
 		set_state_part_two ();
 	}
@@ -209,8 +207,8 @@ AudioTrack::export_stuff (BufferSet& buffers, samplepos_t start, samplecnt_t nfr
                           std::shared_ptr<Processor> endpoint, bool include_endpoint, bool for_export, bool for_freeze,
                           MidiNoteTracker& /* ignored, this is audio */)
 {
-	boost::scoped_array<gain_t> gain_buffer (new gain_t[nframes]);
-	boost::scoped_array<Sample> mix_buffer (new Sample[nframes]);
+	std::unique_ptr<gain_t[]> gain_buffer (new gain_t[nframes]);
+	std::unique_ptr<Sample[]> mix_buffer (new Sample[nframes]);
 
 	Glib::Threads::RWLock::ReaderLock rlock (_processor_lock);
 
@@ -304,24 +302,6 @@ AudioTrack::bounceable (std::shared_ptr<Processor> endpoint, bool include_endpoi
 	}
 
 	return true;
-}
-
-std::shared_ptr<Region>
-AudioTrack::bounce (InterThreadInfo& itt, std::string const& name)
-{
-	return bounce_range (_session.current_start_sample(), _session.current_end_sample(), itt, main_outs(), false, name);
-}
-
-std::shared_ptr<Region>
-AudioTrack::bounce_range (samplepos_t start,
-                          samplepos_t end,
-                          InterThreadInfo& itt,
-                          std::shared_ptr<Processor> endpoint,
-                          bool include_endpoint,
-                          std::string const& name)
-{
-	vector<std::shared_ptr<Source> > srcs;
-	return _session.write_one_track (*this, start, end, false, srcs, itt, endpoint, include_endpoint, false, false, name);
 }
 
 void
@@ -449,8 +429,8 @@ void
 AudioTrack::unfreeze ()
 {
 	if (_freeze_record.playlist) {
-		_freeze_record.playlist->release();
 		use_playlist (DataType::AUDIO, _freeze_record.playlist);
+		_freeze_record.playlist->release();
 
 		{
 			Glib::Threads::RWLock::ReaderLock lm (_processor_lock); // should this be a write lock? jlc

@@ -17,8 +17,7 @@
 
 */
 
-#ifndef __temporal_debug_h__
-#define __temporal_debug_h__
+#pragma once
 
 #include "temporal/visibility.h"
 #include "pbd/debug.h"
@@ -31,8 +30,8 @@ namespace PBD {
 		LIBTEMPORAL_API extern DebugBits SnapBBT;
 		LIBTEMPORAL_API extern DebugBits Beats;
 		LIBTEMPORAL_API extern DebugBits MapReset;
+		LIBTEMPORAL_API extern DebugBits ScopedTempoMap;
 	}
 }
 
-#endif /* __ardour_debug_h__ */
 

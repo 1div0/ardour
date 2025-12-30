@@ -17,7 +17,7 @@ TempoMapTest::createTest()
 void
 TempoMapTest::addTest()
 {
-	TempoMap::WritableSharedPtr tmap (TempoMap::write_copy());
+	TempoMap::WritableSharedPtr tmap (new TempoMap(Tempo (120,4), Meter (4,4))); // TempoMap::write_copy());
 	TempoPoint& tp = tmap->set_tempo (Tempo (180, 4), BBT_Argument (6, 1, 0));
 	tmap->set_meter (Meter (6, 8), BBT_Argument (3, 1, 0));
 
@@ -31,6 +31,27 @@ TempoMapTest::addTest()
 
 	CPPUNIT_ASSERT (tp.beats() == Beats (17,0));
 
+
+	tmap->abort_update ();
+}
+
+void
+TempoMapTest::addRemoveTest()
+{
+	TempoMap::WritableSharedPtr tmap (TempoMap::write_copy());
+
+	tmap->set_tempo (Tempo (120, 4), BBT_Argument (5, 1, 0));
+	tmap->set_meter (Meter (2, 4), BBT_Argument (5, 1, 0));
+
+	TempoPoint& tp = tmap->set_tempo (Tempo (120, 4), BBT_Argument (7, 1, 0));
+	tmap->set_meter (Meter (4, 4), BBT_Argument (7, 1, 0));
+
+	tmap->replace_tempo (tp, Tempo (64, 4), timepos_t (tp.beats()));
+	tmap->dump (std::cout);
+
+	CPPUNIT_ASSERT (tmap->tempo_at (BBT_Argument (8, 1, 0)).note_types_per_minute() == Tempo (64, 4).note_types_per_minute());
+	CPPUNIT_ASSERT (tmap->count_tempos_in_points () == 3);
+	CPPUNIT_ASSERT (tmap->count_meters_in_points () == 3);
 
 	tmap->abort_update ();
 }
@@ -54,4 +75,5 @@ void
 TempoMapTest::convertTest()
 {
 }
+
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2019 Damien Zammit <damien@zamaudio.com>
+ * Copyright (C) 2018-2023 Damien Zammit <damien@zamaudio.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,9 +18,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <errno.h>
-#include <unistd.h>
 #include <algorithm>
 #include <glibmm.h>
 
@@ -38,6 +36,7 @@
 #include "ardour/midi_track.h"
 #include "ardour/midi_model.h"
 #include "ardour/operations.h"
+#include "ardour/debug.h"
 #include "ardour/region_factory.h"
 #include "ardour/smf_source.h"
 #include "ardour/source_factory.h"
@@ -277,15 +276,14 @@ Session::import_pt_rest (PTFFormat& ptf)
 	vector<string> to_import;
 	string fullpath;
 	uint32_t srate = sample_rate ();
+	timepos_t latest = timepos_t (0);
 
 	vector<struct ptflookup> ptfregpair;
 
 	SourceList just_one_src;
 
 	std::shared_ptr<AudioTrack> existing_track;
-	uint16_t i;
 	uint16_t nth = 0;
-	uint16_t ntr = 0;
 	struct ptflookup utr;
 	vector<midipair> uniquetr;
 
@@ -332,37 +330,37 @@ Session::import_pt_rest (PTFFormat& ptf)
 		}
 	}
 
+	std::map<std::string, shared_ptr<AudioTrack>> track_map;
+
 	/* Check for no audio */
 	if (ptf.tracks ().size () == 0) {
 		goto no_audio_tracks;
 	}
 
-	/* Create all tracks */
-	ntr = (ptf.tracks ().at (ptf.tracks ().size () - 1)).index + 1;
+	/* Create all PT tracks if not already present and freeze all playlists of tracks we will touch */
 	nth = -1;
 	for (vector<PTFFormat::track_t>::const_iterator a = ptf.tracks ().begin (); a != ptf.tracks ().end (); ++a) {
 		if (a->index != nth) {
 			nth++;
-			DEBUG_TRACE (DEBUG::FileUtils, string_compose ("\tcreate tr(%1) %2\n", nth, a->name.c_str()));
-			list<std::shared_ptr<AudioTrack> > at (new_audio_track (1, 2, 0, 1, a->name.c_str(), PresentationInfo::max_order, Normal));
-			if (at.empty ()) {
-				return;
+			if (!(existing_track = dynamic_pointer_cast<AudioTrack> (route_by_name (a->name)))) {
+				/* Create missing track */
+				DEBUG_TRACE (DEBUG::PTImport, string_compose ("Create tr(%1) '%2'\n", nth, a->name));
+				list<std::shared_ptr<AudioTrack> > at (new_audio_track (1, 2, 0, 1, a->name.c_str(), PresentationInfo::max_order, Normal));
+				if (at.empty ()) {
+					return;
+				}
+				existing_track = at.back();
 			}
+			track_map[a->name] = existing_track;
+			std::shared_ptr<Playlist> playlist = existing_track->playlist();
+
+			PlaylistState before;
+			before.playlist = playlist;
+			before.before = &playlist->get_state();
+			playlist->clear_changes ();
+			playlist->freeze ();
+			playlists.push_back(before);
 		}
-	}
-
-	/* Get all playlists of all tracks and Playlist::freeze() all tracks */
-	assert (ntr == nth + 1);
-	for (i = 0; i < ntr; ++i) {
-		existing_track = get_nth_audio_track (i);
-		std::shared_ptr<Playlist> playlist = existing_track->playlist();
-
-		PlaylistState before;
-		before.playlist = playlist;
-		before.before = &playlist->get_state();
-		playlist->clear_changes ();
-		playlist->freeze ();
-		playlists.push_back(before);
 	}
 
 	/* Add regions */
@@ -374,10 +372,10 @@ Session::import_pt_rest (PTFFormat& ptf)
 
 				/* Matched a ptf active region to an ardour region */
 				std::shared_ptr<Region> r = RegionFactory::region_by_id (p->id);
-				DEBUG_TRACE (DEBUG::FileUtils, string_compose ("\twav(%1) reg(%2) tr(%3)\n", a->reg.wave.filename.c_str (), a->reg.index, a->index));
+				DEBUG_TRACE (DEBUG::PTImport, string_compose ("wav(%1) reg(%2) tr(%3) '%4'\n", a->reg.wave.filename, a->reg.index, a->index, a->name));
 
-				/* Use track we created earlier */
-				existing_track = get_nth_audio_track (a->index);
+				/* Use audio track we know exists */
+				existing_track = track_map[a->name];
 				assert (existing_track);
 
 				/* Put on existing track */
@@ -386,9 +384,19 @@ Session::import_pt_rest (PTFFormat& ptf)
 				playlist->clear_changes ();
 				playlist->add_region (copy, timepos_t (a->reg.startpos));
 				//add_command (new StatefulDiffCommand (playlist));
+
+				/* Collect latest end of all regions */
+				timepos_t end_of_region = timepos_t (a->reg.startpos + a->reg.length);
+				if (latest < end_of_region) {
+					latest = end_of_region;
+				}
 			}
 		}
 	}
+
+	track_map.clear ();
+
+	maybe_update_session_range (timepos_t (0), latest);
 
 	/* Playlist::thaw() all tracks */
 	for (pl = playlists.begin(); pl != playlists.end(); ++pl) {
@@ -421,7 +429,7 @@ no_audio_tracks:
 				ChanCount (DataType::MIDI, 1),
 				true,
 				instrument, (Plugin::PresetRecord*) 0,
-				(RouteGroup*) 0,
+				nullptr,
 				1,
 				a->trname,
 				PresentationInfo::max_order,
@@ -462,7 +470,7 @@ no_audio_tracks:
 			/* PT C-2 = 0, Ardour C-1 = 0, subtract twelve to convert ? */
 			midicmd->add (std::shared_ptr<Evoral::Note<Temporal::Beats> > (new Evoral::Note<Temporal::Beats> ((uint8_t)1, start, len, j->note, j->velocity)));
 		}
-		mm->apply_diff_command_only (*this, midicmd);
+		mm->apply_diff_command_only (midicmd);
 		delete midicmd;
 		std::shared_ptr<Region> copy (RegionFactory::create (mr, true));
 		playlist->clear_changes ();

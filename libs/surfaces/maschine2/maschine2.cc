@@ -42,7 +42,7 @@
 
 #include "canvas.h"
 
-#include "pbd/abstract_ui.cc" // instantiate template, includes i18n
+#include "pbd/abstract_ui.inc.cc" // instantiate template, includes i18n
 
 using namespace ARDOUR;
 using namespace PBD;
@@ -103,6 +103,16 @@ class TestLayout : public Maschine2Layout
 static TestLayout* tl = NULL;
 #endif
 
+bool
+Maschine2::available ()
+{
+	if (hid_init()) {
+		return false;
+	}
+	hid_exit ();
+	return true;
+}
+
 Maschine2::Maschine2 (ARDOUR::Session& s)
 	: ControlProtocol (s, string (X_("NI Maschine2")))
 	, AbstractUI<Maschine2Request> (name())
@@ -123,12 +133,6 @@ Maschine2::~Maschine2 ()
 {
 	stop ();
 	hid_exit ();
-}
-
-void*
-Maschine2::request_factory (uint32_t num_requests)
-{
-	return request_buffer_factory (num_requests);
 }
 
 void
@@ -303,16 +307,9 @@ Maschine2::stop ()
 void
 Maschine2::thread_init ()
 {
-	pthread_set_name (event_loop_name().c_str());
 	ARDOUR::SessionEvent::create_per_thread_pool (event_loop_name(), 1024);
 	PBD::notify_event_loops_about_thread_creation (pthread_self(), event_loop_name(), 1024);
-
-	struct sched_param rtparam;
-	memset (&rtparam, 0, sizeof (rtparam));
-	rtparam.sched_priority = 9; /* XXX should be relative to audio (JACK) thread */
-	if (pthread_setschedparam (pthread_self(), SCHED_FIFO, &rtparam) != 0) {
-		// do we care? not particularly.
-	}
+	set_thread_priority ();
 }
 
 void

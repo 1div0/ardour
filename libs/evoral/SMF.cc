@@ -33,6 +33,9 @@
 
 #include "libsmf/smf.h"
 
+#include "temporal/tempo.h"
+#include "temporal/beats.h"
+
 #include "evoral/Event.h"
 #include "evoral/SMF.h"
 #include "evoral/midi_util.h"
@@ -46,8 +49,8 @@ using namespace std;
 namespace Evoral {
 
 SMF::SMF()
-	: _smf (0)
-	, _smf_track (0)
+	: _smf (nullptr)
+	, _smf_track (nullptr)
 	, _empty (true)
 	, _n_note_on_events (0)
 	, _has_pgm_change (false)
@@ -235,7 +238,7 @@ SMF::create(const std::string& path, int track, uint16_t ppqn)
 
 	_smf = smf_new();
 
-	if (_smf == NULL) {
+	if (_smf == nullptr) {
 		return -1;
 	}
 
@@ -320,20 +323,22 @@ SMF::seek_to_start() const
  * a meta event, or -1 on EOF (or end of track).
  */
 int
-SMF::read_event(uint32_t* delta_t, uint32_t* size, uint8_t** buf, event_id_t* note_id) const
+SMF::read_event(uint32_t* delta_t, uint32_t* bufsize, uint8_t** buf, event_id_t* note_id) const
 {
 	Glib::Threads::Mutex::Lock lm (_smf_lock);
 
 	smf_event_t* event;
+	bool is_meta;
 
-	assert(delta_t);
-	assert(size);
-	assert(buf);
-	assert(note_id);
+	assert (delta_t);
+	assert (bufsize);
+	assert (buf);
+	assert (note_id);
 
 	if ((event = smf_track_get_next_event(_smf_track)) != NULL) {
 
 		*delta_t = event->delta_time_pulses;
+		is_meta = false;
 
 		if (smf_event_is_metadata(event)) {
 			*note_id = -1; // "no note id in this meta-event */
@@ -353,53 +358,129 @@ SMF::read_event(uint32_t* delta_t, uint32_t* size, uint8_t** buf, event_id_t* no
 
 						if (smf_extract_vlq (&event->midi_buffer[4+lenlen], event->midi_buffer_length-(4+lenlen), &id, &idlen) == 0) {
 							*note_id = id;
+							return 0;
 						}
 					}
 				}
+
+				/* We do not return sequencer-specific events
+				 * that are not known to us.
+				 */
+
+				return 0;
 			}
-			return 0; /* this is a meta-event */
+
+			is_meta = true;
 		}
 
 		uint32_t event_size = (uint32_t) event->midi_buffer_length;
 		assert(event_size > 0);
 
 		// Make sure we have enough scratch buffer
-		if (*size < (unsigned)event_size) {
+		if (*bufsize < (unsigned)event_size) {
 			*buf = (uint8_t*)realloc(*buf, event_size);
 		}
 		assert (*buf);
 		memcpy(*buf, event->midi_buffer, size_t(event_size));
-		*size = event_size;
+		*bufsize = event_size;
+
 		if (((*buf)[0] & 0xF0) == 0x90 && (*buf)[2] == 0) {
 			/* normalize note on with velocity 0 to proper note off */
 			(*buf)[0] = 0x80 | ((*buf)[0] & 0x0F);  /* note off */
 			(*buf)[2] = 0x40;  /* default velocity */
 		}
 
-		if (!midi_event_is_valid(*buf, *size)) {
+		if (is_meta) {
+			return 0;
+		}
+
+		if (!midi_event_is_valid (*buf, *bufsize)) {
 			cerr << "WARNING: SMF ignoring illegal MIDI event" << endl;
-			*size = 0;
+			*bufsize = 0;
 			return -1;
 		}
 
-		/* printf("SMF::read_event @ %u: ", *delta_t);
-		   for (size_t i = 0; i < *size; ++i) {
+		/*
+		  printf("SMF::read_event @ %u: ", *delta_t);
+		   for (size_t i = 0; i < *bufsize; ++i) {
 		   printf("%X ", (*buf)[i]);
-		   } printf("\n") */
-
+		   } printf("\n");
+		*/
 		return event_size;
 	} else {
 		return -1;
 	}
 }
 
-void
-SMF::append_event_delta(uint32_t delta_t, uint32_t size, const uint8_t* buf, event_id_t note_id)
+bool
+SMF::is_meta (uint8_t const* buf, uint32_t size)
+{
+	if (size < 2) {
+		return false;
+	}
+
+	/* unlike the libsmf version of this functionality, this explicitly
+	 * tests for known metadata event types, and only allows them.
+	 */
+
+	if (buf[0] == 0xff) {
+		switch (buf[1]) {
+		case 0x00: /* seq num */
+		case 0x01: /* text */
+		case 0x02: /* copyright */
+		case 0x03: /* track name */
+		case 0x04: /* instrument name */
+		case 0x05: /* lyric */
+		case 0x06: /* marker */
+		case 0x07: /* cue point */
+		case 0x20: /* channel prefix */
+		case 0x2f: /* end of track */
+		case 0x51: /* set tempo */
+		case 0x54: /* smpte offset */
+		case 0x58: /* time signature */
+		case 0x59: /* key signaturey */
+		case 0x7f: /* seq-specific */
+			return true;
+		default:
+			break;
+		}
+	}
+
+	return false;
+}
+
+bool
+SMF::is_tempo_or_meter_related (uint8_t const* buf, uint32_t size)
+{
+	if (size < 2) {
+		return false;
+	}
+
+	/* unlike the libsmf version of this functionality, this explicitly
+	 * tests for known metadata event types, and only allows them.
+	 */
+
+	if (buf[0] == 0xff) {
+		switch (buf[1]) {
+		case 0x51: /* set tempo */
+		case 0x58: /* time signature */
+		case 0x59: /* key signaturey */
+			return true;
+		default:
+			break;
+		}
+	}
+
+	return false;
+}
+
+int
+SMF::append_event_delta (uint32_t delta_t, uint32_t size, const uint8_t* buf, event_id_t note_id, bool allow_meta)
 {
 	Glib::Threads::Mutex::Lock lm (_smf_lock);
 
 	if (size == 0) {
-		return;
+		return 0;
 	}
 
 	/* printf("SMF::append_event_delta @ %u:", delta_t);
@@ -421,15 +502,29 @@ SMF::append_event_delta(uint32_t delta_t, uint32_t size, const uint8_t* buf, eve
 	case 0xfc:
 	case 0xfd:
 	case 0xfe:
-	case 0xff:
 		/* System Real Time or System Common event: not valid in SMF
 		 */
-		return;
+		return 0;
 	}
 
-	if (!midi_event_is_valid(buf, size)) {
-		cerr << "WARNING: SMF ignoring illegal MIDI event" << endl;
-		return;
+	if (buf[0] == 0xff) { /* meta event */
+
+		if (!is_meta (buf, size) || !allow_meta) {
+			return 0;
+		}
+
+	} else {
+
+		if (!midi_event_is_valid(buf, size)) {
+			std::cerr << "WARNING: SMF ignoring illegal MIDI event (size " << size << "): ";
+			std::cerr << std::hex;
+			for (size_t n = 0; n < size; ++n) {
+				std::cerr << "0x" << (int) buf[n] << ' ';
+			}
+			std::cerr << std::dec << std::endl;
+			return 0;
+		}
+
 	}
 
 	smf_event_t* event;
@@ -487,6 +582,8 @@ SMF::append_event_delta(uint32_t delta_t, uint32_t size, const uint8_t* buf, eve
 	assert(_smf_track);
 	smf_track_add_event_delta_pulses(_smf_track, event, delta_t);
 	_empty = false;
+
+	return size;
 }
 
 void
@@ -501,11 +598,19 @@ SMF::begin_write()
 	assert(_smf_track);
 
 	smf_add_track(_smf, _smf_track);
-	assert(_smf->number_of_tracks == 1);
 }
 
 void
-SMF::end_write(string const & path)
+SMF::end_track ()
+{
+	/* nothing to do in libsmf API to "close" the track, it seems */
+	_smf_track = smf_track_new();
+	assert (_smf_track);
+	smf_add_track(_smf, _smf_track);
+}
+
+void
+SMF::end_write (string const & path)
 {
 	Glib::Threads::Mutex::Lock lm (_smf_lock);
 
@@ -518,6 +623,18 @@ SMF::end_write(string const & path)
 		throw FileError (path);
 	}
 
+	Temporal::Beats b = duration();
+
+	if (b != std::numeric_limits<Temporal::Beats>::max()) {
+
+		int64_t their_pulses = b.to_ticks (_smf->ppqn);
+
+		for (uint16_t n = 0; n < _smf->number_of_tracks; ++n) {
+			smf_track_t* trk = smf_get_track_by_number (_smf, n+1);
+			 (void) smf_track_add_eot_pulses (trk, their_pulses);
+		}
+	}
+
 	if (smf_save(_smf, f) != 0) {
 		fclose(f);
 		throw FileError (path);
@@ -526,12 +643,37 @@ SMF::end_write(string const & path)
 	fclose(f);
 }
 
+Temporal::Beats
+SMF::file_duration () const
+{
+	if (!_smf) {
+		return Temporal::Beats();
+	}
+
+	return Temporal::Beats::ticks_at_rate (smf_get_length_pulses (_smf), ppqn());
+}
+
+bool
+SMF::duration_is_explicit () const
+{
+	if (!_smf) {
+		return false;
+	}
+
+	return smf_length_is_explicit (_smf);
+}
+
 double
 SMF::round_to_file_precision (double val) const
 {
 	double div = ppqn();
 
 	return round (val * div) / div;
+}
+
+static bool invalid_char (unsigned char c)
+{
+	return !isprint (c) && c != '\n';
 }
 
 void
@@ -551,7 +693,9 @@ SMF::track_names(vector<string>& names) const
 			names.push_back (string());
 		} else {
 			if (trk->name) {
-				names.push_back (Glib::convert_with_fallback (trk->name, "UTF-8", "ISO-8859-1", "_"));
+				std::string name (Glib::convert_with_fallback (trk->name, "UTF-8", "ISO-8859-1", "_"));
+				name.erase (std::remove_if (name.begin(), name.end(), invalid_char), name.end());
+				names.push_back (name);
 			} else {
 				char buf[32];
 				sprintf(buf, "t%d", n+1);
@@ -578,7 +722,9 @@ SMF::instrument_names(vector<string>& names) const
 			names.push_back (string());
 		} else {
 			if (trk->instrument) {
-				names.push_back (trk->instrument);
+				std::string name (Glib::convert_with_fallback (trk->instrument, "UTF-8", "ISO-8859-1", "_"));
+				name.erase (std::remove_if (name.begin(), name.end(), invalid_char), name.end());
+				names.push_back (name);
 			} else {
 				char buf[32];
 				sprintf(buf, "i%d", n+1);
@@ -686,6 +832,68 @@ SMF::load_markers ()
 			_markers.push_back (MarkerAt (marker, event->time_pulses));
 		}
 	}
+}
+
+std::shared_ptr<Temporal::TempoMap>
+SMF::tempo_map (bool& provided) const
+{
+	using namespace Temporal;
+	/* cannot create an empty TempoMap, so create one with "default" single
+	   values for tempo and meter, then overwrite them.
+	*/
+
+	std::shared_ptr<TempoMap> new_map (new TempoMap (Temporal::Tempo (120, 4), Temporal::Meter (4, 4)));
+	const size_t ntempos = num_tempos ();
+
+	if (ntempos == 0) {
+		provided = false;
+		return new_map;
+	}
+
+	Meter last_meter (4, 4);
+	bool have_initial_meter = false;
+	bool empty (true);
+	new_map->smf_begin ();
+
+	for (size_t n = 0; n < ntempos; ++n) {
+
+		Evoral::SMF::Tempo* t = nth_tempo (n);
+		assert (t);
+
+		Temporal::Tempo tempo (t->tempo(), 32.0 / (double) t->notes_per_note);
+		Meter meter (t->numerator, t->denominator);
+
+		Beats beats (t->time_pulses / (uint64_t) ppqn(),
+		                       ((t->time_pulses % (uint64_t) ppqn()) * ticks_per_beat) / ppqn());;
+		BBT_Argument bbt; /* 1|1|0 which is correct for the no-meter case */
+		superclock_t sc;
+
+		if (empty) {
+			sc = 0;
+		} else {
+			sc =  new_map->superclock_at (beats);
+		}
+
+		if (have_initial_meter) {
+			bbt = new_map->bbt_at (timepos_t (beats));
+		}
+
+		TempoPoint* tp = new TempoPoint (*new_map, tempo, sc, beats, bbt);
+		new_map->smf_add (*tp);
+
+		if (!have_initial_meter || !(meter == last_meter)) {
+			MeterPoint* mp = new MeterPoint (*new_map, meter, sc, beats, bbt);
+			new_map->smf_add (*mp);
+			have_initial_meter = true;
+		}
+
+		last_meter = meter;
+		empty = false;
+	}
+	new_map->smf_end();
+
+	provided = true;
+	return new_map;
 }
 
 } // namespace Evoral

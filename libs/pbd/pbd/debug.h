@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libpbd_debug_h__
-#define __libpbd_debug_h__
+#pragma once
 
 #include <bitset>
 #include <stdint.h>
@@ -30,8 +29,8 @@
 #include "pbd/libpbd_visibility.h"
 #include "pbd/timing.h"
 
-/* check for PTW32_VERSION */
-#ifdef COMPILER_MSVC
+/* check for __PTW32_VERSION */
+#if defined (COMPILER_MSVC) && !defined (WAF_BUILD)
 #include <ardourext/pthread.h>
 #else
 #include <pthread.h>
@@ -39,11 +38,12 @@
 
 namespace PBD {
 
-	typedef std::bitset<128> DebugBits;
+	typedef std::bitset<256> DebugBits;
 
 	LIBPBD_API extern DebugBits debug_bits;
 	LIBPBD_API DebugBits new_debug_bit (const char* name);
 	LIBPBD_API void debug_print (const char* prefix, std::string str);
+	LIBPBD_API void debug_only_print (const char* prefix, std::string str);
 	LIBPBD_API void set_debug_bits (DebugBits bits);
 	LIBPBD_API int parse_debug_options (const char* str);
 	LIBPBD_API void list_debug_options ();
@@ -63,6 +63,7 @@ namespace PBD {
 		LIBPBD_API extern DebugBits UndoHistory;
 		LIBPBD_API extern DebugBits Timing;
 		LIBPBD_API extern DebugBits Threads;
+		LIBPBD_API extern DebugBits ThreadName;
 		LIBPBD_API extern DebugBits Locale;
 		LIBPBD_API extern DebugBits StringConvert;
 		LIBPBD_API extern DebugBits DebugTimestamps;
@@ -70,8 +71,8 @@ namespace PBD {
 
 		/* See notes in ../debug.cc on why these are defined here */
 
-                LIBPBD_API extern DebugBits WavesMIDI;
-                LIBPBD_API extern DebugBits WavesAudio;
+		LIBPBD_API extern DebugBits WavesMIDI;
+		LIBPBD_API extern DebugBits WavesAudio;
 	}
 }
 
@@ -82,10 +83,12 @@ namespace PBD {
 #define DEBUG_STR(id) __debug_str ## id
 #define DEBUG_STR_APPEND(id,s) __debug_str ## id << s;
 #define DEBUG_ENABLED(bits) (((bits) & PBD::debug_bits).any())
-#ifdef PTW32_VERSION
+#ifdef __PTW32_VERSION
 #define DEBUG_THREAD_SELF pthread_self().p
+#define DEBUG_THREAD_PRINT(t) t.p
 #else
 #define DEBUG_THREAD_SELF pthread_self()
+#define DEBUG_THREAD_PRINT(t) t
 #endif
 
 #define DEBUG_TIMING_START(bits,td) if (DEBUG_ENABLED (bits)) { td.start_timing (); }
@@ -113,5 +116,4 @@ namespace PBD {
 #define DEBUG_RESULT_CAST(type,var,cast_expr,...) __VA_ARGS__
 #define DEBUG_ASSIGN(var,expr)
 #endif
-#endif /* __libpbd_debug_h__ */
 

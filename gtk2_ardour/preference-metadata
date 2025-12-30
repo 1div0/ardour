@@ -10,9 +10,6 @@
 # [never-do-that-thing]
 #   thing that action prevent never stop otherthing
 #
-# The file is processed via tools/process-metadata to create build/gtk2_ardour/configuration_metadata.h which is then incorporated via an #include directive
-# within gtk2_ardour/ui_config.cc
-#
 # Whenever a new preference variable is added to the source code, its name should also be added here.
 #
 # GUIDANCE:
@@ -20,6 +17,12 @@
 #   use "synchronization" rather than sync, because that will match both "sync" and "synchronization". For languages that create plurals with a suffix,
 #   prefer plural forms for the same reason.
 #
+# This file is processed automatically when invoking a custom tool manually:
+#
+#   tools/process-metadata gtk2_ardour/preference-metadata > gtk2_ardour/configuration_metadata.inc.h
+#
+# The generated file is incorporated via an #include directive within gtk2_ardour/ui_config.cc .
+
 [SECTION:UI]
 
 [action-table-columns]
@@ -49,9 +52,9 @@
 [clock-display-limit]
   clock display limit length maximum duration
 [color-file]
- theme colors appearance style themeing
+ theme colors appearance style theming
 [color-regions-using-track-color]
- theme colors appearance style themeing
+ theme colors appearance style theming
 [default-bindings]
  shortcuts keys keybindings bindings
 [default-lower-midi-note]
@@ -121,6 +124,8 @@
   sysex mtc midi regions messages events
 [new-automation-points-on-lane]
   automation y-axis click draw lane points
+[note-name-display]
+  notes names midnam display show
 [no-new-session-dialog]
 [one-plugin-window-only]
   plugins window single close
@@ -132,6 +137,8 @@
   plugins gui resources vst destroy window
 [prefer-inline-over-gui]
   plugins inline mixer strip
+[prefer-tap-tempo]
+  tap tempo preference
 [preview-video-frame-on-drag]
 [primary-clock-delta-mode]
   clocks mode primary delta difference edit cursor playhead
@@ -170,6 +177,8 @@
   regions gain envelope volume modes
 [show-region-name]
   regions name appearance editor
+[show-selection-marker]
+  selection ruler marker range
 [show-region-xrun-markers]
   regions xruns markers dropouts
 [show-secondary-clock]
@@ -200,10 +209,14 @@
 [show-zoom-tools]
 [snap-threshold]
   snap threshold distance mouse
+[snap-target]
+  snap grid target
 [snap-to-grid]
   snap grid editor mouse
 [snap-to-marks]
   snap grid editor mouse markers marks
+[snap-to-playhead]
+  snap grid editor mouse playhead
 [snap-to-region-end]
   snap grid editor mouse regions boundaries boundary
 [snap-to-region-start]
@@ -258,6 +271,10 @@
   waveform rectified half shape display
 [widget-prelight]
   highlight mouse prelight hover indicate
+[drag-sensitivity]
+  drag sensitivity sensitive move threshold
+[region-edit-disposition]
+  region edit editing window windows pianoroll editor pane bottom lower
 
 [SECTION:Session]
 
@@ -270,13 +287,11 @@
 [count-in]
   transport count in count-in 
 [cue-behavior]
+[default-time-domain]
+  time domain musical audio markers
 [draw-opaque-midi_regions]
 [external-sync]
   transport use external synchronization master 
-[glue-new-markers-to-bars-and-beats]
-  position time domain glue use markers bars beats musical
-[glue-new-regions-to-bars-and-beats]
-  position time domain glue use regions bars beats musical
 [insert-merge-policy]
 [jack-time-master]
   transport synchronization jack time master 
@@ -615,7 +630,6 @@
    osc open sound control
 [use-plugin-own-gui]
    plugins GUI editor prefer use own
-[use-tranzport]
 [use-vst3]
    plugins vst3
 [use-windows-vst]

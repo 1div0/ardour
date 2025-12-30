@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_gtk_send_ui_h__
-#define __ardour_gtk_send_ui_h__
+#pragma once
 
 #include "widgets/ardour_button.h"
 
@@ -65,9 +64,9 @@ class SendUIWindow : public ArdourWindow
 {
 public:
 	SendUIWindow (Gtk::Window&, ARDOUR::Session*, std::shared_ptr<ARDOUR::Send>);
+	SendUIWindow (ARDOUR::Session*, std::shared_ptr<ARDOUR::Send>);
 
 private:
 	SendUI _ui;
 };
 
-#endif /* __ardour_gtk_send_ui_h__ */

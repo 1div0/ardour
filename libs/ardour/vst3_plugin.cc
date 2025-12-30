@@ -16,11 +16,16 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#ifdef WAF_BUILD
+#include "libardour-config.h"
+#endif
+
+#include <regex>
+
 #include "pbd/gstdio_compat.h"
 #include <glibmm.h>
 
 #include "pbd/basename.h"
-#include "pbd/compose.h"
 #include "pbd/convert.h"
 #include "pbd/debug.h"
 #include "pbd/error.h"
@@ -93,24 +98,9 @@ VST3Plugin::init ()
 	Vst::ProcessContext& context (_plug->context ());
 	context.sampleRate = _session.nominal_sample_rate ();
 	_plug->set_block_size (_session.get_block_size ());
-	_plug->OnResizeView.connect_same_thread (_connections, boost::bind (&VST3Plugin::forward_resize_view, this, _1, _2));
-	_plug->OnParameterChange.connect_same_thread (_connections, boost::bind (&VST3Plugin::parameter_change_handler, this, _1, _2, _3));
-
-	/* assume only default active busses are connected */
-	for (auto const& abi : _plug->bus_info_in ()) {
-		for (int32_t i = 0; i < abi.second.n_chn; ++i) {
-			_connected_inputs.push_back (abi.second.dflt);
-		}
-	}
-
-	for (auto const& abi : _plug->bus_info_out ()) {
-		for (int32_t i = 0; i < abi.second.n_chn; ++i) {
-			_connected_outputs.push_back (abi.second.dflt);
-		}
-	}
-
-	/* pre-configure from GUI thread */
-	_plug->enable_io (_connected_inputs, _connected_outputs);
+	_plug->OnResizeView.connect_same_thread (_connections, std::bind (&VST3Plugin::forward_resize_view, this, _1, _2));
+	_plug->OnParameterChange.connect_same_thread (_connections, std::bind (&VST3Plugin::parameter_change_handler, this, _1, _2, _3));
+	_plug->OnProcessorChange.connect_same_thread (_connections, [&](ARDOUR::RouteProcessorChange const& rpc) { Plugin::send_processors_changed (rpc); });
 }
 
 void
@@ -177,7 +167,7 @@ VST3Plugin::set_parameter (uint32_t port, float val, sampleoffset_t when)
 {
 	if (!_plug->active () || _plug->is_loading_state () || AudioEngine::instance ()->in_process_thread ()) {
 		/* directly use VST3PI::_input_param_changes */
-		_plug->set_parameter (port, val, when);
+		_plug->set_parameter (port, val, when, true);
 	} else {
 		assert (when == 0);
 		_plug->set_parameter (port, val, when, false);
@@ -236,7 +226,7 @@ VST3Plugin::set_automation_control (uint32_t port, std::shared_ptr<ARDOUR::Autom
 	if (!ac->alist () || !_plug->subscribe_to_automation_changes ()) {
 		return;
 	}
-	ac->alist ()->automation_state_changed.connect_same_thread (_connections, boost::bind (&VST3PI::automation_state_changed, _plug, port, _1, std::weak_ptr<AutomationList> (ac->alist ())));
+	ac->alist ()->automation_state_changed.connect_same_thread (_connections, std::bind (&VST3PI::automation_state_changed, _plug, port, _1, std::weak_ptr<AutomationList> (ac->alist ())));
 }
 
 std::set<Evoral::Parameter>
@@ -334,6 +324,50 @@ VST3Plugin::possible_output () const
 #endif
 }
 
+ChanCount
+VST3Plugin::input_streams () const
+{
+	ChanCount cc;
+	cc.set_audio (_plug->n_audio_inputs (true));
+	cc.set_midi (_plug->n_midi_inputs ());
+	return cc;
+}
+
+ChanCount
+VST3Plugin::output_streams () const
+{
+	ChanCount cc;
+	cc.set_audio (_plug->n_audio_outputs (true));
+	cc.set_midi (_plug->n_midi_outputs ());
+	return cc;
+}
+
+void
+VST3Plugin::request_bus_layout (ChanCount const& in, ChanCount const& aux_in, ChanCount const& out)
+{
+	_plug->request_bus_layout (in.n_audio (), aux_in.n_audio (), out.n_audio ());
+}
+
+bool
+VST3Plugin::reconfigure_io (ChanCount in, ChanCount aux_in, ChanCount out)
+{
+	DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3Plugin::reconfigure_io in: %1 aux: %2 out: %3 ; n_in=%4 n_out=%5\n",
+	                                                in, aux_in, out, _plug->n_audio_inputs (), _plug->n_audio_outputs ()));
+
+	_connected_inputs.clear ();
+	_connected_inputs.resize (in.n_audio () + aux_in.n_audio ());
+	_connected_inputs.flip ();
+	_connected_inputs.resize (std::max (_plug->n_audio_inputs (), in.n_audio () + aux_in.n_audio ()));
+
+	_connected_outputs.clear ();
+	_connected_outputs.resize (out.n_audio ());
+	_connected_outputs.flip ();
+	_connected_outputs.resize (std::max (_plug->n_audio_outputs (), out.n_audio ()));
+
+	_plug->enable_io (_connected_inputs, _connected_outputs);
+	return true;
+}
+
 /* ****************************************************************************
  * Plugin UI
  */
@@ -341,7 +375,16 @@ VST3Plugin::possible_output () const
 bool
 VST3Plugin::has_editor () const
 {
-	return _plug->has_editor ();
+	VST3PI::RouteProcessorChangeBlock rpcb (_plug);
+
+	std::shared_ptr<VST3PluginInfo> nfo = std::dynamic_pointer_cast<VST3PluginInfo> (get_info ());
+	if (nfo->has_editor.has_value ()) {
+		return nfo->has_editor.value ();
+	}
+
+	bool rv = _plug->has_editor ();
+	nfo->has_editor = rv;
+	return rv;
 }
 
 Steinberg::IPlugView*
@@ -355,14 +398,6 @@ VST3Plugin::close_view ()
 {
 	_plug->close_view ();
 }
-
-#if SMTG_OS_LINUX
-void
-VST3Plugin::set_runloop (Steinberg::Linux::IRunLoop* run_loop)
-{
-	return _plug->set_runloop (run_loop);
-}
-#endif
 
 void
 VST3Plugin::update_contoller_param ()
@@ -502,36 +537,44 @@ VST3PI::vst3_to_midi_buffers (BufferSet& bufs, ChanMapping const& out_map)
 				data[2] = vst_to_midi (e.polyPressure.pressure);
 				mb.push_back (e.sampleOffset, Evoral::MIDI_EVENT, 3, data);
 				break;
-			case Vst::Event::kLegacyMIDICCOutEvent:
+			case Vst::Event::kLegacyMIDICCOutEvent: {
+				size_t size = 0;
+
 				switch (e.midiCCOut.controlNumber) {
 					case Vst::kCtrlPolyPressure:
+						size = 3;
 						data[0] = MIDI_CMD_NOTE_PRESSURE | e.midiCCOut.channel;
 						data[1] = e.midiCCOut.value;
 						data[2] = e.midiCCOut.value2;
 						break;
 					default: /* Control Change */
+						size = 3;
 						data[0] = MIDI_CMD_CONTROL | e.midiCCOut.channel;
 						data[1] = e.midiCCOut.controlNumber;
 						data[2] = e.midiCCOut.value;
 						break;
 					case Vst::kCtrlProgramChange:
+						size = 2;
 						data[0] = MIDI_CMD_PGM_CHANGE | e.midiCCOut.channel;
 						data[1] = e.midiCCOut.value;
 						data[2] = e.midiCCOut.value2;
 						break;
 					case Vst::kAfterTouch:
+						size = 2;
 						data[0] = MIDI_CMD_CHANNEL_PRESSURE | e.midiCCOut.channel;
 						data[1] = e.midiCCOut.value;
 						data[2] = e.midiCCOut.value2;
 						break;
 					case Vst::kPitchBend:
+						size = 3;
 						data[0] = MIDI_CMD_BENDER | e.midiCCOut.channel;
 						data[1] = e.midiCCOut.value;
 						data[2] = e.midiCCOut.value2;
 						break;
 				}
-				mb.push_back (e.sampleOffset, Evoral::MIDI_EVENT, e.midiCCOut.controlNumber == Vst::kCtrlProgramChange ? 2 : 3, data);
+				mb.push_back (e.sampleOffset, Evoral::MIDI_EVENT, size, data);
 				break;
+			}
 
 			case Vst::Event::kNoteExpressionValueEvent:
 			case Vst::Event::kNoteExpressionTextEvent:
@@ -667,6 +710,12 @@ VST3Plugin::set_block_size (pframes_t n_samples)
 }
 
 samplecnt_t
+VST3Plugin::plugin_tailtime () const
+{
+	return _plug->plugin_tailtime ();
+}
+
+samplecnt_t
 VST3Plugin::plugin_latency () const
 {
 	return _plug->plugin_latency ();
@@ -688,6 +737,12 @@ VST3Plugin::remove_slave (std::shared_ptr<Plugin> p)
 	if (vst) {
 		_plug->remove_slave (vst->_plug->controller ());
 	}
+}
+
+void
+VST3Plugin::set_non_realtime (bool yn)
+{
+	_plug->set_non_realtime (yn);
 }
 
 int
@@ -725,7 +780,7 @@ VST3Plugin::connect_and_run (BufferSet&  bufs,
 		context.timeSigNumerator   = metric.meter ().divisions_per_bar ();
 		context.timeSigDenominator = metric.meter ().note_value ();
 		context.projectTimeMusic   = DoubleableBeats (metric.tempo ().quarters_at_sample (start)).to_double ();
-		context.barPositionMusic   = bbt.bars * 4; // PPQN, NOT tmap.metric_at(bbt).meter().divisions_per_bar()
+		context.barPositionMusic   = (bbt.bars - 1) * 4; // PPQN, NOT tmap.metric_at(bbt).meter().divisions_per_bar()
 	}
 
 	const double tcfps                = _session.timecode_frames_per_second ();
@@ -781,7 +836,7 @@ VST3Plugin::connect_and_run (BufferSet&  bufs,
 		index          = in_map.get (DataType::AUDIO, in_index++, &valid);
 		ins[i]         = (valid)
 		               ? bufs.get_audio (index).data (offset)
-		               : silent_bufs.get_audio (0).data (offset);
+		               : silent_bufs.get_audio (0).data (0);
 		_connected_inputs[i] = valid;
 	}
 
@@ -792,14 +847,14 @@ VST3Plugin::connect_and_run (BufferSet&  bufs,
 		index          = out_map.get (DataType::AUDIO, out_index++, &valid);
 		outs[i]        = (valid)
 		               ? bufs.get_audio (index).data (offset)
-		               : scratch_bufs.get_audio (0).data (offset);
+		               : scratch_bufs.get_audio (0).data (0);
 		_connected_outputs[i] = valid;
 	}
 
 	/* apply parameter changes */
 	PV pv;
 	while (_parameter_queue.read (&pv, 1)) {
-		_plug->set_parameter (pv.port, pv.val, 0);
+		_plug->set_parameter (pv.port, pv.val, 0, true, true);
 	}
 
 	in_index = 0;
@@ -813,8 +868,6 @@ VST3Plugin::connect_and_run (BufferSet&  bufs,
 			}
 		}
 	}
-
-	_plug->enable_io (_connected_inputs, _connected_outputs);
 
 	_plug->process (ins, outs, n_samples);
 
@@ -860,9 +913,10 @@ VST3Plugin::load_preset (PresetRecord r)
 		return false;
 	}
 
-	Glib::Threads::Mutex::Lock lx (_plug->process_lock ());
 
 	if (tmp[0] == "VST3-P") {
+		Glib::Threads::Mutex::Lock lx (_plug->process_lock ());
+		PBD::Unwinder<bool> uw (_plug->component_is_synced (), true);
 		int program = PBD::atoi (tmp[2]);
 		assert (!r.user);
 		if (!_plug->set_program (program, 0)) {
@@ -879,13 +933,13 @@ VST3Plugin::load_preset (PresetRecord r)
 		std::string const& fn = _preset_uri_map[r.uri];
 
 		if (Glib::file_test (fn, Glib::FILE_TEST_EXISTS)) {
+			Glib::Threads::Mutex::Lock lx (_plug->process_lock ());
+			PBD::Unwinder<bool> uw (_plug->component_is_synced (), true);
 			RAMStream stream (fn);
 			ok = _plug->load_state (stream);
 			DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3Plugin::load_preset: file %1 status %2\n", fn, ok ? "OK" : "error"));
 		}
 	}
-
-	lx.release ();
 
 	if (ok) {
 		Plugin::load_preset (r);
@@ -898,7 +952,7 @@ VST3Plugin::do_save_preset (std::string name)
 {
 
 	std::shared_ptr<VST3PluginInfo> nfo = std::dynamic_pointer_cast<VST3PluginInfo> (get_info ());
-	PBD::Searchpath                   psp = nfo->preset_search_path ();
+	PBD::Searchpath                 psp = nfo->preset_search_path ();
 
 	assert (!psp.empty ());
 
@@ -931,7 +985,7 @@ void
 VST3Plugin::do_remove_preset (std::string name)
 {
 	std::shared_ptr<VST3PluginInfo> nfo = std::dynamic_pointer_cast<VST3PluginInfo> (get_info ());
-	PBD::Searchpath                   psp = nfo->preset_search_path ();
+	PBD::Searchpath                 psp = nfo->preset_search_path ();
 
 	assert (!psp.empty ());
 
@@ -1023,7 +1077,7 @@ VST3Plugin::find_presets ()
 
 
 	std::shared_ptr<VST3PluginInfo> info = std::dynamic_pointer_cast<VST3PluginInfo> (get_info ());
-	PBD::Searchpath                   psp  = info->preset_search_path ();
+	PBD::Searchpath                 psp  = info->preset_search_path ();
 
 	std::vector<std::string> preset_files;
 	find_paths_matching_filter (preset_files, psp, vst3_preset_filter, 0, false, true, false);
@@ -1055,11 +1109,19 @@ VST3PluginInfo::load (Session& session)
 		if (!m) {
 			DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3 Loading: %1\n", path));
 			m = VST3PluginModule::load (path);
+#if SMTG_OS_LINUX
+			IPluginFactory* factory = m->factory ();
+			IPtr<IPluginFactory3> factory3 = FUnknownPtr<IPluginFactory3> (factory);
+			if (factory3) {
+				DEBUG_TRACE (DEBUG::VST3Config, "VST3 detected IPluginFactory3, setting Linux runloop host context\n");
+				factory3->setHostContext ((FUnknown*) HostApplication::getHostContext ());
+			}
+#endif
 		}
 		PluginPtr          plugin;
 		Steinberg::VST3PI* plug = new VST3PI (m, unique_id);
 		plugin.reset (new VST3Plugin (session.engine (), session, plug));
-		plugin->set_info (PluginInfoPtr (new VST3PluginInfo (*this)));
+		plugin->set_info (PluginInfoPtr (shared_from_this ()));
 		return plugin;
 	} catch (failed_constructor& err) {
 		;
@@ -1151,16 +1213,19 @@ VST3PI::VST3PI (std::shared_ptr<ARDOUR::VST3PluginModule> m, std::string unique_
 	, _component (0)
 	, _controller (0)
 	, _view (0)
-#if SMTG_OS_LINUX
-	, _run_loop (0)
-#endif
 	, _is_loading_state (false)
 	, _is_processing (false)
 	, _block_size (0)
+	, _process_offline (false)
 	, _port_id_bypass (UINT32_MAX)
 	, _owner (0)
 	, _add_to_selection (false)
 	, _n_factory_presets (0)
+	, _block_rpc (0)
+	, _rpc_queue (RouteProcessorChange::NoProcessorChange, false)
+	, _no_kMono (false)
+	, _restart_component_is_synced (false)
+	, _in_set_owner (false)
 {
 	using namespace std;
 	IPluginFactory* factory = m->factory ();
@@ -1172,6 +1237,23 @@ VST3PI::VST3PI (std::shared_ptr<ARDOUR::VST3PluginModule> m, std::string unique_
 	if (!_fuid.fromString (unique_id.c_str ())) {
 		throw failed_constructor ();
 	}
+
+	PFactoryInfo fi;
+	if (factory->getFactoryInfo (&fi) == kResultTrue) {
+		/* work around issue with UADx VST3s not recognizing
+		 * Vst::SpeakerArr::kMono. (see commit message for details)
+		 */
+		if (0 == strcmp (fi.vendor, "Universal Audio (UADx)")) {
+			_no_kMono = true;
+		}
+	}
+
+#if !(defined PLATFORM_WINDOWS || defined __APPLE__) /* Linux only */
+	_restart_component_is_synced = m->has_symbol ("yabridge_version");
+	if (_restart_component_is_synced) {
+		DEBUG_TRACE (DEBUG::VST3Config, "VST3PI detected yabridge\n");
+	}
+#endif
 
 #ifndef NDEBUG
 	if (DEBUG_ENABLED (DEBUG::VST3Config)) {
@@ -1250,13 +1332,14 @@ VST3PI::VST3PI (std::shared_ptr<ARDOUR::VST3PluginModule> m, std::string unique_
 	_busbuf_in.resize (_n_bus_in);
 	_busbuf_out.resize (_n_bus_out);
 
-	/* do not re-order, _io_name is build in sequence */
-	_n_inputs       = count_channels (Vst::kAudio, Vst::kInput,  Vst::kMain);
-	_n_aux_inputs   = count_channels (Vst::kAudio, Vst::kInput,  Vst::kAux);
-	_n_outputs      = count_channels (Vst::kAudio, Vst::kOutput, Vst::kMain);
-	_n_aux_outputs  = count_channels (Vst::kAudio, Vst::kOutput, Vst::kAux);
-	_n_midi_inputs  = count_channels (Vst::kEvent, Vst::kInput,  Vst::kMain);
-	_n_midi_outputs = count_channels (Vst::kEvent, Vst::kOutput, Vst::kMain);
+	query_io_config ();
+
+	if (n_audio_inputs () == 0 && n_audio_outputs () == 0 && n_midi_inputs () == 0 && n_midi_outputs () == 0) {
+		DEBUG_TRACE (DEBUG::VST3Config, "forcing I/O rescan with stereo layout\n");
+		/* see also vst3_scan discover_vst3 -- assume stereo by default */
+		request_bus_layout (2, 0, 2);
+		query_io_config ();
+	}
 
 	if (!connect_components ()) {
 		//_controller->terminate(); // XXX ?
@@ -1268,15 +1351,27 @@ VST3PI::VST3PI (std::shared_ptr<ARDOUR::VST3PluginModule> m, std::string unique_
 	memset (&_program_change_port, 0, sizeof (_program_change_port));
 	_program_change_port.id = Vst::kNoParamId;
 
-	FUnknownPtr<Vst::IEditControllerHostEditing> host_editing (_controller);
-
 	FUnknownPtr<Vst::IEditController2> controller2 (_controller);
 	if (controller2) {
-		controller2->setKnobMode (Vst::kLinearMode);
+		switch (Config->get_vst3_knob_mode ()) {
+			case VST3KnobLinearMode:
+				controller2->setKnobMode (Vst::kLinearMode);
+				break;
+			case VST3KnobCircularMode:
+				controller2->setKnobMode (Vst::kCircularMode);
+				break;
+			case VST3KnobRelativCircularMode:
+				controller2->setKnobMode (Vst::kRelativCircularMode);
+				break;
+			default:
+				break;
+		}
 	}
 
 	int32 n_params = _controller->getParameterCount ();
 	DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3 parameter count: %1\n", n_params));
+
+	std::regex dpf_midi_CC ("MIDI Ch. [0-9]+ CC [0-9]+");
 
 	for (int32 i = 0; i < n_params; ++i) {
 		Vst::ParameterInfo pi;
@@ -1287,15 +1382,12 @@ VST3PI::VST3PI (std::shared_ptr<ARDOUR::VST3PluginModule> m, std::string unique_
 			_program_change_port = pi;
 			continue;
 		}
-		/* allow non-automatable parameters IFF IEditControllerHostEditing is available */
-		if (0 == (pi.flags & Vst::ParameterInfo::kCanAutomate) && !host_editing) {
-			/* but allow read-only, not automatable params (ctrl outputs) */
-			if (0 == (pi.flags & Vst::ParameterInfo::kIsReadOnly)) {
-				continue;
-			}
-		}
 		if (tchar_to_utf8 (pi.title).find ("MIDI CC ") != std::string::npos) {
 			/* Some JUCE plugins add 16 * 128 automatable MIDI CC parameters */
+			continue;
+		}
+		if (std::regex_search (tchar_to_utf8 (pi.title), dpf_midi_CC)) {
+			/* DPF plugins also adds automatable MIDI CC parameters "MIDI Ch. %d CC %d" */
 			continue;
 		}
 
@@ -1311,7 +1403,18 @@ VST3PI::VST3PI (std::shared_ptr<ARDOUR::VST3PluginModule> m, std::string unique_
 
 		if (pi.flags & /*Vst::ParameterInfo::kIsHidden*/ (1 << 4)) {
 			p.label = X_("hidden");
+			p.automatable = 0;
 		}
+
+#if 1 // if (host_editing == 0) // FUnknownPtr<Vst::IEditControllerHostEditing> host_editing (_controller);
+		if (0 == (pi.flags & (Vst::ParameterInfo::kCanAutomate | Vst::ParameterInfo::kIsReadOnly))) {
+			/* Hide writable parameters that cannot be automated in the generic UI.
+			 * Those are usually internal params or MIDI ctrl hacks.
+			 * index_to_id() needs to work for those.
+			 */
+			p.label = X_("hidden");
+		}
+#endif
 
 		uint32_t idx = _ctrl_params.size ();
 		_ctrl_params.push_back (p);
@@ -1459,9 +1562,8 @@ VST3PI::queryInterface (const TUID _iid, void** obj)
 	QUERY_INTERFACE (_iid, obj, IPlugFrame::iid, IPlugFrame)
 
 #if SMTG_OS_LINUX
-	if (_run_loop && FUnknownPrivate::iidEqual (_iid, Linux::IRunLoop::iid)) {
-		*obj = _run_loop;
-		return kResultOk;
+	if (FUnknownPrivate::iidEqual (_iid, Linux::IRunLoop::iid)) {
+		return HostApplication::getHostContext()->queryInterface (_iid, obj);
 	}
 #endif
 
@@ -1475,6 +1577,26 @@ VST3PI::queryInterface (const TUID _iid, void** obj)
 	return kNoInterface;
 }
 
+void
+VST3PI::query_io_config ()
+{
+	_io_name[Vst::kAudio][Vst::kInput].clear ();
+	_io_name[Vst::kAudio][Vst::kOutput].clear ();
+	_io_name[Vst::kEvent][Vst::kInput].clear ();
+	_io_name[Vst::kEvent][Vst::kOutput].clear ();
+	_bus_info_in.clear ();
+	_bus_info_out.clear ();
+
+	/* do not re-order, _io_name is build in sequence */
+	_n_inputs       = count_channels (Vst::kAudio, Vst::kInput,  Vst::kMain);
+	_n_aux_inputs   = count_channels (Vst::kAudio, Vst::kInput,  Vst::kAux);
+	_n_outputs      = count_channels (Vst::kAudio, Vst::kOutput, Vst::kMain);
+	_n_aux_outputs  = count_channels (Vst::kAudio, Vst::kOutput, Vst::kAux);
+	_n_midi_inputs  = count_channels (Vst::kEvent, Vst::kInput,  Vst::kMain);
+	_n_midi_outputs = count_channels (Vst::kEvent, Vst::kOutput, Vst::kMain);
+
+}
+
 tresult
 VST3PI::restartComponent (int32 flags)
 {
@@ -1482,7 +1604,7 @@ VST3PI::restartComponent (int32 flags)
 
 	if (flags & Vst::kReloadComponent) {
 		Glib::Threads::Mutex::Lock pl (_process_lock, Glib::Threads::NOT_LOCK);
-		if (!AudioEngine::instance ()->in_process_thread () && !_is_loading_state) {
+		if (!AudioEngine::instance ()->in_process_thread () && !_is_loading_state && !_restart_component_is_synced && !_process_offline) {
 			pl.acquire ();
 		} else {
 			assert (0); // a plugin should not call this while processing
@@ -1500,7 +1622,7 @@ VST3PI::restartComponent (int32 flags)
 	}
 	if (flags & Vst::kParamValuesChanged) {
 		Glib::Threads::Mutex::Lock pl (_process_lock, Glib::Threads::NOT_LOCK);
-		if (!AudioEngine::instance ()->in_process_thread () && !_is_loading_state) {
+		if (!AudioEngine::instance ()->in_process_thread () && !_is_loading_state && !_restart_component_is_synced && !_process_offline) {
 			pl.acquire ();
 		}
 		update_shadow_data ();
@@ -1515,7 +1637,7 @@ VST3PI::restartComponent (int32 flags)
 		 * changes are automatically picked up.
 		 */
 		Glib::Threads::Mutex::Lock pl (_process_lock, Glib::Threads::NOT_LOCK);
-		if (!AudioEngine::instance ()->in_process_thread () && !_is_loading_state) {
+		if (!AudioEngine::instance ()->in_process_thread () && !_is_loading_state && !_restart_component_is_synced && !_process_offline) {
 			/* Some plugins (e.g BlendEQ) call this from the process,
 			 * IPlugProcessor::ProcessBuffers. In that case taking the
 			 * _process_lock would deadlock.
@@ -1523,6 +1645,61 @@ VST3PI::restartComponent (int32 flags)
 			pl.acquire ();
 		}
 		_plugin_latency.reset ();
+	}
+	if (flags & Vst::kIoTitlesChanged) {
+		/* Input and/or Output bus titles have changed
+		 * compare to VST3PI::count_channels
+		 */
+		const Vst::MediaTypes medien [] = { Vst::kAudio, Vst::kEvent };
+		const Vst::BusDirections dirs[] = { Vst::kInput, Vst::kOutput };
+		for (auto const& media : medien) {
+			for (auto const& dir : dirs) {
+				int32 n_busses = _component->getBusCount (media, dir);
+				for (int32 i = 0; i < n_busses; ++i) {
+					Vst::BusInfo bus;
+					if (_component->getBusInfo (media, dir, i, bus) != kResultTrue) {
+						continue;
+					}
+					std::string bus_name = tchar_to_utf8 (bus.name);
+					if (media == Vst::kEvent && _io_name[media][dir].size () == 1) {
+						_io_name[media][dir][0].name = bus_name;
+					} else if (media == Vst::kAudio && _io_name[media][dir].size () == size_t(bus.channelCount)) {
+						for (int32_t j = 0; j < bus.channelCount; ++j) {
+							std::string channel_name;
+							if (bus.channelCount > 1) {
+								channel_name = string_compose ("%1 %2", bus_name, j + 1);
+							} else {
+								channel_name = bus_name;
+							}
+							_io_name[media][dir][j].name = channel_name;
+						}
+					}
+				}
+			}
+		}
+		send_processors_changed (RouteProcessorChange (RouteProcessorChange::PortNameChange, false)); /* EMIT SIGNAL */
+	}
+	if (flags & Vst::kParamTitlesChanged) {
+		/* titles or default values or flags have changed */
+		int32 n_params = _controller->getParameterCount ();
+		for (int32 i = 0; i < n_params; ++i) {
+			Vst::ParameterInfo pi;
+			if (_controller->getParameterInfo (i, pi) != kResultTrue) {
+				continue;
+			}
+			std::map<Vst::ParamID, uint32_t>::const_iterator idx = _ctrl_id_index.find (pi.id);
+			if (idx != _ctrl_id_index.end ()) {
+				Param& p (_ctrl_params[idx->second]);
+#ifndef NDEBUG
+				if (DEBUG_ENABLED (DEBUG::VST3Config) && p.label != tchar_to_utf8 (pi.title)) {
+					DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3 ParamTitlesChanged: '%1' -> '%2'\n", p.label, tchar_to_utf8 (pi.title)));
+				}
+#endif
+				p.label  = tchar_to_utf8 (pi.title).c_str ();
+				p.normal = pi.defaultNormalizedValue;
+			}
+		}
+		send_processors_changed (RouteProcessorChange (RouteProcessorChange::ParameterNameChange, false)); /* EMIT SIGNAL */
 	}
 	if (flags & Vst::kIoChanged) {
 		warning << "VST3: Vst::kIoChanged (not implemented)" << endmsg;
@@ -1679,7 +1856,7 @@ VST3PI::update_processor ()
 	}
 
 	Vst::ProcessSetup setup;
-	setup.processMode        = AudioEngine::instance ()->freewheeling () ? Vst::kOffline : Vst::kRealtime;
+	setup.processMode        = _process_offline || AudioEngine::instance ()->freewheeling () ? Vst::kOffline : Vst::kRealtime;
 	setup.symbolicSampleSize = Vst::kSample32;
 	setup.maxSamplesPerBlock = _block_size;
 	setup.sampleRate         = _context.sampleRate;
@@ -1703,6 +1880,15 @@ VST3PI::plugin_latency ()
 	return _plugin_latency.value ();
 }
 
+uint32_t
+VST3PI::plugin_tailtime ()
+{
+	if (!_plugin_tail) { // XXX this is currently never reset
+		_plugin_tail = _processor->getTailSamples ();
+	}
+	return _plugin_tail.value ();
+}
+
 void
 VST3PI::set_owner (SessionObject* o)
 {
@@ -1714,9 +1900,23 @@ VST3PI::set_owner (SessionObject* o)
 		return;
 	}
 
+	_in_set_owner.store (true);
+
 	if (!setup_psl_info_handler ()) {
 		setup_info_listener ();
 	}
+
+	_in_set_owner.store (false);
+}
+
+void
+VST3PI::set_non_realtime (bool yn)
+{
+	if (_process_offline == yn) {
+		return;
+	}
+	_process_offline = yn;
+	update_processor ();
 }
 
 int32
@@ -1892,12 +2092,15 @@ VST3PI::try_set_parameter_by_id (Vst::ParamID id, float value)
 }
 
 void
-VST3PI::set_parameter (uint32_t p, float value, int32 sample_off, bool to_list)
+VST3PI::set_parameter (uint32_t p, float value, int32 sample_off, bool to_list, bool force)
 {
-	if (to_list) {
-		set_parameter_internal (index_to_id (p), value, sample_off, false);
-	} else {
-		value = _controller->plainParamToNormalized (index_to_id (p), value);
+	Vst::ParamID id = index_to_id (p);
+	value = _controller->plainParamToNormalized (id, value);
+	if (_shadow_data[p] == value && sample_off == 0 && to_list && !force) {
+		return;
+	}
+	if (to_list && (sample_off == 0 || parameter_is_automatable (p))) {
+		set_parameter_internal (id, value, sample_off);
 	}
 	_shadow_data[p] = value;
 	_update_ctrl[p] = true;
@@ -1977,6 +2180,7 @@ VST3PI::update_shadow_data ()
 			_input_param_changes.addParameterData (i->second, index)->addPoint (0, v, index);
 #endif
 			_shadow_data[i->first] = v;
+			_update_ctrl[i->first] = true;
 			OnParameterChange (ParamValueChanged, i->first, v); /* EMIT SIGNAL */
 		}
 	}
@@ -1994,12 +2198,11 @@ VST3PI::update_contoller_param ()
 			continue;
 		}
 		_update_ctrl[i->first] = false;
-		if (!parameter_is_automatable (i->first) && !parameter_is_readonly (i->first)) {
-			assert (host_editing);
+		if (host_editing && !parameter_is_automatable (i->first) && !parameter_is_readonly (i->first)) {
 			host_editing->beginEditFromHost (i->second);
 		}
 		_controller->setParamNormalized (i->second, _shadow_data[i->first]);
-		if (!parameter_is_automatable (i->first) && !parameter_is_readonly (i->first)) {
+		if (host_editing && !parameter_is_automatable (i->first) && !parameter_is_readonly (i->first)) {
 			host_editing->endEditFromHost (i->second);
 		}
 	}
@@ -2009,7 +2212,7 @@ void
 VST3PI::set_parameter_by_id (Vst::ParamID id, float value, int32 sample_off)
 {
 	/* called in rt-thread from evoral_to_vst3 */
-	set_parameter_internal (id, value, sample_off, true);
+	set_parameter_internal (id, value, sample_off);
 	std::map<Vst::ParamID, uint32_t>::const_iterator idx = _ctrl_id_index.find (id);
 	if (idx != _ctrl_id_index.end ()) {
 		_shadow_data[idx->second] = value;
@@ -2018,12 +2221,9 @@ VST3PI::set_parameter_by_id (Vst::ParamID id, float value, int32 sample_off)
 }
 
 void
-VST3PI::set_parameter_internal (Vst::ParamID id, float& value, int32 sample_off, bool normalized)
+VST3PI::set_parameter_internal (Vst::ParamID id, float value, int32 sample_off)
 {
 	int32 index;
-	if (!normalized) {
-		value = _controller->plainParamToNormalized (id, value);
-	}
 	/* must not be called concurrently with processing */
 	_input_param_changes.addParameterData (id, index)->addPoint (sample_off, value, index);
 }
@@ -2036,12 +2236,11 @@ VST3PI::get_parameter (uint32_t p) const
 		_update_ctrl[p] = false;
 
 		FUnknownPtr<Vst::IEditControllerHostEditing> host_editing (_controller);
-		if (!parameter_is_automatable (p) && !parameter_is_readonly (p)) {
-			assert (host_editing);
+		if (host_editing && !parameter_is_automatable (p) && !parameter_is_readonly (p)) {
 			host_editing->beginEditFromHost (id);
 		}
 		_controller->setParamNormalized (id, _shadow_data[p]); // GUI thread only
-		if (!parameter_is_automatable (p) && !parameter_is_readonly (p)) {
+		if (host_editing && !parameter_is_automatable (p) && !parameter_is_readonly (p)) {
 			host_editing->endEditFromHost (id);
 		}
 	}
@@ -2105,9 +2304,75 @@ VST3PI::set_event_bus_state (bool enable)
 }
 
 void
-VST3PI::enable_io (std::vector<bool> const& ins, std::vector<bool> const& outs)
+VST3PI::request_bus_layout (uint32_t in, uint32_t aux_in, uint32_t out)
 {
-	if (_enabled_audio_in == ins && _enabled_audio_out == outs) {
+	// TODO only if changed .. and if plugin doesn't have defaults
+
+	DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3PI::request_bus_layout: in = %1 aux-in = %2 out = %3\n",  in, aux_in, out));
+
+	bool was_active = _is_processing;
+	if (!deactivate ()) {
+		DEBUG_TRACE (DEBUG::VST3Config, "VST3PI::request_bus_layout failed to deactivate plugin\n");
+	}
+
+	typedef std::vector<Vst::SpeakerArrangement> VSTSpeakerArrangements;
+	VSTSpeakerArrangements sa_in;
+	VSTSpeakerArrangements sa_out;
+
+	Vst::SpeakerArrangement sa = ((uint64_t)1 << in) - 1;
+	if (in == 1 /*Vst::SpeakerArr::kSpeakerL */ && !_no_kMono) {
+		sa = Vst::SpeakerArr::kMono; /* 1 << 19 */
+	}
+
+	if (_n_bus_in > 0) {
+		sa_in.push_back (sa);
+	}
+
+	sa = ((uint64_t)1 << out) - 1;
+	if (out == 1 /*Vst::SpeakerArr::kSpeakerL */ && !_no_kMono) {
+		sa = Vst::SpeakerArr::kMono; /* 1 << 19 */
+	}
+
+	if (_n_bus_out > 0) {
+		sa_out.push_back (sa);
+	}
+
+	sa = ((uint64_t)1 << aux_in) - 1;
+
+	if (_n_bus_in > 1) {
+		sa_in.push_back (sa);
+	}
+
+	sa = 0;
+	while (sa_in.size () < (VSTSpeakerArrangements::size_type) _n_bus_in) {
+		sa_in.push_back (sa);
+	}
+
+	while (sa_out.size () < (VSTSpeakerArrangements::size_type) _n_bus_out) {
+		sa_out.push_back (sa);
+	}
+
+	Vst::SpeakerArrangement null_arrangement = {};
+#ifndef NDEBUG
+	tresult rv =
+#endif
+	_processor->setBusArrangements (sa_in.size () > 0 ? &sa_in[0] : &null_arrangement, sa_in.size (),
+	                                sa_out.size () > 0 ? &sa_out[0] : &null_arrangement, sa_out.size ());
+
+	DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3PI::request_bus_layout setBusArrangements ins = %1 outs = %2 | rv = %3\n", sa_in.size (), sa_out.size (), rv));
+
+	query_io_config ();
+
+	if (was_active) {
+		activate ();
+	}
+
+}
+
+void
+VST3PI::enable_io (std::vector<bool> const& ins, std::vector<bool> const& outs, bool force)
+{
+	if (_enabled_audio_in == ins && _enabled_audio_out == outs && !force) {
 		return;
 	}
 
@@ -2124,11 +2389,11 @@ VST3PI::enable_io (std::vector<bool> const& ins, std::vector<bool> const& outs)
 	_enabled_audio_in  = ins;
 	_enabled_audio_out = outs;
 
-	assert (_enabled_audio_in.size () == n_audio_inputs ());
-	assert (_enabled_audio_out.size () == n_audio_outputs ());
 	/* check that settings have not changed */
 	assert (_n_bus_in == _component->getBusCount (Vst::kAudio, Vst::kInput));
 	assert (_n_bus_out == _component->getBusCount (Vst::kAudio, Vst::kOutput));
+	assert (_bus_info_in.size () == _n_bus_in);
+	assert (_bus_info_out.size () == _n_bus_out);
 
 	DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3PI::enable_io: n_bus_in = %1 n_bus_out = %2\n", _n_bus_in, _n_bus_out));
 
@@ -2153,7 +2418,7 @@ VST3PI::enable_io (std::vector<bool> const& ins, std::vector<bool> const& outs)
 		}
 		cnt += n_chn;
 		/* special case for Left only == Mono */
-		if (sa == 1 /*Vst::SpeakerArr::kSpeakerL */) {
+		if (sa == 1 /*Vst::SpeakerArr::kSpeakerL */ && !_no_kMono) {
 			sa = Vst::SpeakerArr::kMono; /* 1 << 19 */
 		}
 
@@ -2177,7 +2442,7 @@ VST3PI::enable_io (std::vector<bool> const& ins, std::vector<bool> const& outs)
 		}
 		cnt += n_chn;
 		/* special case for Left only == Mono */
-		if (sa == 1 /*Vst::SpeakerArr::kSpeakerL */) {
+		if (sa == 1 /*Vst::SpeakerArr::kSpeakerL */ && !_no_kMono) {
 			sa = Vst::SpeakerArr::kMono; /* 1 << 19 */
 		}
 		DEBUG_TRACE (DEBUG::VST3Config, string_compose ("VST3PI::enable_io: activateBus (kAudio, kOutput, %1, %2) used-chn: %3 spk-arr: %4\n", sa_out.size (), enable, _bus_info_out[sa_out.size ()].n_used_chn, std::hex, sa));
@@ -2231,7 +2496,7 @@ VST3PI::process (float** ins, float** outs, uint32_t n_samples)
 
 	Vst::ProcessData data;
 	data.numSamples         = n_samples;
-	data.processMode        = AudioEngine::instance ()->freewheeling () ? Vst::kOffline : Vst::kRealtime;
+	data.processMode        = _process_offline || AudioEngine::instance ()->freewheeling () ? Vst::kOffline : Vst::kRealtime;
 	data.symbolicSampleSize = Vst::kSample32;
 	data.numInputs          = _n_bus_in;
 	data.numOutputs         = _n_bus_out;
@@ -2420,6 +2685,11 @@ VST3PI::load_state (RAMStream& stream)
 	}
 
 	PBD::Unwinder<bool> uw (_is_loading_state, true);
+	bool was_active = _is_processing;
+
+	if (!deactivate ()) {
+		DEBUG_TRACE (DEBUG::VST3Config, "VST3PI::load_state failed to deactivate plugin\n");
+	}
 
 	int32 count;
 	stream.read_int32 (count);
@@ -2487,6 +2757,10 @@ VST3PI::load_state (RAMStream& stream)
 	}
 	if (rv && !synced) {
 		synced = synchronize_states ();
+	}
+
+	if (was_active) {
+		activate ();
 	}
 
 	if (rv && synced) {
@@ -2565,7 +2839,7 @@ VST3PI::stripable_property_changed (PBD::PropertyChange const&)
 
 	std::string ns;
 	int order_key;
-	if (s->is_master ()) {
+	if (s->is_master () || s->is_surround_master ()) {
 		ns = _("Master");
 		order_key = 2;
 	} else if (s->is_monitor ()) {
@@ -2602,8 +2876,8 @@ VST3PI::setup_info_listener ()
 	DEBUG_TRACE (DEBUG::VST3Config, "VST3PI::setup_info_listener\n");
 	Stripable* s = dynamic_cast<Stripable*> (_owner);
 
-	s->PropertyChanged.connect_same_thread (_strip_connections, boost::bind (&VST3PI::stripable_property_changed, this, _1));
-	s->presentation_info ().PropertyChanged.connect_same_thread (_strip_connections, boost::bind (&VST3PI::stripable_property_changed, this, _1));
+	s->PropertyChanged.connect_same_thread (_strip_connections, std::bind (&VST3PI::stripable_property_changed, this, _1));
+	s->presentation_info ().PropertyChanged.connect_same_thread (_strip_connections, std::bind (&VST3PI::stripable_property_changed, this, _1));
 
 	/* send initial change */
 	stripable_property_changed (PropertyChange ());
@@ -2679,7 +2953,7 @@ VST3PI::automation_state_changed (uint32_t port, AutoState s, std::weak_ptr<Auto
 /* ****************************************************************************/
 
 static std::shared_ptr<AutomationControl>
-lookup_ac (SessionObject* o, FIDString id)
+lookup_ac (SessionObject* o, FIDString id, bool locked = false)
 {
 	Stripable* s = dynamic_cast<Stripable*> (o);
 	if (!s) {
@@ -2712,8 +2986,8 @@ lookup_ac (SessionObject* o, FIDString id)
 		 * recurive locks (deadlock, or double unlock crash).
 		 */
 		int send_id = atoi (id + strlen (ContextInfo::kSendLevel));
-		if (s->send_enable_controllable (send_id)) {
-			return s->send_level_controllable (send_id);
+		if (send_id >=0 && s->send_enable_controllable (send_id)) {
+			return s->send_level_controllable (send_id, locked);
 		}
 #endif
 	}
@@ -2729,9 +3003,9 @@ VST3PI::getContextInfoValue (int32& value, FIDString id)
 		return kNotInitialized;
 	}
 	if (0 == strcmp (id, ContextInfo::kIndexMode)) {
-		value = ContextInfo::kFlatIndex;
+		value = ContextInfo::kPerTypeIndex;
 	} else if (0 == strcmp (id, ContextInfo::kType)) {
-		if (s->is_master ()) {
+		if (s->is_singleton ()) {
 			value = ContextInfo::kOut;
 		} else if (s->presentation_info ().flags () & PresentationInfo::AudioTrack) {
 			value = ContextInfo::kTrack;
@@ -2741,14 +3015,15 @@ VST3PI::getContextInfoValue (int32& value, FIDString id)
 			value = ContextInfo::kBus;
 		}
 	} else if (0 == strcmp (id, ContextInfo::kMain)) {
-		value = s->is_master () ? 1 : 0;
+		value = s->is_singleton () ? 1 : 0;
 	} else if (0 == strcmp (id, ContextInfo::kIndex)) {
 		value = s->presentation_info ().order ();
 	} else if (0 == strcmp (id, ContextInfo::kColor)) {
-		value = s->presentation_info ().color ();
-#if BYTEORDER == kBigEndian
+		value = s->presentation_info ().color (); // RGBA
+		/* spec says "int32: RGBA, starts with red value in lowest byte" so effectively ABGR
+		 * https://github.com/fenderdigital/presonus-plugin-extensions/blob/ff17b53f7e0c871921f0983aebca6d657542a67f/ipslcontextinfo.h#L195
+		 */
 		SWAP_32 (value) // RGBA32 -> ABGR32
-#endif
 	} else if (0 == strcmp (id, ContextInfo::kVisibility)) {
 		value = s->is_hidden () ? 0 : 1;
 	} else if (0 == strcmp (id, ContextInfo::kSelected)) {
@@ -2819,7 +3094,7 @@ VST3PI::getContextInfoString (Vst::TChar* string, int32 max_len, FIDString id)
 		}
 		utf8_to_tchar (string, ac->get_user_string (), max_len);
 	}
-	DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::getContextInfoValue<string> %1 = %2\n", id, tchar_to_utf8 (string)));
+	DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::getContextInfoString<string> %1 = %2\n", id, tchar_to_utf8 (string)));
 	return kResultOk;
 }
 
@@ -2834,12 +3109,13 @@ VST3PI::getContextInfoValue (double& value, FIDString id)
 	if (0 == strcmp (id, ContextInfo::kMaxVolume)) {
 		value = s->gain_control ()->upper ();
 	} else if (0 == strcmp (id, ContextInfo::kMaxSendLevel)) {
+		value = 2.0; // Config->get_max_gain();
 #ifdef MIXBUS
-		if (s->send_level_controllable (0)) {
+		if (s->send_enable_controllable (0)) {
+			assert (s->send_level_controllable (0));
 			value = s->send_level_controllable (0)->upper (); // pow (10.0, .05 *  15.0);
 		}
 #endif
-		value = 2.0; // Config->get_max_gain();
 	} else if (0 == strcmp (id, ContextInfo::kVolume)) {
 		std::shared_ptr<AutomationControl> ac = s->gain_control ();
 		value                                   = ac->get_value (); // gain coefficient  0..2 (1.0 = 0dB)
@@ -2853,11 +3129,12 @@ VST3PI::getContextInfoValue (double& value, FIDString id)
 			value = 0.5; // center
 		}
 	} else if (0 == strncmp (id, ContextInfo::kSendLevel, strlen (ContextInfo::kSendLevel))) {
-		std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id);
+		std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id, _in_set_owner.load ());
 		if (ac) {
 			value = ac->get_value (); // gain cofficient
 			psl_subscribe_to (ac, id);
 		} else {
+			value = 0;
 			DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::getContextInfoValue<double> invalid AC %1\n", id));
 			return kInvalidArgument; // send index out of bounds
 		}
@@ -2872,28 +3149,35 @@ VST3PI::getContextInfoValue (double& value, FIDString id)
 tresult
 VST3PI::setContextInfoValue (FIDString id, double value)
 {
-	if (!_owner) {
+	Stripable* s = dynamic_cast<Stripable*> (_owner);
+	if (!s) {
 		DEBUG_TRACE (DEBUG::VST3Callbacks, "VST3PI::setContextInfoValue<double>: not initialized");
 		return kNotInitialized;
 	}
 	DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::setContextInfoValue<double> %1 to %2\n", id, value));
+	if (s->session ().loading () || s->session ().deletion_in_progress ()) {
+		return kResultOk;
+	}
 	if (0 == strcmp (id, ContextInfo::kVolume)) {
 		std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id);
-		ac->set_value (value, Controllable::NoGroup);
+		assert (ac);
+		if (ac) {
+			ac->set_value (value, Controllable::NoGroup);
+		}
 	} else if (0 == strcmp (id, ContextInfo::kPan)) {
 		std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id);
 		if (ac) {
 			ac->set_value (ac->interface_to_internal (value, true), PBD::Controllable::NoGroup);
 		}
 	} else if (0 == strncmp (id, ContextInfo::kSendLevel, strlen (ContextInfo::kSendLevel))) {
-		std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id);
+		std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id, _in_set_owner.load ());
 		if (ac) {
 			ac->set_value (value, Controllable::NoGroup);
 		} else {
 			return kInvalidArgument; // send index out of bounds
 		}
 	} else {
-		DEBUG_TRACE (DEBUG::VST3Callbacks, "VST3PI::setContextInfoValue<double>: unsupported ID\n");
+		DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::setContextInfoValue<double>: unsupported ID %1\n", id));
 		return kInvalidArgument;
 	}
 	return kResultOk;
@@ -2908,29 +3192,31 @@ VST3PI::setContextInfoValue (FIDString id, int32 value)
 		return kNotInitialized;
 	}
 	DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::setContextInfoValue<int> %1 to %2\n", id, value));
+	if (s->session ().loading () || s->session ().deletion_in_progress ()) {
+		return kResultOk;
+	}
 	if (0 == strcmp (id, ContextInfo::kColor)) {
-#if BYTEORDER == kBigEndian
 		SWAP_32 (value) // ABGR32 -> RGBA32
-#endif
 		s->presentation_info ().set_color (value);
 	} else if (0 == strcmp (id, ContextInfo::kSelected)) {
 		std::shared_ptr<Stripable> stripable = s->session ().stripable_by_id (s->id ());
 		assert (stripable);
 		if (value == 0) {
-			s->session ().selection ().remove (stripable, std::shared_ptr<AutomationControl> ());
+			s->session ().selection ().select_stripable_and_maybe_group (stripable, SelectionRemove);
 		} else if (_add_to_selection) {
-			s->session ().selection ().add (stripable, std::shared_ptr<AutomationControl> ());
+			s->session ().selection ().select_stripable_and_maybe_group (stripable, SelectionAdd);
 		} else {
-			s->session ().selection ().set (stripable, std::shared_ptr<AutomationControl> ());
+			s->session ().selection ().select_stripable_and_maybe_group (stripable, SelectionSet);
 		}
 	} else if (0 == strcmp (id, ContextInfo::kMultiSelect)) {
 		_add_to_selection = value != 0;
-	} else if (0 == strcmp (id, ContextInfo::kMute)) {
-		s->session ().set_control (lookup_ac (_owner, id), value != 0 ? 1 : 0, Controllable::NoGroup);
-	} else if (0 == strcmp (id, ContextInfo::kSolo)) {
-		s->session ().set_control (lookup_ac (_owner, id), value != 0 ? 1 : 0, Controllable::NoGroup);
+	} else if (0 == strcmp (id, ContextInfo::kMute) || 0 == strcmp (id, ContextInfo::kSolo)) {
+		std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id);
+		if (ac) {
+			s->session ().set_control (ac, value != 0 ? 1 : 0, Controllable::NoGroup);
+		}
 	} else {
-		DEBUG_TRACE (DEBUG::VST3Callbacks, "VST3PI::setContextInfoValue<int>: unsupported ID\n");
+		DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::setContextInfoValue<int>: unsupported ID %1\n", id));
 		return kNotImplemented;
 	}
 	return kResultOk;
@@ -2960,6 +3246,7 @@ VST3PI::beginEditContextInfoValue (FIDString id)
 	}
 	std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id);
 	if (!ac) {
+		DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::beginEditContextInfoValue %1 -- invalid AC\n", id));
 		return kInvalidArgument;
 	}
 	DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::beginEditContextInfoValue %1\n", id));
@@ -2976,6 +3263,7 @@ VST3PI::endEditContextInfoValue (FIDString id)
 	}
 	std::shared_ptr<AutomationControl> ac = lookup_ac (_owner, id);
 	if (!ac) {
+		DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::endEditContextInfoValue %1 -- invalid AC\n", id));
 		return kInvalidArgument;
 	}
 	DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::endEditContextInfoValue %1\n", id));
@@ -2998,7 +3286,7 @@ VST3PI::psl_subscribe_to (std::shared_ptr<ARDOUR::AutomationControl> ac, FIDStri
 	}
 
 	DEBUG_TRACE (DEBUG::VST3Callbacks, string_compose ("VST3PI::psl_subscribe_to: %1\n", ac->name ()));
-	ac->Changed.connect_same_thread (_ac_connection_list, boost::bind (&VST3PI::forward_signal, this, nfo2.get (), id));
+	ac->Changed.connect_same_thread (_ac_connection_list, std::bind (&VST3PI::forward_signal, this, nfo2.get (), id));
 }
 
 void
@@ -3058,8 +3346,8 @@ VST3PI::setup_psl_info_handler ()
 	}
 
 	Stripable* s = dynamic_cast<Stripable*> (_owner);
-	s->PropertyChanged.connect_same_thread (_strip_connections, boost::bind (&VST3PI::psl_stripable_property_changed, this, _1));
-	s->presentation_info ().PropertyChanged.connect_same_thread (_strip_connections, boost::bind (&VST3PI::psl_stripable_property_changed, this, _1));
+	s->PropertyChanged.connect_same_thread (_strip_connections, std::bind (&VST3PI::psl_stripable_property_changed, this, _1));
+	s->presentation_info ().PropertyChanged.connect_same_thread (_strip_connections, std::bind (&VST3PI::psl_stripable_property_changed, this, _1));
 
 	return true;
 }
@@ -3132,17 +3420,40 @@ VST3PI::has_editor () const
 	return rv;
 }
 
-#if SMTG_OS_LINUX
-void
-VST3PI::set_runloop (Linux::IRunLoop* run_loop)
-{
-	_run_loop = run_loop;
-}
-#endif
-
 tresult
 VST3PI::resizeView (IPlugView* view, ViewRect* new_size)
 {
 	OnResizeView (new_size->getWidth (), new_size->getHeight ()); /* EMIT SIGNAL */
 	return view->onSize (new_size);
+}
+
+void
+VST3PI::block_notifications ()
+{
+	_block_rpc.fetch_add (1);
+}
+
+void
+VST3PI::resume_notifications ()
+{
+	if (!PBD::atomic_dec_and_test (_block_rpc)) {
+		return;
+	}
+	ARDOUR::RouteProcessorChange rpc (RouteProcessorChange::NoProcessorChange, false);
+	std::swap (rpc, _rpc_queue);
+
+	if (_rpc_queue.type != RouteProcessorChange::NoProcessorChange) {
+		OnProcessorChange (rpc);
+	}
+}
+
+void
+VST3PI::send_processors_changed (RouteProcessorChange const& rpc)
+{
+	if (_block_rpc.load () != 0) {
+		_rpc_queue.type = ARDOUR::RouteProcessorChange::Type (_rpc_queue.type | rpc.type);
+		_rpc_queue.meter_visibly_changed |= rpc.meter_visibly_changed;
+		return;
+	}
+	OnProcessorChange (rpc);
 }

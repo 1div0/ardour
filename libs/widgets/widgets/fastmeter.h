@@ -21,8 +21,7 @@
 #define _WIDGETS_FAST_METER_H_
 
 #include <map>
-#include <boost/tuple/tuple.hpp>
-#include <boost/tuple/tuple_comparison.hpp>
+#include <tuple>
 #include <cairomm/pattern.h>
 #include "gtkmm2ext/cairo_widget.h"
 
@@ -96,6 +95,8 @@ private:
 	float current_user_level;
 	bool highlight;
 
+	uint32_t outline_color;
+
 	void vertical_expose (cairo_t*, cairo_rectangle_t*);
 	void vertical_size_request (GtkRequisition*);
 	void vertical_size_allocate (Gtk::Allocation&);
@@ -141,9 +142,9 @@ private:
 				|| (dim == rhs.dim && stp == rhs.stp && cols < rhs.cols)
 				|| (dim == rhs.dim && stp == rhs.stp && cols == rhs.cols && style < rhs.style);
 		}
-		boost::tuple<int, int> dim;
-		boost::tuple<float, float, float, float> stp;
-		boost::tuple<int, int, int, int, int, int, int, int, int, int> cols;
+		std::tuple<int, int> dim;
+		std::tuple<float, float, float, float> stp;
+		std::tuple<int, int, int, int, int, int, int, int, int, int> cols;
 		int style;
 	};
 	typedef std::map<Pattern10MapKey, Cairo::RefPtr<Cairo::Pattern> > Pattern10Map;
@@ -157,8 +158,8 @@ private:
 		inline bool operator<(const PatternBgMapKey& rhs) const {
 			return (dim < rhs.dim) || (dim == rhs.dim && cols < rhs.cols) || (dim == rhs.dim && cols == rhs.cols && (sh && !rhs.sh));
 		}
-		boost::tuple<int, int> dim;
-		boost::tuple<int, int> cols;
+		std::tuple<int, int> dim;
+		std::tuple<int, int> cols;
 		bool sh;
 	};
 	typedef std::map<PatternBgMapKey, Cairo::RefPtr<Cairo::Pattern> > PatternBgMap;

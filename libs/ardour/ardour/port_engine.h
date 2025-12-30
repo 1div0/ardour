@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libardour_port_engine_h__
-#define __libardour_port_engine_h__
+#pragma once
 
 #include <vector>
 #include <string>
@@ -502,10 +501,16 @@ public:
 	 */
 	virtual samplepos_t sample_time_at_cycle_start () = 0;
 
+	/* external connections (hardware <> hardware)
+	 * for internal backends
+	 */
+	virtual XMLNode* get_state () const { return nullptr; }
+	virtual int      set_state (XMLNode const&, int version) { return 0; }
+	virtual bool     match_state (XMLNode const&, int version) { return false; }
+
 protected:
 	PortManager& manager;
 };
 
 } // namespace
 
-#endif /* __libardour_port_engine_h__ */

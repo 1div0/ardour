@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_stretch_h__
-#define __ardour_stretch_h__
+#pragma once
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -38,7 +37,19 @@ class LIBARDOUR_API RBStretch : public RBEffect {
 	~RBStretch() {}
 };
 
-} /* namespace */
+
+class LIBARDOUR_API SPStretch : public Filter {
+  public:
+	SPStretch (ARDOUR::Session&, TimeFXRequest&);
+	~SPStretch ();
+
+	int run (std::shared_ptr<ARDOUR::Region>, PBD::Progress* progress = 0);
+
+  private:
+	TimeFXRequest& tsr;
+};
+
+}
 
 #ifdef HAVE_SOUNDTOUCH
 #include <soundtouch/SoundTouch.h>
@@ -50,7 +61,7 @@ class LIBARDOUR_API STStretch : public Filter {
 	STStretch (ARDOUR::Session&, TimeFXRequest&);
 	~STStretch ();
 
-	int run (std::shared_ptr<ARDOUR::Region>, Progress* progress = 0);
+	int run (std::shared_ptr<ARDOUR::Region>, PBD::Progress* progress = 0);
 
   private:
 	TimeFXRequest& tsr;
@@ -60,4 +71,3 @@ class LIBARDOUR_API STStretch : public Filter {
 #endif
 
 
-#endif /* __ardour_stretch_h__ */

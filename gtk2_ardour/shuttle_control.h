@@ -20,7 +20,7 @@
 #ifndef __gtk2_ardour_shuttle_control_h__
 #define __gtk2_ardour_shuttle_control_h__
 
-#include <gtkmm/drawingarea.h>
+#include <ytkmm/drawingarea.h>
 
 #include "pbd/controllable.h"
 
@@ -111,6 +111,7 @@ protected:
 	bool                                   _hovering;
 	float                                  shuttle_max_speed;
 	float                                  last_speed_displayed;
+	float                                  last_shuttle_fract;
 	bool                                   shuttle_grabbed;
 	double                                 shuttle_speed_on_grab;
 	double                                 requested_speed;

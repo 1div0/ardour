@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __pbd_abstract_ui_h__
-#define __pbd_abstract_ui_h__
+#pragma once
 
 #include <map>
 #include <string>
@@ -60,12 +59,10 @@ public:
 	virtual ~AbstractUI();
 
 	void register_thread (pthread_t, std::string, uint32_t num_requests);
-	bool call_slot (EventLoop::InvalidationRecord*, const boost::function<void()>&);
-	Glib::Threads::Mutex& slot_invalidation_mutex() { return request_buffer_map_lock; }
+	bool call_slot (EventLoop::InvalidationRecord*, const std::function<void()>&);
+	Glib::Threads::RWLock& slot_invalidation_rwlock() { return request_buffer_map_lock; }
 
-	Glib::Threads::Mutex request_buffer_map_lock;
-
-	static void* request_buffer_factory (uint32_t num_requests);
+	Glib::Threads::RWLock request_buffer_map_lock;
 
 protected:
 	struct RequestBuffer : public PBD::RingBufferNPT<RequestObject> {
@@ -76,7 +73,7 @@ protected:
 	};
 	typedef typename RequestBuffer::rw_vector RequestBufferVector;
 
-#if defined(COMPILER_MINGW) && defined(PTW32_VERSION)
+#if defined(COMPILER_MINGW) && defined(__PTW32_VERSION)
 	struct pthread_cmp
 	{
 		bool operator() (const ptw32_handle_t& thread1, const ptw32_handle_t& thread2)
@@ -92,7 +89,6 @@ protected:
 #endif
 
 	RequestBufferMap request_buffers;
-	static Glib::Threads::Private<RequestBuffer> per_thread_request_buffer;
 
 	std::list<RequestObject*> request_list;
 
@@ -102,6 +98,8 @@ protected:
 
 	virtual void do_request (RequestObject *) = 0;
 	PBD::ScopedConnection new_thread_connection;
+
+	RequestBuffer* get_per_thread_request_buffer ();
+
 };
 
-#endif /* __pbd_abstract_ui_h__ */

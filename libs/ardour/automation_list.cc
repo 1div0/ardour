@@ -49,7 +49,7 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
-PBD::Signal1<void,AutomationList *> AutomationList::AutomationListCreated;
+PBD::Signal<void(AutomationList *)> AutomationList::AutomationListCreated;
 
 #if 0
 static void dumpit (const AutomationList& al, string prefix = "")
@@ -61,8 +61,8 @@ static void dumpit (const AutomationList& al, string prefix = "")
 	cerr << "\n";
 }
 #endif
-AutomationList::AutomationList (const Evoral::Parameter& id, const Evoral::ParameterDescriptor& desc, Temporal::TimeDomain time_domain)
-	: ControlList(id, desc, time_domain)
+AutomationList::AutomationList (const Evoral::Parameter& id, const Evoral::ParameterDescriptor& desc, Temporal::TimeDomainProvider const & tdp)
+	: ControlList(id, desc, tdp)
 	, _before (0)
 {
 	_state = Off;
@@ -75,8 +75,8 @@ AutomationList::AutomationList (const Evoral::Parameter& id, const Evoral::Param
 	AutomationListCreated(this);
 }
 
-AutomationList::AutomationList (const Evoral::Parameter& id, Temporal::TimeDomain time_domain)
-	: ControlList(id, ARDOUR::ParameterDescriptor(id), time_domain)
+AutomationList::AutomationList (const Evoral::Parameter& id, Temporal::TimeDomainProvider const & tdp)
+	: ControlList(id, ARDOUR::ParameterDescriptor(id), tdp)
 	, _before (0)
 {
 	_state = Off;
@@ -120,7 +120,7 @@ AutomationList::AutomationList (const AutomationList& other, timepos_t const & s
  * in or below the AutomationList node.  It is used if @p id is non-null.
  */
 AutomationList::AutomationList (const XMLNode& node, Evoral::Parameter id)
-	: ControlList(id, ARDOUR::ParameterDescriptor(id), Temporal::AudioTime) /* domain may change in ::set_state */
+	: ControlList(id, ARDOUR::ParameterDescriptor(id), Temporal::TimeDomainProvider (Temporal::AudioTime)) /* domain may change in ::set_state */
 	, _before (0)
 {
 	_touching.store (0);
@@ -147,9 +147,9 @@ AutomationList::~AutomationList()
 std::shared_ptr<Evoral::ControlList>
 AutomationList::create(const Evoral::Parameter&           id,
                        const Evoral::ParameterDescriptor& desc,
-                       Temporal::TimeDomain time_domain)
+                       Temporal::TimeDomainProvider const & tdp)
 {
-	return std::shared_ptr<Evoral::ControlList>(new AutomationList(id, desc, time_domain));
+	return std::shared_ptr<Evoral::ControlList>(new AutomationList(id, desc, tdp));
 }
 
 void
@@ -158,6 +158,7 @@ AutomationList::create_curve_if_necessary()
 	switch (_parameter.type()) {
 	case GainAutomation:
 	case BusSendLevel:
+	case SurroundSendLevel:
 	case InsertReturnLevel:
 	case TrimAutomation:
 	case PanAzimuthAutomation:
@@ -166,13 +167,14 @@ AutomationList::create_curve_if_necessary()
 	case FadeInAutomation:
 	case FadeOutAutomation:
 	case EnvelopeAutomation:
+	case MidiVelocityAutomation:
 		create_curve();
 		break;
 	default:
 		break;
 	}
 
-	WritePassStarted.connect_same_thread (_writepass_connection, boost::bind (&AutomationList::snapshot_history, this, false));
+	WritePassStarted.connect_same_thread (_writepass_connection, std::bind (&AutomationList::snapshot_history, this, false));
 }
 
 AutomationList&
@@ -233,6 +235,7 @@ AutomationList::default_interpolation () const
 	switch (_parameter.type()) {
 		case GainAutomation:
 		case BusSendLevel:
+		case SurroundSendLevel:
 		case InsertReturnLevel:
 		case EnvelopeAutomation:
 			return ControlList::Exponential;
@@ -314,7 +317,7 @@ AutomationList::thaw ()
 	}
 }
 
-Command*
+PBD::Command*
 AutomationList::memento_command (XMLNode* before, XMLNode* after)
 {
 	return new MementoCommand<AutomationList> (*this, before, after);
@@ -448,7 +451,7 @@ AutomationList::set_state (const XMLNode& node, int version)
 	Temporal::TimeDomain time_domain;
 
 	if (node.get_property ("time-domain", time_domain)) {
-		set_time_domain_empty (time_domain);
+		set_time_domain (time_domain);
 	}
 
 	if (node.name() == X_("events")) {

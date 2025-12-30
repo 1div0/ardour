@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_session_playlist_h__
-#define __ardour_session_playlist_h__
+#pragma once
 
 #include "ardour/session.h"
 #include "ardour/playlist.h"
@@ -31,12 +30,12 @@ template<class T> void
 SessionPlaylists::foreach (T *obj, void (T::*func)(std::shared_ptr<Playlist>))
 {
 	Glib::Threads::Mutex::Lock lm (lock);
-	for (List::iterator i = playlists.begin(); i != playlists.end(); i++) {
+	for (PlaylistSet::iterator i = playlists.begin(); i != playlists.end(); i++) {
 		if (!(*i)->hidden()) {
 			(obj->*func) (*i);
 		}
 	}
-	for (List::iterator i = unused_playlists.begin(); i != unused_playlists.end(); i++) {
+	for (PlaylistSet::iterator i = unused_playlists.begin(); i != unused_playlists.end(); i++) {
 		if (!(*i)->hidden()) {
 			(obj->*func) (*i);
 		}
@@ -45,4 +44,3 @@ SessionPlaylists::foreach (T *obj, void (T::*func)(std::shared_ptr<Playlist>))
 
 } /* namespace */
 
-#endif /* __ardour_session_playlist_h__ */

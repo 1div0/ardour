@@ -11,6 +11,7 @@
 
 #include "pbd/debug.h"
 #include "ardour/ardour.h"
+#include "temporal/types.h"
 #include "test_ui.h"
 
 static const char* localedir = LOCALEDIR;
@@ -18,10 +19,6 @@ static const char* localedir = LOCALEDIR;
 int
 main(int argc, char* argv[])
 {
-	if (!Glib::thread_supported()) {
-		Glib::thread_init();
-	}
-
 	const struct option longopts[] = {
 		{ "debug", 1, 0, 'D' },
 		{ 0, 0, 0, 0 }
@@ -50,6 +47,8 @@ main(int argc, char* argv[])
 	}
 
 	CPPUNIT_ASSERT (ARDOUR::init (true, localedir));
+
+	Temporal::reset();
 
 	TestUI* test_ui = new TestUI();
 

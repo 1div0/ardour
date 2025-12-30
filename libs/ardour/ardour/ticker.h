@@ -20,36 +20,34 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <boost/noncopyable.hpp>
-#include <boost/scoped_ptr.hpp>
-
 #include "pbd/signals.h"
 
 #include "ardour/libardour_visibility.h"
 #include "ardour/session_handle.h"
 #include "ardour/types.h"
 
-#ifndef __libardour_ticker_h__
-#define __libardour_ticker_h__
+#pragma once
 
 namespace ARDOUR
 {
 class Session;
 class MidiPort;
 
-class LIBARDOUR_API MidiClockTicker : boost::noncopyable
+class LIBARDOUR_API MidiClockTicker
 {
 public:
 	MidiClockTicker (Session&);
+	MidiClockTicker (const MidiClockTicker&) = delete;
+	MidiClockTicker& operator= (const MidiClockTicker&) = delete;
 	virtual ~MidiClockTicker ();
 
-	void tick (ProcessedRanges const &, pframes_t, samplecnt_t);
+	void tick (samplepos_t, samplepos_t, pframes_t, samplecnt_t);
 
 private:
 	ARDOUR::Session&      _session;
 	std::shared_ptr<MidiPort> _midi_port;
 	bool                  _rolling;
-	samplepos_t           _next_tick;
+	double                _next_tick;
 	uint32_t              _beat_pos;
 	uint32_t              _clock_cnt;
 	samplepos_t           _transport_pos;
@@ -59,7 +57,6 @@ private:
 	void   reset ();
 	void   resync_latency (bool);
 	double one_ppqn_in_samples (samplepos_t transport_position) const;
-	void   sub_tick (samplepos_t start, samplepos_t end, pframes_t n_samples, samplecnt_t& pre_roll, double speed, pframes_t offset);
 
 	void send_midi_clock_event (pframes_t offset, pframes_t nframes);
 	void send_start_event (pframes_t offset, pframes_t nframes);
@@ -70,4 +67,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif /* __libardour_ticker_h__ */

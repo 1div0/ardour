@@ -19,13 +19,16 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "gtkmm2ext/utils.h"
 
+#include "ardour/midi_region.h"
+
+#include "editing_context.h"
 #include "edit_note_dialog.h"
-#include "midi_region_view.h"
+#include "midi_view.h"
 #include "note_base.h"
 
 #include "pbd/i18n.h"
@@ -41,8 +44,8 @@ using namespace Gtkmm2ext;
  *    @param n Notes to edit.
  */
 
-EditNoteDialog::EditNoteDialog (MidiRegionView* rv, set<NoteBase*> n)
-	: ArdourDialog (_("Note"))
+EditNoteDialog::EditNoteDialog (Gtk::Window& parent, MidiView* rv, set<NoteBase*> n)
+	: ArdourDialog (parent, _("Note"))
 	, _region_view (rv)
 	, _events (n)
 	, _channel_all (_("Set selected notes to this channel"))
@@ -94,12 +97,11 @@ EditNoteDialog::EditNoteDialog (MidiRegionView* rv, set<NoteBase*> n)
 	table->attach (_time_all, 2, 3, r, r + 1);
 	++r;
 
-	_time_clock.set_session (_region_view->get_time_axis_view().session ());
+	_time_clock.set_session (_region_view->editing_context().session());
 	_time_clock.set_mode (AudioClock::BBT);
 
 	/* Calculate absolute position of the event on time timeline */
-	std::shared_ptr<ARDOUR::Region> region (_region_view->region ());
-	timepos_t const pos = region->source_position() + timecnt_t ((*_events.begin())->note()->time ());
+	timepos_t const pos = _region_view->midi_region()->source_position() + timecnt_t ((*_events.begin())->note()->time ());
 
 	_time_clock.set (pos, true);
 
@@ -109,7 +111,7 @@ EditNoteDialog::EditNoteDialog (MidiRegionView* rv, set<NoteBase*> n)
 	table->attach (_length_all, 2, 3, r, r + 1);
 	++r;
 
-	_length_clock.set_session (_region_view->get_time_axis_view().session ());
+	_length_clock.set_session (_region_view->editing_context().session ());
 	_length_clock.set_mode (AudioClock::BBT);
 	_length_clock.set_duration (timecnt_t ((*_events.begin())->note()->length()), true);
 
@@ -201,10 +203,8 @@ EditNoteDialog::done (int r)
 		}
 	}
 
-	std::shared_ptr<ARDOUR::Region> region (_region_view->region ());
-
 	/* convert current clock time into an offset from the start of the source */
-	timecnt_t const time_clock_source_relative = region->source_position ().distance (_time_clock.last_when ());
+	timecnt_t const time_clock_source_relative = _region_view->midi_region()->source_position ().distance (_time_clock.last_when ());
 
 	/* convert that into a position in Beats - this will be the new note time (as an offset inside the source) */
 	Beats const new_note_time_source_relative_beats = time_clock_source_relative.beats ();
@@ -229,15 +229,15 @@ EditNoteDialog::done (int r)
 
 	}
 
+	list<Evoral::event_id_t> notes;
+	for (set<NoteBase*>::iterator i = _events.begin(); i != _events.end(); ++i) {
+		notes.push_back ((*i)->note()->id());
+	}
+
 	if (had_change) {
 		_region_view->apply_note_diff ();
 	} else {
 		_region_view->abort_note_diff ();
-	}
-
-	list<Evoral::event_id_t> notes;
-	for (set<NoteBase*>::iterator i = _events.begin(); i != _events.end(); ++i) {
-		notes.push_back ((*i)->note()->id());
 	}
 
 	_region_view->select_notes (notes, true);

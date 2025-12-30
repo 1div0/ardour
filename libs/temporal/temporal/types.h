@@ -16,10 +16,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libpbd_position_types_h__
-#define __libpbd_position_types_h__
+#pragma once
 
+#include <cassert>
 #include <cstdlib>
+#include <ostream>
 #include <stdint.h>
 
 #include "pbd/integer_division.h"
@@ -30,8 +31,10 @@ namespace Temporal {
 
 #ifdef COMPILER_MSVC
 	LIBTEMPORAL_API void init ();
+	LIBTEMPORAL_API void reset ();
 #else
 	extern void init ();
+	extern void reset ();
 #endif
 
 /* Any position measured in audio samples.
@@ -128,5 +131,3 @@ extern void setup_enum_writer ();
 
 std::ostream& operator<< (std::ostream& o, Temporal::ratio_t const & r);
 
-
-#endif /* __libpbd_position_types_h__ */

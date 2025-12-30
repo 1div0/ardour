@@ -16,7 +16,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include "gtkmm/stock.h"
+#include "ytkmm/stock.h"
 
 #include "ardour/route.h"
 #include "ardour/session.h"
@@ -25,6 +25,7 @@
 #include "editor.h"
 #include "duplicate_routes_dialog.h"
 #include "selection.h"
+#include "ui_config.h"
 
 #include "pbd/i18n.h"
 
@@ -99,10 +100,8 @@ DuplicateRouteDialog::restart (Session* s)
 
 		if (std::dynamic_pointer_cast<Track> (r)) {
 			ntracks++;
-		} else {
-			if (!r->is_master() && !r->is_monitor()) {
-				nbusses++;
-			}
+		} else if (!r->is_main_bus()) {
+			nbusses++;
 		}
 	}
 
@@ -185,7 +184,7 @@ DuplicateRouteDialog::on_response (int response)
 			continue;
 		}
 
-		if ((*s)->is_master() || (*s)->is_monitor()) {
+		if ((*s)->is_main_bus ()) {
 			/* no option to duplicate these */
 			continue;
 		}
@@ -209,7 +208,7 @@ DuplicateRouteDialog::on_response (int response)
 	if (err) {
 		MessageDialog msg (_("1 or more tracks/busses could not be duplicated"),
 		                     true, MESSAGE_ERROR, BUTTONS_OK, true);
-		msg.set_position (WIN_POS_MOUSE);
+		msg.set_position (UIConfiguration::instance().get_default_window_position());
 		msg.run ();
 	}
 }

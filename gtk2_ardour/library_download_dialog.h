@@ -21,13 +21,13 @@
 
 #include <string>
 
-#include <gtkmm/cellrendererprogress.h>
-#include <gtkmm/cellrenderertext.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/treeview.h>
-#include <gtkmm/textview.h>
+#include <ytkmm/cellrendererprogress.h>
+#include <ytkmm/cellrenderertext.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/treeview.h>
+#include <ytkmm/textview.h>
 
 #include "ardour_dialog.h"
 
@@ -64,6 +64,7 @@ class LibraryDownloadDialog : public ArdourDialog
 			add (toplevel);
 			add (install);
 			add (progress);
+			add (installing);
 			add (downloader);
 		}
 
@@ -77,6 +78,7 @@ class LibraryDownloadDialog : public ArdourDialog
 		Gtk::TreeModelColumn<std::string> url;
 		Gtk::TreeModelColumn<std::string> toplevel;
 		Gtk::TreeModelColumn<PBD::Downloader*> downloader;
+		Gtk::TreeModelColumn<bool> installing;
 		Gtk::TreeModelColumn<int> progress;
 		/* used as tooltip */
 		Gtk::TreeModelColumn<std::string> description;
@@ -112,7 +114,7 @@ class LibraryDownloadDialog : public ArdourDialog
 
 	PBD::Inflater* inflater;
 	void install (std::string const & path, Gtk::TreePath const & treepath);
-	void install_progress (size_t, size_t, std::string, Gtk::TreePath);
+	void install_progress (float, std::string, Gtk::TreePath);
 	void install_finished (Gtk::TreeModel::iterator row, std::string path, int status);
 	PBD::ScopedConnection install_connection;
 

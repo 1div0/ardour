@@ -17,10 +17,6 @@
 int
 main(int argc, char* argv[])
 {
-	if (!Glib::thread_supported()) {
-		Glib::thread_init();
-	}
-
 	const struct option longopts[] = {
 		{ "debug", 1, 0, 'D' },
 		{ 0, 0, 0, 0 }
@@ -51,9 +47,7 @@ main(int argc, char* argv[])
 	if (!PBD::init ()) return 1;
 	Temporal::init ();
 
-	// TempoMap::SharedPtr tmap = TempoMap::write_copy (); /* get writable copy of current tempo map */
-	// change it
-	// TempoMap::update (tmap); /* update the global tempo map manager */
+	Temporal::reset();
 
 	CppUnit::TestResult testresult;
 

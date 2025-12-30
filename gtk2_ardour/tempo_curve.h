@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtk_ardour_tempo_curve_h__
-#define __gtk_ardour_tempo_curve_h__
+#pragma once
 
 #include <string>
 #include <glib.h>
@@ -28,6 +27,7 @@
 #include "ardour/ardour.h"
 #include "pbd/signals.h"
 
+#include "canvas/container.h"
 #include "canvas/types.h"
 #include "canvas/framed_curve.h"
 #include "canvas/text.h"
@@ -43,7 +43,7 @@ public:
 	TempoCurve (PublicEditor& editor, ArdourCanvas::Item &, guint32 rgba, Temporal::TempoPoint const & temp, bool handle_events , ArdourCanvas::Distance marker_width);
 	~TempoCurve ();
 
-	static PBD::Signal1<void,TempoCurve*> CatchDeletion;
+	static PBD::Signal<void(TempoCurve*)> CatchDeletion;
 
 	static void setup_sizes (const double timebar_height);
 
@@ -58,8 +58,9 @@ public:
 	Temporal::TempoPoint const & tempo () const { return *_tempo; }
 	void reset_point (Temporal::TempoPoint const &);
 
-	void set_max_tempo (const double& max) { _max_tempo = max; }
-	void set_min_tempo (const double& min) { _min_tempo = min; }
+	void update_range (double min, double max) { _max_tempo = max; _min_tempo = min; }
+
+	static void format_tempo (double ntpm, int nt, char*, size_t);
 
 protected:
 	PublicEditor& editor;
@@ -88,4 +89,3 @@ private:
 	ArdourCanvas::Text*   _start_text;
 	ArdourCanvas::Text*   _end_text;
 };
-#endif /* __gtk_ardour_tempo_curve_h__ */

@@ -69,7 +69,7 @@ FFMPEGFileImportableSource::FFMPEGFileImportableSource (const std::string& path,
 	try {
 		PBD::ScopedConnection c;
 		std::string           ffprobe_output;
-		exec->ReadStdout.connect_same_thread (c, boost::bind (&receive_stdout, &ffprobe_output, _1, _2));
+		exec->ReadStdout.connect_same_thread (c, std::bind (&receive_stdout, &ffprobe_output, std::placeholders::_1, std::placeholders::_2));
 
 		/* wait for ffprobe process to exit */
 		exec->wait ();
@@ -193,7 +193,7 @@ FFMPEGFileImportableSource::start_ffmpeg ()
 		throw std::runtime_error ("Failed to start ffmpeg");
 	}
 
-	_ffmpeg_exec->ReadStdout.connect_same_thread (_ffmpeg_conn, boost::bind (&FFMPEGFileImportableSource::did_read_data, this, _1, _2));
+	_ffmpeg_exec->ReadStdout.connect_same_thread (_ffmpeg_conn, std::bind (&FFMPEGFileImportableSource::did_read_data, this, std::placeholders::_1, std::placeholders::_2));
 }
 
 void
@@ -236,7 +236,7 @@ FFMPEGFileImportableSource::did_read_data (std::string data, size_t size)
 		samplecnt_t written = 0;
 		for (int i = 0; i < 2; ++i) {
 			samplecnt_t cnt = std::min<samplecnt_t> (n_samples, wv.len[i]);
-			if (!cnt || !wv.buf[i]) {
+			if (!cnt) {
 				break;
 			}
 			memcpy (wv.buf[i], cur, cnt * sizeof (float));

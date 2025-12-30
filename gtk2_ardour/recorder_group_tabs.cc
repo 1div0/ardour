@@ -16,10 +16,14 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include "gtkmm2ext/rgb_macros.h"
+
 #include "recorder_group_tabs.h"
 #include "recorder_ui.h"
 #include "track_record_axis.h"
 #include "ui_config.h"
+
+#include "utils.h"
 
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
@@ -39,7 +43,7 @@ RecorderGroupTabs::primary_coordinate (double, double y) const
 }
 
 double
-RecorderGroupTabs::extent () const
+RecorderGroupTabs::visible_extent () const
 {
 	return get_height ();
 }
@@ -51,19 +55,20 @@ RecorderGroupTabs::compute_tabs () const
 
 	Tab tab;
 	tab.from  = 0;
-	tab.group = 0;
 	int32_t y = 0;
 
 	std::list<TrackRecordAxis*> recorders = _recorder->visible_recorders ();
+	std::shared_ptr<RouteGroup> tab_group (tab.group.lock());
+
 	for (std::list<TrackRecordAxis*>::const_iterator i = recorders.begin (); i != recorders.end (); ++i) {
 		if ((*i)->route ()->presentation_info ().hidden ()) { // marked_for_display ()
 			continue;
 		}
 
-		RouteGroup* g = (*i)->route_group ();
+		std::shared_ptr<RouteGroup> g = (*i)->route_group ();
 
-		if (g != tab.group) {
-			if (tab.group) {
+		if (g != tab_group) {
+			if (tab_group) {
 				tab.to = y;
 				tabs.push_back (tab);
 			}
@@ -78,7 +83,7 @@ RecorderGroupTabs::compute_tabs () const
 		y += (*i)->get_height ();
 	}
 
-	if (tab.group) {
+	if (tab_group) {
 		tab.to = y;
 		tabs.push_back (tab);
 	}
@@ -115,8 +120,13 @@ RecorderGroupTabs::draw_tab (cairo_t* cr, Tab const& tab)
 	double const arc_radius = get_width ();
 	double       r, g, b, a;
 
-	if (tab.group && tab.group->is_active ()) {
+	std::shared_ptr<RouteGroup> tab_group (tab.group.lock());
+	if (tab_group && tab_group->is_active ()) {
 		Gtkmm2ext::color_to_rgba (tab.color, r, g, b, a);
+	} else if (!tab_group && _dragging_new_tab) {
+		Gdk::Color col = ARDOUR_UI_UTILS::round_robin_palette_color (true);
+		color_t ct = Gtkmm2ext::gdk_color_to_rgba (col);
+		Gtkmm2ext::color_to_rgba (ct, r, g, b, a);
 	} else {
 		Gtkmm2ext::color_to_rgba (UIConfiguration::instance ().color ("inactive group tab"), r, g, b, a);
 	}
@@ -131,14 +141,15 @@ RecorderGroupTabs::draw_tab (cairo_t* cr, Tab const& tab)
 	cairo_line_to (cr, 0, tab.from + arc_radius);
 	cairo_fill (cr);
 
-	if (tab.group && (tab.to - tab.from) > arc_radius) {
+
+	if (tab_group && (tab.to - tab.from) > arc_radius) {
 		int text_width, text_height;
 
 		Glib::RefPtr<Pango::Layout> layout;
 		layout = Pango::Layout::create (get_pango_context ());
 		layout->set_ellipsize (Pango::ELLIPSIZE_MIDDLE);
 
-		layout->set_text (tab.group->name ());
+		layout->set_text (tab_group->name ());
 		layout->set_width ((tab.to - tab.from - arc_radius) * PANGO_SCALE);
 		layout->get_pixel_size (text_width, text_height);
 

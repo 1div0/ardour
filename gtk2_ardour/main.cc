@@ -33,7 +33,7 @@
 #include <locale.h>
 
 #include <sigc++/bind.h>
-#include <gtkmm/settings.h>
+#include <ytkmm/settings.h>
 
 #include <curl/curl.h>
 
@@ -54,8 +54,8 @@
 #include "ardour/session_utils.h"
 #include "ardour/filesystem_paths.h"
 
-#include <gtkmm/main.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/main.h>
+#include <ytkmm/stock.h>
 
 #include <gtkmm2ext/application.h>
 #include <gtkmm2ext/utils.h>
@@ -80,7 +80,7 @@
 #endif
 
 #ifdef LXVST_SUPPORT
-#include <gdk/gdkx.h>
+#include <ydk/gdkx.h>
 #endif
 
 using namespace std;
@@ -261,10 +261,6 @@ int main (int argc, char *argv[])
 
 	load_custom_fonts(); /* needs to happen before any gtk and pango init calls */
 
-	if (!Glib::thread_supported()) {
-		Glib::thread_init();
-	}
-
 #ifdef LXVST_SUPPORT
 	XInitThreads ();
 #endif
@@ -367,7 +363,7 @@ int main (int argc, char *argv[])
 	}
 
 	if (no_splash) {
-		cout << _("Copyright (C) 1999-2023 Paul Davis") << endl
+		cout << _("Copyright (C) 1999-2025 Paul Davis") << endl
 		     << _("Some portions Copyright (C) Steve Harris, Ari Johnson, Brett Viren, Joel Baker, Robin Gareus") << endl
 		     << endl
 		     << string_compose (_("%1 comes with ABSOLUTELY NO WARRANTY"), PROGRAM_NAME) << endl
@@ -434,7 +430,7 @@ int main (int argc, char *argv[])
 
 #ifndef PLATFORM_WINDOWS
 	if (::signal (SIGPIPE, sigpipe_handler)) {
-		cerr << _("Cannot xinstall SIGPIPE error handler") << endl;
+		cerr << _("Cannot install SIGPIPE error handler") << endl;
 	}
 #endif
 
@@ -449,6 +445,8 @@ int main (int argc, char *argv[])
 #endif
 
 	DEBUG_TRACE (DEBUG::Locale, string_compose ("main() locale '%1'\n", setlocale (LC_NUMERIC, NULL)));
+
+	setup_gtk_ardour_enums ();
 
 	if (UIConfiguration::instance().pre_gui_init ()) {
 		error << _("Could not complete pre-GUI initialization") << endmsg;

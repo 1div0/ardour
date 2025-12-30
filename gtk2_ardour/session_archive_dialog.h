@@ -16,14 +16,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef _gtkardour_session_archive_dialog_h_
-#define _gtkardour_session_archive_dialog_h_
+#pragma once
 
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/filechooserbutton.h>
-#include <gtkmm/progressbar.h>
+#include <ytkmm/checkbutton.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/filechooserbutton.h>
+#include <ytkmm/progressbar.h>
 
 #include "pbd/file_archive.h"
 #include "ardour/session.h"
@@ -48,14 +47,13 @@ public:
 	void set_compression_level (PBD::FileArchive::CompressionLevel);
 	void set_only_used_sources (bool);
 
-	void on_response (int response_id) {
-		Gtk::Dialog::on_response (response_id);
-	}
+protected:
+	void on_response (int);
 
 private:
 	Gtk::FileChooserButton target_folder_selector;
 	Gtk::Entry             name_entry;
-	Gtk::ComboBoxText      format_selector;
+	Gtk::Label             format_Label;
 	Gtk::ComboBoxText      encode_selector;
 	Gtk::ComboBoxText      compression_selector;
 	Gtk::CheckButton       only_used_checkbox;
@@ -66,4 +64,3 @@ private:
 	void update_progress_gui (float);
 };
 
-#endif /* __ardour_gtk_tempo_dialog_h__ */

@@ -34,6 +34,8 @@
 
 #include "pbd/signals.h"
 
+#include "temporal/domain_provider.h"
+#include "temporal/domain_swap.h"
 #include "temporal/timeline.h"
 #include "temporal/types.h"
 #include "temporal/range.h"
@@ -84,7 +86,7 @@ public:
 
 /** A list (sequence) of time-stamped values for a control
  */
-class LIBEVORAL_API ControlList
+class LIBEVORAL_API ControlList : public Temporal::TimeDomainProvider, public Temporal::TimeDomainSwapper
 {
 public:
 	typedef std::list<ControlEvent*> EventList;
@@ -93,15 +95,12 @@ public:
 	typedef EventList::const_iterator const_iterator;
 	typedef EventList::const_reverse_iterator const_reverse_iterator;
 
-	ControlList (const Parameter& id, const ParameterDescriptor& desc, Temporal::TimeDomain);
+	ControlList (const Parameter& id, const ParameterDescriptor& desc, Temporal::TimeDomainProvider const &);
 	ControlList (const ControlList&, Temporal::timepos_t const & start, Temporal::timepos_t const & end);
 	ControlList (const ControlList&);
 	virtual ~ControlList();
 
-	Temporal::TimeDomain time_domain() const { return _time_domain; }
-	void set_time_domain (Temporal::TimeDomain td);
-
-	virtual std::shared_ptr<ControlList> create(const Parameter& id, const ParameterDescriptor& desc, Temporal::TimeDomain);
+	virtual std::shared_ptr<ControlList> create(const Parameter& id, const ParameterDescriptor& desc, Temporal::TimeDomainProvider const &);
 
 	void dump (std::ostream&);
 
@@ -142,9 +141,10 @@ public:
 	bool extend_to (Temporal::timepos_t const & );
 	void slide (iterator before, Temporal::timecnt_t const &  distance);
 	void shift (Temporal::timepos_t const & before, Temporal::timecnt_t const & distance);
+	void simple_shift (Temporal::timepos_t const & distance);
 
-	void y_transform (boost::function<double(double)> callback);
-	void list_merge (ControlList const& other, boost::function<double(double, double)> callback);
+	void y_transform (std::function<double(double)> callback);
+	void list_merge (ControlList const& other, std::function<double(double, double)> callback);
 
 	/** Add an event to this list.
 	 *
@@ -165,11 +165,20 @@ public:
 	 *
 	 * @param when absolute time in samples
 	 * @param value parameter value
-	 * @param with_guards if true, add guard-points
+	 * @param with_guard if true, add guard-points
 	 *
 	 * @return true if an event was added.
 	 */
 	virtual bool editor_add (Temporal::timepos_t const & when, double value, bool with_guard);
+
+	struct OrderedPoint {
+		Temporal::timepos_t when;
+		double value;
+		OrderedPoint (Temporal::timepos_t const & t, double v) : when (t), value (v) {}
+	};
+	typedef std::vector<OrderedPoint> OrderedPoints;
+
+	virtual bool editor_add_ordered (OrderedPoints const &, bool with_guard);
 
 	/* to be used only for loading pre-sorted data from saved state */
 	void fast_simple_add (Temporal::timepos_t const & when, double value);
@@ -204,12 +213,14 @@ public:
 	std::shared_ptr<ControlList> cut (Temporal::timepos_t const &, Temporal::timepos_t const &);
 	std::shared_ptr<ControlList> copy (Temporal::timepos_t const &, Temporal::timepos_t const &);
 
+	bool has_event_at (Temporal::timepos_t const &) const;
+
 	/** Remove all events in the given time range from this list.
 	 *
 	 * @param start start of range (inclusive) in audio samples
 	 * @param end end of range (inclusive) in audio samples
 	 */
-	void clear (Temporal::timepos_t const &, Temporal::timepos_t const &);
+	void clear (Temporal::timepos_t const & start, Temporal::timepos_t const & end);
 
 	bool paste (const ControlList&, Temporal::timepos_t const &);
 
@@ -354,15 +365,18 @@ public:
 	bool in_write_pass () const;
 	bool in_new_write_pass () { return new_write_pass; }
 
-	PBD::Signal0<void> WritePassStarted;
+	PBD::Signal<void()> WritePassStarted;
 	/** Emitted when mark_dirty() is called on this object */
-	mutable PBD::Signal0<void> Dirty;
+	mutable PBD::Signal<void()> Dirty;
 	/** Emitted when our interpolation style changes */
-	PBD::Signal1<void, InterpolationStyle> InterpolationChanged;
+	PBD::Signal<void(InterpolationStyle)> InterpolationChanged;
 
 	bool operator!= (ControlList const &) const;
 
 	void invalidate_insert_iterator ();
+
+	void start_domain_bounce (Temporal::DomainBounceInfo&);
+	void finish_domain_bounce (Temporal::DomainBounceInfo&);
 
   protected:
 
@@ -380,8 +394,6 @@ public:
 
 	virtual void maybe_signal_changed ();
 
-	void set_time_domain_empty (Temporal::TimeDomain td);
-
 	void _x_scale (Temporal::ratio_t const &);
 
 	mutable LookupCache   _lookup_cache;
@@ -396,7 +408,6 @@ public:
 	int8_t                _frozen;
 	bool                  _changed_when_thawed;
 	bool                  _sort_pending;
-	Temporal::TimeDomain  _time_domain;
 
 	Curve* _curve;
 

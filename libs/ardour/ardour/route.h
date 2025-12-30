@@ -21,8 +21,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_route_h__
-#define __ardour_route_h__
+#pragma once
 
 #include <atomic>
 #include <cmath>
@@ -41,6 +40,7 @@
 #include "pbd/controllable.h"
 #include "pbd/destructible.h"
 
+#include "temporal/domain_swap.h"
 #include "temporal/types.h"
 
 #include "ardour/ardour.h"
@@ -66,6 +66,7 @@
 
 class RoutePinWindowProxy;
 class PatchChangeGridDialog;
+class ArdourWindow;
 
 namespace ARDOUR {
 
@@ -96,6 +97,8 @@ class SoloIsolateControl;
 class PhaseControl;
 class MonitorControl;
 class TriggerBox;
+class SurroundReturn;
+class SurroundSend;
 
 class LIBARDOUR_API Route : public Stripable,
                             public GraphNode,
@@ -136,10 +139,15 @@ public:
 	std::string comment() { return _comment; }
 	void set_comment (std::string str, void *src);
 
+	ArdourWindow* comment_editor () const { return _comment_editor_window; }
+	void set_comment_editor (ArdourWindow* w) { _comment_editor_window = w; }
+
 	bool set_name (const std::string& str);
 	static void set_name_in_state (XMLNode &, const std::string &);
 
 	std::shared_ptr<MonitorControl> monitoring_control() const { return _monitoring_control; }
+	std::shared_ptr<SurroundSend> surround_send() const { return _surround_send; }
+	std::shared_ptr<SurroundReturn> surround_return() const { return _surround_return; }
 
 	MonitorState monitoring_state () const;
 	virtual MonitorState get_input_monitoring_state (bool recording, bool talkback) const { return MonitoringSilence; }
@@ -167,7 +175,7 @@ public:
 	/* end of vfunc-based API */
 
 	void shift (timepos_t const &, timecnt_t const &);
-	void cut_copy_section (timepos_t const& start, timepos_t const& end, timepos_t const& to, bool const copy);
+	void cut_copy_section (timepos_t const& start, timepos_t const& end, timepos_t const& to, SectionOperation const op);
 
 	/* controls use set_solo() to modify this route's solo state */
 
@@ -182,7 +190,7 @@ public:
 	void push_solo_upstream (int32_t delta);
 	void push_solo_isolate_upstream (int32_t delta);
 	bool can_solo () const {
-		return !(is_master() || is_monitor() || is_auditioner() || is_foldbackbus());
+		return !(is_singleton() || is_auditioner() || is_foldbackbus());
 	}
 	bool is_safe () const {
 		return _solo_safe_control->get_value();
@@ -191,6 +199,7 @@ public:
 		return can_solo() || is_foldbackbus ();
 	}
 	void enable_monitor_send ();
+	void enable_surround_send ();
 
 	void set_denormal_protection (bool yn);
 	bool denormal_protection() const;
@@ -223,7 +232,7 @@ public:
 
 	void flush_processors ();
 
-	void foreach_processor (boost::function<void(std::weak_ptr<Processor>)> method) const {
+	void foreach_processor (std::function<void(std::weak_ptr<Processor>)> method) const {
 		Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 		for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
 			method (std::weak_ptr<Processor> (*i));
@@ -242,6 +251,7 @@ public:
 	}
 
 	std::shared_ptr<Processor> processor_by_id (PBD::ID) const;
+	std::shared_ptr<Processor> plugin_by_uri (std::string const&, int offset = 0) const;
 
 	std::shared_ptr<Processor> nth_plugin (uint32_t n) const;
 	std::shared_ptr<Processor> nth_send (uint32_t n) const;
@@ -259,7 +269,11 @@ public:
 
 	std::shared_ptr<AutomationControl> automation_control_recurse (PBD::ID const & id) const;
 
-	 void automatables (PBD::ControllableSet&) const;
+	void automatables (PBD::ControllableSet&) const;
+
+	void queue_surround_processors_changed () {
+		_pending_surround_send.store (1);
+	}
 
 	/* special processors */
 
@@ -368,9 +382,9 @@ public:
 	samplecnt_t signal_latency() const { return _signal_latency; }
 	samplecnt_t playback_latency (bool incl_downstream = false) const;
 
-	PBD::Signal0<void> active_changed;
-	PBD::Signal0<void> denormal_protection_changed;
-	PBD::Signal0<void> comment_changed;
+	PBD::Signal<void()> active_changed;
+	PBD::Signal<void()> denormal_protection_changed;
+	PBD::Signal<void()> comment_changed;
 
 	bool is_track();
 
@@ -379,7 +393,7 @@ public:
 	 * nubers < 0 indicate busses
 	 * zero is reserved for unnumbered special busses.
 	 * */
-	PBD::Signal0<void> track_number_changed;
+	PBD::Signal<void()> track_number_changed;
 	int64_t track_number() const { return _track_number; }
 
 	void set_track_number(int64_t tn) {
@@ -396,28 +410,29 @@ public:
 	};
 
 	/** ask GUI about port-count, fan-out when adding instrument */
-	static PBD::Signal3<int, std::shared_ptr<Route>, std::shared_ptr<PluginInsert>, PluginSetupOptions > PluginSetup;
+	static PBD::Signal<int(std::shared_ptr<Route>, std::shared_ptr<PluginInsert>, PluginSetupOptions )> PluginSetup;
 
 	/** used to signal the GUI to fan-out (track-creation) */
-	static PBD::Signal1<void, std::weak_ptr<Route> > FanOut;
+	static PBD::Signal<void(std::weak_ptr<Route> )> FanOut;
 
 	/** the processors have changed; the parameter indicates what changed */
-	PBD::Signal1<void,RouteProcessorChange> processors_changed;
-	PBD::Signal1<void,void*> record_enable_changed;
+	PBD::Signal<void(RouteProcessorChange)> processors_changed;
+	PBD::Signal<void(void*)> record_enable_changed;
 	/** a processor's latency has changed
 	 * (emitted from PluginInsert::latency_changed)
 	 */
-	PBD::Signal0<void> processor_latency_changed;
+	PBD::Signal<void()> processor_latency_changed;
 	/** the metering point has changed */
-	PBD::Signal0<void> meter_change;
+	PBD::Signal<void()> meter_change;
 
 	/** Emitted with the process lock held */
-	PBD::Signal0<void>       io_changed;
+	PBD::Signal<void()>       io_changed;
 
 	/* stateful */
 	XMLNode& get_state() const;
 	XMLNode& get_template();
 	virtual int set_state (const XMLNode&, int version);
+	virtual int import_state (const XMLNode&, bool use_pbd_ids = true, bool processor_only = true);
 
 	XMLNode& get_processor_state ();
 	void set_processor_state (const XMLNode&, int version);
@@ -427,11 +442,12 @@ public:
 
 	int save_as_template (const std::string& path, const std::string& name, const std::string& description );
 
-	PBD::Signal1<void,void*> SelectedChanged;
+	PBD::Signal<void(void*)> SelectedChanged;
 
 	int add_aux_send (std::shared_ptr<Route>, std::shared_ptr<Processor>);
 	int add_foldback_send (std::shared_ptr<Route>, bool post_fader);
 	void remove_monitor_send ();
+	void remove_surround_send ();
 
 	/**
 	 * return true if this route feeds the first argument directly, via
@@ -539,51 +555,10 @@ public:
 	uint32_t eq_band_cnt () const;
 	std::string eq_band_name (uint32_t) const;
 
-	std::shared_ptr<AutomationControl> eq_enable_controllable () const;
-	std::shared_ptr<AutomationControl> eq_gain_controllable (uint32_t band) const;
-	std::shared_ptr<AutomationControl> eq_freq_controllable (uint32_t band) const;
-	std::shared_ptr<AutomationControl> eq_q_controllable (uint32_t band) const;
-	std::shared_ptr<AutomationControl> eq_shape_controllable (uint32_t band) const;
+	std::shared_ptr<AutomationControl> mapped_control (enum WellKnownCtrl, uint32_t band = 0) const;
+	std::shared_ptr<ReadOnlyControl>   mapped_output (enum WellKnownData) const;
 
-	std::shared_ptr<AutomationControl> filter_freq_controllable (bool hpf) const;
-	std::shared_ptr<AutomationControl> filter_slope_controllable (bool) const;
-	std::shared_ptr<AutomationControl> filter_enable_controllable (bool) const;
-
-	std::shared_ptr<AutomationControl> tape_drive_controllable () const;
-	std::shared_ptr<AutomationControl> tape_drive_mode_controllable () const;
-	std::shared_ptr<ReadOnlyControl>   tape_drive_mtr_controllable () const;
-
-	std::shared_ptr<AutomationControl> comp_enable_controllable () const;
-	std::shared_ptr<AutomationControl> comp_threshold_controllable () const;
-	std::shared_ptr<AutomationControl> comp_speed_controllable () const;
-	std::shared_ptr<AutomationControl> comp_mode_controllable () const;
-	std::shared_ptr<AutomationControl> comp_makeup_controllable () const;
-	std::shared_ptr<AutomationControl> comp_ratio_controllable () const;
-	std::shared_ptr<AutomationControl> comp_attack_controllable () const;
-	std::shared_ptr<AutomationControl> comp_release_controllable () const;
-	std::shared_ptr<AutomationControl> comp_key_filter_freq_controllable () const;
-	std::shared_ptr<AutomationControl> comp_lookahead_controllable () const;
-	std::shared_ptr<ReadOnlyControl>   comp_meter_controllable () const;
-	std::shared_ptr<ReadOnlyControl>   comp_redux_controllable () const;
-
-	std::shared_ptr<AutomationControl> gate_enable_controllable () const;
-	std::shared_ptr<AutomationControl> gate_mode_controllable () const;
-	std::shared_ptr<AutomationControl> gate_ratio_controllable () const;
-	std::shared_ptr<AutomationControl> gate_knee_controllable () const;
-	std::shared_ptr<AutomationControl> gate_threshold_controllable () const;
-	std::shared_ptr<AutomationControl> gate_depth_controllable () const;
-	std::shared_ptr<AutomationControl> gate_hysteresis_controllable () const;
-	std::shared_ptr<AutomationControl> gate_hold_controllable () const;
-	std::shared_ptr<AutomationControl> gate_attack_controllable () const;
-	std::shared_ptr<AutomationControl> gate_release_controllable () const;
-	std::shared_ptr<AutomationControl> gate_key_listen_controllable () const;
-	std::shared_ptr<AutomationControl> gate_key_filter_enable_controllable () const;
-	std::shared_ptr<AutomationControl> gate_key_filter_freq_controllable () const;
-	std::shared_ptr<AutomationControl> gate_lookahead_controllable () const;
-	std::shared_ptr<ReadOnlyControl>   gate_meter_controllable () const;
-	std::shared_ptr<ReadOnlyControl>   gate_redux_controllable () const;
-
-	std::shared_ptr<AutomationControl> send_level_controllable (uint32_t n) const;
+	std::shared_ptr<AutomationControl> send_level_controllable (uint32_t n, bool locked = false) const;
 	std::shared_ptr<AutomationControl> send_enable_controllable (uint32_t n) const;
 	std::shared_ptr<AutomationControl> send_pan_azimuth_controllable (uint32_t n) const;
 	std::shared_ptr<AutomationControl> send_pan_azimuth_enable_controllable (uint32_t n) const;
@@ -591,12 +566,6 @@ public:
 	std::string send_name (uint32_t n) const;
 
 	std::shared_ptr<AutomationControl> master_send_enable_controllable () const;
-
-	std::shared_ptr<ReadOnlyControl> master_correlation_mtr_controllable (bool) const;
-
-	std::shared_ptr<AutomationControl> master_limiter_enable_controllable () const;
-	std::shared_ptr<ReadOnlyControl> master_limiter_mtr_controllable () const;
-	std::shared_ptr<ReadOnlyControl> master_k_mtr_controllable () const;
 
 	void protect_automation ();
 
@@ -612,7 +581,6 @@ public:
 
 	virtual void use_captured_sources (SourceList& srcs, CaptureInfos const &) {}
 
-	void globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to);
 
 protected:
 	friend class Session;
@@ -669,6 +637,8 @@ protected:
 	std::shared_ptr<BeatBox>       _beatbox;
 #endif
 	std::shared_ptr<MonitorControl>   _monitoring_control;
+	std::shared_ptr<SurroundSend>     _surround_send;
+	std::shared_ptr<SurroundReturn>   _surround_return;
 
 	DiskIOPoint _disk_io_point;
 
@@ -676,13 +646,15 @@ protected:
 		EmitNone = 0x00,
 		EmitMeterChanged = 0x01,
 		EmitMeterVisibilityChange = 0x02,
-		EmitRtProcessorChange = 0x04
+		EmitRtProcessorChange = 0x04,
+		EmitSendReturnChange = 0x08
 	};
 
-	ProcessorList     _pending_processor_order;
-	std::atomic<int> _pending_process_reorder; // atomic
-	std::atomic<int> _pending_listen_change; // atomic
-	std::atomic<int> _pending_signals; // atomic
+	ProcessorList    _pending_processor_order;
+	std::atomic<int> _pending_process_reorder;
+	std::atomic<int> _pending_listen_change;
+	std::atomic<int> _pending_surround_send;
+	std::atomic<int> _pending_signals;
 
 	MeterPoint     _meter_point;
 	MeterPoint     _pending_meter_point;
@@ -697,6 +669,7 @@ protected:
 	std::shared_ptr<SoloSafeControl> _solo_safe_control;
 
 	std::string    _comment;
+	ArdourWindow*  _comment_editor_window;
 	bool           _have_internal_generator;
 	DataType       _default_type;
 
@@ -737,7 +710,9 @@ protected:
 
 	std::shared_ptr<Processor> the_instrument_unlocked() const;
 
-	SlavableControlList slavables () const;
+	SlavableAutomationControlList slavables () const;
+
+	virtual void input_change_handler (IOChange, void *src);
 
 private:
 	/* no copy construction */
@@ -746,7 +721,6 @@ private:
 	int set_state_2X (const XMLNode&, int);
 	void set_processor_state_2X (XMLNodeList const &, int);
 
-	void input_change_handler (IOChange, void *src);
 	void output_change_handler (IOChange, void *src);
 	void sidechain_change_handler (IOChange, void *src);
 
@@ -754,8 +728,8 @@ private:
 	std::vector<std::weak_ptr<Processor> > selfdestruct_sequence;
 	Glib::Threads::Mutex  selfdestruct_lock;
 
-	bool input_port_count_changing (ChanCount);
-	bool output_port_count_changing (ChanCount);
+	int input_port_count_changing (ChanCount);
+	int output_port_count_changing (ChanCount);
 
 	bool output_effectively_connected_real () const;
 	mutable std::map<Route*, bool> _connection_cache;
@@ -826,6 +800,11 @@ private:
 	bool    _in_sidechain_setup;
 	gain_t  _monitor_gain;
 
+	void add_well_known_ctrl (WellKnownCtrl, std::shared_ptr<PluginInsert>, int param);
+	void add_well_known_ctrl (WellKnownCtrl);
+
+	std::map<WellKnownCtrl, std::vector<std::weak_ptr<AutomationControl>>> _well_known_map;
+
 	/** true if we've made a note of a custom meter position in these variables */
 	bool _custom_meter_position_noted;
 	/** the processor that came after the meter when it was last set to a custom position,
@@ -839,4 +818,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_route_h__ */

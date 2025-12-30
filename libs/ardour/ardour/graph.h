@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_graph_h__
-#define __ardour_graph_h__
+#pragma once
 
 #include <atomic>
 #include <list>
@@ -137,14 +136,12 @@ private:
 	pframes_t   _process_nframes;
 	samplepos_t _process_start_sample;
 	samplepos_t _process_end_sample;
-	bool        _process_can_record;
 	bool        _process_non_rt_pending;
 
 	enum ProcessMode {
 		Roll, NoRoll, Silence
 	} _process_mode;
 
-	bool _process_noroll;
 	int  _process_retval;
 	bool _process_need_butler;
 
@@ -155,4 +152,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_graph_h__ */

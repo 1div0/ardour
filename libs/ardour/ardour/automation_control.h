@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_automation_control_h__
-#define __ardour_automation_control_h__
+#pragma once
 
 #include <map>
 #include <memory>
@@ -122,10 +121,23 @@ public:
 	const ARDOUR::Session& session() const { return _session; }
 	void commit_transaction (bool did_write);
 
-	ControlList grouped_controls () const;
+	AutomationControlList grouped_controls () const;
+
+	void add_visually_linked_control (std::shared_ptr<AutomationControl> ctrl) {
+		_visually_linked_ctrls.push_back (ctrl);
+	}
+
+	void clear_visually_linked_control () {
+		_visually_linked_ctrls.clear ();
+	}
+
+	WeakAutomationControlList visually_linked_controls () const {
+		return _visually_linked_ctrls;
+	}
 
 protected:
 	std::shared_ptr<ControlGroup> _group;
+	std::shared_ptr<ControlGroup> _pushed_group;
 
 	const ParameterDescriptor _desc;
 
@@ -149,6 +161,8 @@ protected:
 
 	void session_going_away ();
 
+	WeakAutomationControlList _visually_linked_ctrls;
+
 private:
 	/* I am unclear on why we have to make ControlGroup a friend in order
 	   to get access to the ::set_group() method when it is already
@@ -156,6 +170,8 @@ private:
 	*/
 	friend class ControlGroup;
 	void set_group (std::shared_ptr<ControlGroup>);
+	bool push_group (std::shared_ptr<ControlGroup>);
+	bool pop_group ();
 	PBD::ScopedConnection _state_changed_connection;
 	bool _no_session;
 };
@@ -163,4 +179,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_automation_control_h__ */

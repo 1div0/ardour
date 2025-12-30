@@ -27,7 +27,6 @@ using namespace ARDOUR;
 static OSStatus GetPropertyWrapper (
 		AudioDeviceID id, UInt32 elem, bool input, AudioDevicePropertyID prop, UInt32* size, void * data)
 {
-#ifdef COREAUDIO_108
 	AudioObjectPropertyAddress property_address;
 	property_address.mSelector = prop;
 	switch (prop) {
@@ -41,64 +40,43 @@ static OSStatus GetPropertyWrapper (
 	}
 	property_address.mElement = kAudioObjectPropertyElementMaster;
 	return AudioObjectGetPropertyData(id, &property_address, elem, NULL, size, data);
-#else
-	return AudioDeviceGetProperty(id, elem, input, prop, size, data);
-#endif
 }
 
 static OSStatus SetPropertyWrapper (
 		AudioDeviceID id, const AudioTimeStamp* when, UInt32 chn, bool input, AudioDevicePropertyID prop, UInt32 size, void * data)
 {
-#ifdef COREAUDIO_108
 	AudioObjectPropertyAddress property_address;
 	property_address.mSelector = prop;
 	property_address.mScope = input ? kAudioDevicePropertyScopeInput: kAudioDevicePropertyScopeOutput;
 	property_address.mElement = kAudioObjectPropertyElementMaster;
 	return AudioObjectSetPropertyData (id, &property_address, 0, NULL, size, data);
-#else
-	return AudioDeviceSetProperty (id, when, chn, input, prop, size, data);
-#endif
 }
 
 static OSStatus GetHardwarePropertyInfoWrapper (AudioDevicePropertyID prop, UInt32* size)
 {
-#ifdef COREAUDIO_108
 	AudioObjectPropertyAddress property_address;
 	property_address.mSelector = prop;
 	property_address.mScope = kAudioObjectPropertyScopeGlobal;
 	property_address.mElement = kAudioObjectPropertyElementMaster;
 	return AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &property_address, 0, NULL, size);
-#else
-	Boolean outWritable;
-	return AudioHardwareGetPropertyInfo(prop, size, &outWritable);
-#endif
 }
 
 static OSStatus GetHardwarePropertyWrapper (AudioDevicePropertyID prop, UInt32* size, void *d)
 {
-#ifdef COREAUDIO_108
 	AudioObjectPropertyAddress property_address;
 	property_address.mSelector = prop;
 	property_address.mScope = kAudioObjectPropertyScopeGlobal;
 	property_address.mElement = kAudioObjectPropertyElementMaster;
 	return AudioObjectGetPropertyData(kAudioObjectSystemObject, &property_address, 0, NULL, size, d);
-#else
-	return AudioHardwareGetProperty (prop, size, d);
-#endif
 }
 
 static OSStatus GetPropertyInfoWrapper (AudioDeviceID id, UInt32 elem, bool input, AudioDevicePropertyID prop, UInt32* size)
 {
-#ifdef COREAUDIO_108
 	AudioObjectPropertyAddress property_address;
 	property_address.mSelector = prop;
 	property_address.mScope = input ? kAudioDevicePropertyScopeInput: kAudioDevicePropertyScopeOutput;
 	property_address.mElement = elem;
 	return AudioObjectGetPropertyDataSize(id, &property_address, 0, NULL, size);
-#else
-	Boolean outWritable;
-	return AudioDeviceGetPropertyInfo(id, elem, input, prop, size, &outWritable);
-#endif
 }
 
 static OSStatus GetDeviceNameFromID(AudioDeviceID id, char* name)
@@ -121,8 +99,6 @@ static CFStringRef GetDeviceName(AudioDeviceID id)
 
 /* callbacks */
 
-#ifdef COREAUDIO_108
-
 static OSStatus property_callback_ptr (AudioObjectID inObjectID, UInt32 inNumberAddresses, const AudioObjectPropertyAddress inAddresses[], void* arg) {
 	CoreAudioPCM * self = static_cast<CoreAudioPCM*>(arg);
 	for (UInt32 i = 0; i < inNumberAddresses; ++i) {
@@ -139,46 +115,15 @@ static OSStatus property_callback_ptr (AudioObjectID inObjectID, UInt32 inNumber
 			case kAudioDevicePropertyNominalSampleRate:
 				self->sample_rate_callback();
 				break;
+			case kAudioDevicePropertyDeviceIsAlive:
+				self->halted_callback();
+				break;
 			default:
 				break;
 		}
 	}
 	return noErr;
 }
-
-#else
-
-static OSStatus hw_changed_callback_ptr (AudioHardwarePropertyID inPropertyID, void* arg) {
-	if (inPropertyID == kAudioHardwarePropertyDevices) {
-		CoreAudioPCM * self = static_cast<CoreAudioPCM*>(arg);
-		self->hw_changed_callback();
-	}
-	return noErr;
-}
-
-static OSStatus property_callback_ptr (
-		AudioDeviceID inDevice,
-		UInt32 inChannel,
-		Boolean isInput,
-		AudioDevicePropertyID inPropertyID,
-		void* inClientData)
-{
-	CoreAudioPCM * d = static_cast<CoreAudioPCM*> (inClientData);
-	switch (inPropertyID) {
-		case kAudioDeviceProcessorOverload:
-			d->xrun_callback();
-			break;
-		case kAudioDevicePropertyBufferFrameSize:
-			d->buffer_size_callback();
-			break;
-		case kAudioDevicePropertyNominalSampleRate:
-			d->sample_rate_callback();
-			break;
-	}
-	return noErr;
-}
-
-#endif
 
 static OSStatus render_callback_ptr (
 		void* inRefCon,
@@ -194,15 +139,11 @@ static OSStatus render_callback_ptr (
 
 
 static OSStatus add_listener (AudioDeviceID id, AudioDevicePropertyID selector, void *arg) {
-#ifdef COREAUDIO_108
 	AudioObjectPropertyAddress property_address;
 	property_address.mSelector = selector;
 	property_address.mScope = kAudioObjectPropertyScopeGlobal;
 	property_address.mElement = 0;
 	return AudioObjectAddPropertyListener(id, &property_address, property_callback_ptr, arg);
-#else
-        return AudioDeviceAddPropertyListener(id, 0, true, selector, property_callback_ptr, arg);
-#endif
 }
 
 
@@ -222,6 +163,7 @@ CoreAudioPCM::CoreAudioPCM ()
 	, _n_devices (0)
 	, _process_callback (0)
 	, _error_callback (0)
+	, _halted_callback (0)
 	, _hw_changed_callback (0)
 	, _xrun_callback (0)
 	, _buffer_size_callback (0)
@@ -231,7 +173,6 @@ CoreAudioPCM::CoreAudioPCM ()
 {
 	pthread_mutex_init (&_discovery_lock, 0);
 
-#ifdef COREAUDIO_108
 	CFRunLoopRef theRunLoop = NULL;
 	AudioObjectPropertyAddress property = { kAudioHardwarePropertyRunLoop, kAudioObjectPropertyScopeGlobal, kAudioHardwarePropertyDevices };
 	AudioObjectSetPropertyData (kAudioObjectSystemObject, &property, 0, NULL, sizeof(CFRunLoopRef), &theRunLoop);
@@ -240,9 +181,6 @@ CoreAudioPCM::CoreAudioPCM ()
 	property.mScope = kAudioObjectPropertyScopeGlobal;
 	property.mElement = 0;
 	AudioObjectAddPropertyListener(kAudioObjectSystemObject, &property, property_callback_ptr, this);
-#else
-	AudioHardwareAddPropertyListener (kAudioHardwarePropertyDevices, hw_changed_callback_ptr, this);
-#endif
 }
 
 CoreAudioPCM::~CoreAudioPCM ()
@@ -253,19 +191,14 @@ CoreAudioPCM::~CoreAudioPCM ()
 	delete _device_ids;
 	free(_device_ins);
 	free(_device_outs);
-#ifdef COREAUDIO_108
 	AudioObjectPropertyAddress prop;
 	prop.mSelector = kAudioHardwarePropertyDevices;
 	prop.mScope = kAudioObjectPropertyScopeGlobal;
 	prop.mElement = 0;
 	AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &prop, &property_callback_ptr, this);
-#else
-	AudioHardwareRemovePropertyListener(kAudioHardwarePropertyDevices, hw_changed_callback_ptr);
-#endif
 	free(_input_audio_buffer_list);
 	pthread_mutex_destroy (&_discovery_lock);
 }
-
 
 void
 CoreAudioPCM::hw_changed_callback() {
@@ -278,6 +211,15 @@ CoreAudioPCM::hw_changed_callback() {
 	}
 }
 
+void
+CoreAudioPCM::halted_callback() {
+#ifndef NDEBUG
+	printf("CoreAudio halted callback..\n");
+#endif
+	if (_halted_callback) {
+		_halted_callback(_halted_arg);
+	}
+}
 
 int
 CoreAudioPCM::available_sample_rates(uint32_t device_id, std::vector<float>& sampleRates)
@@ -420,15 +362,11 @@ CoreAudioPCM::get_stream_latencies(uint32_t device_id, bool input, std::vector<u
 	for (uint32_t i = 0; i < stream_count; i++) {
 		UInt32 stream_latency;
 		size = sizeof(UInt32);
-#ifdef COREAUDIO_108
 		AudioObjectPropertyAddress property_address;
 		property_address.mSelector = kAudioDevicePropertyStreams;
 		property_address.mScope = input ? kAudioDevicePropertyScopeInput: kAudioDevicePropertyScopeOutput;
 		property_address.mElement = i; // ??
 		err = AudioObjectGetPropertyData(_device_ids[device_id], &property_address, 0, NULL, &size, &stream_latency);
-#else
-		err = AudioStreamGetProperty(streamIDs[i], input, kAudioStreamPropertyLatency, &size, &stream_latency);
-#endif
 		if (err != noErr) {
 			fprintf(stderr, "GetStreamLatencies kAudioStreamPropertyLatency\n");
 			return;
@@ -480,15 +418,6 @@ CoreAudioPCM::get_latency(uint32_t device_id, bool input)
 #endif
 
 	return latency;
-}
-
-uint32_t
-CoreAudioPCM::get_latency(bool input)
-{
-	if (_active_device_id == 0) {
-		return 0;
-	}
-	return get_latency (_active_device_id, input);
 }
 
 uint32_t
@@ -700,7 +629,6 @@ CoreAudioPCM::pcm_stop ()
 
 	AudioOutputUnitStop(_auhal);
 	if (_state == 0) {
-#ifdef COREAUDIO_108
 		AudioObjectPropertyAddress prop;
 		prop.mScope = kAudioObjectPropertyScopeGlobal;
 		prop.mElement = 0;
@@ -711,14 +639,9 @@ CoreAudioPCM::pcm_stop ()
 			AudioObjectRemovePropertyListener(_active_device_id, &prop, &property_callback_ptr, this);
 			prop.mSelector = kAudioDevicePropertyNominalSampleRate;
 			AudioObjectRemovePropertyListener(_active_device_id, &prop, &property_callback_ptr, this);
+			prop.mSelector = kAudioDevicePropertyDeviceIsAlive;
+			AudioObjectRemovePropertyListener(_active_device_id, &prop, &property_callback_ptr, this);
 		}
-#else
-		if (_active_device_id > 0) {
-			AudioDeviceRemovePropertyListener(_active_device_id, 0, true, kAudioDeviceProcessorOverload, property_callback_ptr);
-			AudioDeviceRemovePropertyListener(_active_device_id, 0, true, kAudioDevicePropertyBufferFrameSize, property_callback_ptr);
-			AudioDeviceRemovePropertyListener(_active_device_id, 0, true, kAudioDevicePropertyNominalSampleRate, property_callback_ptr);
-		}
-#endif
 	}
 	if (_aggregate_plugin_id) {
 		destroy_aggregate_device();
@@ -726,11 +649,7 @@ CoreAudioPCM::pcm_stop ()
 	}
 
 	AudioUnitUninitialize(_auhal);
-#ifdef COREAUDIO_108
 	AudioComponentInstanceDispose(_auhal);
-#else
-	CloseComponent(_auhal);
-#endif
 	_auhal = 0;
 	_state = -1;
 	_capture_channels = 0;
@@ -746,6 +665,7 @@ CoreAudioPCM::pcm_stop ()
 	_output_names.clear();
 
 	_error_callback = 0;
+	_halted_callback = 0;
 	_process_callback = 0;
 	_xrun_callback = 0;
 }
@@ -830,21 +750,12 @@ CoreAudioPCM::pcm_start (
 	AudioDeviceID device_id;
 	AudioStreamBasicDescription srcFormat, dstFormat;
 
-#ifndef COREAUDIO_108
-	ComponentDescription cd = {kAudioUnitType_Output, kAudioUnitSubType_HALOutput, kAudioUnitManufacturer_Apple, 0, 0};
-	Component HALOutput = FindNextComponent(NULL, &cd);
-	if (!HALOutput) { errorMsg="FindNextComponent"; _state = -2; goto error; }
-
-	err = OpenAComponent(HALOutput, &_auhal);
-	if (err != noErr) { errorMsg="OpenAComponent"; _state = -2; goto error; }
-#else
 	AudioComponentDescription cd = {kAudioUnitType_Output, kAudioUnitSubType_HALOutput, kAudioUnitManufacturer_Apple, 0, 0};
 	AudioComponent HALOutput = AudioComponentFindNext(NULL, &cd);
 	if (!HALOutput) { errorMsg="AudioComponentFindNext"; _state = -2; goto error; }
 
 	err = AudioComponentInstanceNew(HALOutput, &_auhal);
 	if (err != noErr) { errorMsg="AudioComponentInstanceNew"; _state = -2; goto error; }
-#endif
 
 	err = AudioUnitInitialize(_auhal);
 	if (err != noErr) { errorMsg="AudioUnitInitialize"; _state = -3; goto error; }
@@ -973,6 +884,10 @@ CoreAudioPCM::pcm_start (
 	err = add_listener (_active_device_id, kAudioDevicePropertyNominalSampleRate, this);
 	if (err != noErr) { errorMsg="kAudioDevicePropertyNominalSampleRate, Listen"; _state = -9; goto error; }
 
+	err = add_listener (_active_device_id, kAudioDevicePropertyDeviceIsAlive, this);
+	if (err != noErr) { errorMsg="kAudioDevicePropertyNominalSampleRate, Listen"; _state = -9; goto error; }
+
+
 	_samples_per_period = current_buffer_size_id(_active_device_id);
 
 	// Setup callback
@@ -1031,11 +946,10 @@ CoreAudioPCM::cache_port_names(AudioDeviceID id, bool input)
 	} else {
 		n_chn = _playback_channels;;
 	}
-#ifdef COREAUDIO_108
+
 	AudioObjectPropertyAddress property_address;
 	property_address.mSelector = kAudioObjectPropertyElementName;
 	property_address.mScope = input ? kAudioDevicePropertyScopeInput: kAudioDevicePropertyScopeOutput;
-#endif
 
 	for (uint32_t c = 0; c < n_chn; ++c) {
 		CFStringRef name = NULL;
@@ -1043,25 +957,11 @@ CoreAudioPCM::cache_port_names(AudioDeviceID id, bool input)
 		UInt32 size = 0;
 		OSStatus err;
 
-#ifdef COREAUDIO_108
 		property_address.mElement = c + 1;
 		err = AudioObjectGetPropertyDataSize(id, &property_address, 0, NULL, &size);
-#else
-		err = AudioDeviceGetPropertyInfo (id, c + 1, input,
-				kAudioDevicePropertyChannelNameCFString,
-				&size,
-				NULL);
-#endif
 
 		if (err == kAudioHardwareNoError) {
-#ifdef COREAUDIO_108
 			err = AudioObjectGetPropertyData(id, &property_address, c + 1, NULL, &size, &name);
-#else
-			err = AudioDeviceGetProperty (id, c + 1, input,
-					kAudioDevicePropertyChannelNameCFString,
-					&size,
-					&name);
-#endif
 		}
 
 		bool decoded = false;

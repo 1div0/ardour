@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_pitch_h__
-#define __ardour_pitch_h__
+#pragma once
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -31,8 +30,6 @@ namespace ARDOUR {
 	class AudioRegion;
 }
 
-#ifdef USE_RUBBERBAND
-
 #include "ardour/rb_effect.h"
 
 namespace ARDOUR {
@@ -44,24 +41,3 @@ class LIBARDOUR_API Pitch : public RBEffect {
 };
 
 } /* namespace */
-
-# else
-
-namespace ARDOUR {
-
-class LIBARDOUR_API Pitch : public Filter {
-  public:
-	Pitch (ARDOUR::Session&, TimeFXRequest&);
-	~Pitch () {}
-
-	int run (std::shared_ptr<ARDOUR::Region>, Progress *);
-
-  private:
-	TimeFXRequest& tsr;
-};
-
-} /* namespace */
-
-#endif
-
-#endif /* __ardour_pitch_h__ */

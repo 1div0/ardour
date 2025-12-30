@@ -18,11 +18,12 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <regex.h>
+#include <regex>
 
 #include "pbd/error.h"
 
 #include "ardour/port_engine_shared.h"
+#include "ardour/port_manager.h"
 
 #include "pbd/i18n.h"
 
@@ -56,17 +57,17 @@ BackendPort::connect (BackendPortHandle port, BackendPortHandle self)
 	}
 
 	if (type () != port->type ()) {
-		PBD::error << _("BackendPort::connect (): wrong port-type") << endmsg;
+		PBD::error << string_compose (_("BackendPort::connect (): wrong port-type trying to connect %1 and %2"), name(), port->name()) << endmsg;
 		return -1;
 	}
 
 	if (is_output () && port->is_output ()) {
-		PBD::error << _("BackendPort::connect (): cannot inter-connect output ports.") << endmsg;
+		PBD::error << string_compose (_("BackendPort::connect (): cannot inter-connect output ports %1 and %2."), name(), port->name()) << endmsg;
 		return -1;
 	}
 
 	if (is_input () && port->is_input ()) {
-		PBD::error << _("BackendPort::connect (): cannot inter-connect input ports.") << endmsg;
+		PBD::error << string_compose (_("BackendPort::connect (): cannot inter-connect input ports."), name(), port->name()) << endmsg;
 		return -1;
 	}
 
@@ -288,27 +289,26 @@ PortEngineSharedImpl::get_ports (
 	std::vector<std::string>& port_names) const
 {
 	int rv = 0;
-	regex_t port_regex;
+	std::regex port_regex;
 	bool use_regexp = false;
-	if (port_name_pattern.size () > 0) {
-		if (!regcomp (&port_regex, port_name_pattern.c_str (), REG_EXTENDED|REG_NOSUB)) {
+	if (!port_name_pattern.empty()) {
+		try {
+			port_regex.assign (port_name_pattern, std::regex::extended);
 			use_regexp = true;
+		} catch (const std::regex_error&) {
+			use_regexp = false;
 		}
 	}
 
-	std::shared_ptr<PortIndex> p = _ports.reader ();
+	std::shared_ptr<PortIndex const> p = _ports.reader ();
 
-	for (PortIndex::const_iterator i = p->begin (); i != p->end (); ++i) {
-		BackendPortPtr port = *i;
+	for (auto const& port : *p) {
 		if ((port->type () == type) && flags == (port->flags () & flags)) {
-			if (!use_regexp || !regexec (&port_regex, port->name ().c_str (), 0, NULL, 0)) {
+			if (!use_regexp || std::regex_search (port->name(), port_regex)) {
 				port_names.push_back (port->name ());
 				++rv;
 			}
 		}
-	}
-	if (use_regexp) {
-		regfree (&port_regex);
 	}
 	return rv;
 }
@@ -328,10 +328,9 @@ PortEngineSharedImpl::port_is_physical (PortEngine::PortHandle port) const
 void
 PortEngineSharedImpl::get_physical_outputs (DataType type, std::vector<std::string>& port_names)
 {
-	std::shared_ptr<PortIndex> p = _ports.reader();
+	std::shared_ptr<PortIndex const> p = _ports.reader();
 
-	for (PortIndex::iterator i = p->begin (); i != p->end (); ++i) {
-		BackendPortPtr port = *i;
+	for (auto const& port : *p) {
 		if ((port->type () == type) && port->is_input () && port->is_physical ()) {
 			port_names.push_back (port->name ());
 		}
@@ -341,10 +340,9 @@ PortEngineSharedImpl::get_physical_outputs (DataType type, std::vector<std::stri
 void
 PortEngineSharedImpl::get_physical_inputs (DataType type, std::vector<std::string>& port_names)
 {
-	std::shared_ptr<PortIndex> p = _ports.reader();
+	std::shared_ptr<PortIndex const> p = _ports.reader();
 
-	for (PortIndex::iterator i = p->begin (); i != p->end (); ++i) {
-		BackendPortPtr port = *i;
+	for (auto const& port : *p) {
 		if ((port->type () == type) && port->is_output () && port->is_physical ()) {
 			port_names.push_back (port->name ());
 		}
@@ -357,10 +355,9 @@ PortEngineSharedImpl::n_physical_outputs () const
 	int n_midi = 0;
 	int n_audio = 0;
 
-	std::shared_ptr<PortIndex> p = _ports.reader();
+	std::shared_ptr<PortIndex const> p = _ports.reader();
 
-	for (PortIndex::const_iterator i = p->begin (); i != p->end (); ++i) {
-		BackendPortPtr port = *i;
+	for (auto const& port : *p) {
 		if (port->is_output () && port->is_physical ()) {
 			switch (port->type ()) {
 			case DataType::AUDIO: ++n_audio; break;
@@ -381,10 +378,9 @@ PortEngineSharedImpl::n_physical_inputs () const
 	int n_midi = 0;
 	int n_audio = 0;
 
-	std::shared_ptr<PortIndex> p = _ports.reader();
+	std::shared_ptr<PortIndex const> p = _ports.reader();
 
-	for (PortIndex::const_iterator i = p->begin (); i != p->end (); ++i) {
-		BackendPortPtr port = *i;
+	for (auto const& port : *p) {
 		if (port->is_input () && port->is_physical ()) {
 			switch (port->type ()) {
 			case DataType::AUDIO: ++n_audio; break;
@@ -449,7 +445,7 @@ PortEngineSharedImpl::unregister_port (PortEngine::PortHandle port_handle)
 		PortIndex::iterator i = std::find (ps->begin(), ps->end(), std::dynamic_pointer_cast<BackendPort> (port_handle));
 
 		if (i == ps->end ()) {
-			PBD::error << string_compose (_("%1::unregister_port: Failed to find port"), _instance_name) << endmsg;
+			PBD::error << string_compose (_("%1::unregister_port: Failed to find port: (%2)"), _instance_name, port ? port->name() : "(invalid)") << endmsg;
 			return;
 		}
 
@@ -547,12 +543,12 @@ PortEngineSharedImpl::set_port_name (PortEngine::PortHandle port_handle, const s
 	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort>(port_handle);
 
 	if (!valid_port (port)) {
-		PBD::error << string_compose (_("%1::set_port_name: Invalid Port"), _instance_name) << endmsg;
+		PBD::error << string_compose (_("%1::set_port_name: Invalid port: (%2)"), _instance_name, name) << endmsg;
 		return -1;
 	}
 
 	if (find_port (newname)) {
-		PBD::error << string_compose (_("%1::set_port_name: Port with given name already exists"), _instance_name) << endmsg;
+		PBD::error << string_compose (_("%1::set_port_name: Port with given name ('%2') already exists"), _instance_name, name) << endmsg;
 		return -1;
 	}
 
@@ -616,6 +612,12 @@ PortEngineSharedImpl::get_port_property (PortEngine::PortHandle port, const std:
 		if (!value.empty()) {
 			return 0;
 		}
+		value = std::static_pointer_cast<BackendPort>(port)->hw_port_name ();
+		if (!value.empty()) {
+			return 0;
+		}
+	}
+	if (key == "http://ardour.org/metadata/hardware-port-name") {
 		value = std::static_pointer_cast<BackendPort>(port)->hw_port_name ();
 		if (!value.empty()) {
 			return 0;
@@ -741,7 +743,7 @@ PortEngineSharedImpl::disconnect_all (PortEngine::PortHandle port_handle)
 	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort> (port_handle);
 
 	if (!valid_port (port)) {
-		PBD::warning << string_compose (_("%1::disconnect_all: invalid port"), _instance_name) << endmsg;
+		PBD::warning << string_compose (_("%1::disconnect_all: Invalid Port"), _instance_name) << endmsg;
 		return -1;
 	}
 
@@ -756,7 +758,7 @@ PortEngineSharedImpl::connected (PortEngine::PortHandle port_handle, bool /* pro
 	BackendPortPtr port = std::dynamic_pointer_cast<BackendPort> (port_handle);
 
 	if (!valid_port (port)) {
-		PBD::error << string_compose (_("%1::disconnect_all: Invalid Port"), _instance_name) << endmsg;
+		PBD::error << string_compose (_("%1::connected: Invalid Port"), _instance_name) << endmsg;
 		return false;
 	}
 	return port->is_connected ();
@@ -827,13 +829,71 @@ PortEngineSharedImpl::update_system_port_latencies ()
 	}
 }
 
+void
+PortEngineSharedImpl::process_connection_queue_locked (PortManager& mgr)
+{
+	for (auto& c : _port_connection_queue) {
+		mgr.connect_callback (c->a, c->b, c->c);
+		delete c;
+	}
+	_port_connection_queue.clear ();
+}
+
+XMLNode*
+PortEngineSharedImpl::get_state () const
+{
+	XMLNode* node (new XMLNode (X_("PortEngine")));
+	for (auto const& port : _system_inputs) {
+		assert (port->is_physical () && port->is_terminal ());
+		const std::set<BackendPortPtr>& connected_ports = port->get_connections ();
+		for (auto const& other : connected_ports) {
+			if (!other->is_physical () || !other->is_terminal ()) {
+				continue;
+			}
+			XMLNode* child = node->add_child (X_("HWConnection"));
+			child->set_property (X_("source"), port->name ());
+			child->set_property (X_("sink"), other->name ());
+		}
+	}
+	for (auto const& port : _system_midi_in) {
+		assert (port->is_physical () && port->is_terminal ());
+		const std::set<BackendPortPtr>& connected_ports = port->get_connections ();
+		for (auto const& other : connected_ports) {
+			if (!other->is_physical () || !other->is_terminal ()) {
+				continue;
+			}
+			XMLNode* child = node->add_child (X_("HWConnection"));
+			child->set_property (X_("source"), port->name ());
+			child->set_property (X_("sink"), other->name ());
+		}
+	}
+
+	return node;
+}
+
+int
+PortEngineSharedImpl::set_state (XMLNode const & node, int)
+{
+	assert (node.name() == X_("PortEngine"));
+	const XMLNodeList& children (node.children());
+	for (auto const* c : children) {
+		std::string src;
+		std::string dst;
+		if (c->name() != X_("HWConnection") || !c->get_property (X_("source"), src) || !c->get_property (X_("sink"), dst)) {
+			continue;
+		}
+		connect (src, dst);
+	}
+	return 0;
+}
+
 #ifndef NDEBUG
 void
 PortEngineSharedImpl::list_ports () const
 {
-	std::shared_ptr<PortIndex> p = _ports.reader ();
-	for (PortIndex::const_iterator i = p->begin (); i != p->end (); ++i) {
-		std::cout << (*i)->name () << "\n";
+	std::shared_ptr<PortIndex const> p = _ports.reader ();
+	for (auto const& port : *p) {
+		std::cout << port->name () << "\n";
 	}
 }
 #endif

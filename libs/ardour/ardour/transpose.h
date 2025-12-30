@@ -16,8 +16,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_transpose_h__
-#define __ardour_transpose_h__
+#pragma once
 
 #include "ardour/libardour_visibility.h"
 #include "ardour/midi_model.h"
@@ -32,7 +31,7 @@ public:
 
 	Transpose (int semitones);
 
-	Command* operator() (std::shared_ptr<ARDOUR::MidiModel> model,
+	PBD::Command* operator() (std::shared_ptr<ARDOUR::MidiModel> model,
 	                     Temporal::Beats                      position,
 	                     std::vector<Notes>&                  seqs);
 
@@ -44,4 +43,3 @@ private:
 
 } /* namespace */
 
-#endif /* __ardour_transpose_h__ */

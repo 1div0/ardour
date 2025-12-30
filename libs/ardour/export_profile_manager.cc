@@ -220,16 +220,15 @@ ExportProfileManager::load_presets ()
 std::string
 ExportProfileManager::preset_filename (std::string const& preset_name)
 {
-	string safe_name = legalize_for_path (preset_name);
+	string safe_name = legalize_for_universal_path (preset_name);
 	return Glib::build_filename (export_config_dir, safe_name + export_preset_suffix);
 }
 
 ExportPresetPtr
 ExportProfileManager::new_preset (string const& name)
 {
-	// Generate new ID and do regular save
-	string filename = preset_filename (name);
-	current_preset.reset (new ExportPreset (filename, session));
+	// Generate new and do regular save
+	current_preset.reset (new ExportPreset (session));
 	preset_list.push_back (current_preset);
 	return save_preset (name);
 }
@@ -240,7 +239,7 @@ ExportProfileManager::save_preset (string const& name)
 	string filename = preset_filename (name);
 
 	if (!current_preset) {
-		current_preset.reset (new ExportPreset (filename, session));
+		current_preset.reset (new ExportPreset (session, filename));
 		preset_list.push_back (current_preset);
 	}
 
@@ -288,7 +287,7 @@ ExportProfileManager::remove_preset ()
 void
 ExportProfileManager::load_preset_from_disk (std::string const& path)
 {
-	ExportPresetPtr preset (new ExportPreset (path, session));
+	ExportPresetPtr preset (new ExportPreset (session, path));
 
 	/* Handle id to filename mapping and don't add duplicates to list */
 
@@ -301,20 +300,20 @@ ExportProfileManager::load_preset_from_disk (std::string const& path)
 bool
 ExportProfileManager::set_state (XMLNode const& root)
 {
-	return set_global_state (root) & set_local_state (root);
+	return set_global_state (root) && set_local_state (root);
 }
 
 bool
 ExportProfileManager::set_global_state (XMLNode const& root)
 {
-	return init_filenames (root.children ("ExportFilename")) &
+	return init_filenames (root.children ("ExportFilename")) &&
 	       init_formats (root.children ("ExportFormat"));
 }
 
 bool
 ExportProfileManager::set_local_state (XMLNode const& root)
 {
-	return init_timespans (root.children ("ExportTimespan")) &
+	return init_timespans (root.children ("ExportTimespan")) &&
 	       init_channel_configs (root.children ("ExportChannelConfiguration"));
 }
 
@@ -544,6 +543,18 @@ ExportProfileManager::init_channel_configs (XMLNodeList nodes)
 		ChannelConfigStatePtr config (new ChannelConfigState (handler->add_channel_config ()));
 		channel_configs.push_back (config);
 
+#ifdef LIVETRAX
+		/* Do not add master-bus for stem-export.
+		 *
+		 * This changes "with processing" to be false
+		 * since TrackExportChannelSelector::sync_with_manager_state
+		 * checks for  RouteExportChannel/PortExportChannel
+		 */
+		if (_type == StemExport) {
+			return false;
+		}
+#endif
+
 		/* Add master outs as default */
 		if (!session.master_out ()) {
 			return false;
@@ -606,7 +617,7 @@ ExportProfileManager::save_format_to_disk (ExportFormatSpecPtr format)
 	new_name += export_format_suffix;
 
 	/* make sure its legal for the filesystem */
-	new_name = legalize_for_path (new_name);
+	new_name = legalize_for_universal_path (new_name);
 
 	std::string new_path = Glib::build_filename (export_config_dir, new_name);
 
@@ -1076,6 +1087,11 @@ ExportProfileManager::build_filenames (std::list<std::string>& result, ExportFil
 			result.push_back (filename->get_path (format));
 		}
 	}
+	/* no not retain the channel config - otherwise this retains
+	 * Route::_capturing_processor that may already be removed
+	 * from the processor chain.
+	 */
+	filename->set_channel_config (ExportChannelConfigPtr());
 }
 
 };

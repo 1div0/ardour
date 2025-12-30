@@ -22,6 +22,7 @@
 
 #include "pbd/enum_convert.h"
 
+#include "ytkmm/enums.h"
 #include "editing.h"
 
 namespace PBD {
@@ -32,6 +33,11 @@ DEFINE_ENUM_CONVERT(Editing::SnapMode)
 DEFINE_ENUM_CONVERT(Editing::EditPoint)
 DEFINE_ENUM_CONVERT(Editing::RegionListSortType)
 DEFINE_ENUM_CONVERT(Editing::MouseMode)
+DEFINE_ENUM_CONVERT(Editing::NoteNameDisplay)
+DEFINE_ENUM_CONVERT(Editing::MarkerClickBehavior)
+DEFINE_ENUM_CONVERT(Editing::RegionEditDisposition)
+
+DEFINE_ENUM_CONVERT(Gtk::WindowPosition)
 
 } // namespace PBD
 

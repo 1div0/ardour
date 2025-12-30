@@ -37,14 +37,9 @@
 #include <cstring>
 #include <cerrno>
 #include <iostream>
-#include <sys/types.h>
 #include <sys/time.h>
-#include <fcntl.h>
-#ifndef COMPILER_MSVC
-#include <dirent.h>
-#endif
 #include <errno.h>
-#include <regex.h>
+#include <fcntl.h>
 
 #include "pbd/gstdio_compat.h"
 
@@ -60,8 +55,16 @@
 #include "pbd/strsplit.h"
 #include "pbd/replace_all.h"
 
-#include "ardour/utils.h"
+#include "temporal/tempo.h"
+
+#include "ardour/debug.h"
+#include "ardour/minibpm.h"
+#include "ardour/region.h"
 #include "ardour/rc_configuration.h"
+#include "ardour/segment_descriptor.h"
+#include "ardour/source.h"
+#include "ardour/types.h"
+#include "ardour/utils.h"
 
 #include "pbd/i18n.h"
 
@@ -117,7 +120,10 @@ ARDOUR::legalize_for_path (const string& str)
 string
 ARDOUR::legalize_for_universal_path (const string& str)
 {
-	return replace_chars (str, "<>:\"/\\|?*");
+	string rv = replace_chars (str, "<>:\"/\\|?*");
+	/* windows filenames can't end with ' ' or '.' */
+	rv.erase (rv.find_last_not_of(" .") + 1);
+	return rv;
 }
 
 /** Legalize for a URI path component.  This is like
@@ -228,6 +234,44 @@ ARDOUR::bump_name_number (const std::string& name)
 
 	return newname;
 }
+
+string
+ARDOUR::bump_name_abc (const std::string& name)
+{
+	/* A, B, C, .. Z,  A1, B1, .. Z1, A2 .. Z2, A3 .. */
+	static char const* abc = _("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+	if (name.empty ()) {
+		return {abc[0]};
+	}
+
+	/* check first char */
+	char first = toupper (name[0]);
+
+	char const* end = abc + strlen (abc);
+	char const* pos = std::find (abc, end, first);
+
+	/* first char is not in the given set. Start over */
+	if (pos == end) {
+		return {abc[0]};
+	}
+
+	++pos;
+	if (pos != end) {
+		string rv = name;
+		rv[0] = *pos;
+		return rv;
+	}
+
+	/* find number */
+	size_t num = 0;
+	if (name.length () > 1) {
+		num = strtol (name.c_str() + 1, (char **)NULL, 10);
+	}
+	++num;
+
+	return string_compose ("%1%2", abc[0], num);
+}
+
 
 XMLNode *
 ARDOUR::find_named_node (const XMLNode& node, string name)
@@ -606,7 +650,13 @@ ARDOUR::native_header_format_extension (HeaderFormat hf, const DataType& type)
         case RF64:
         case RF64_WAV:
         case MBWF:
-                return ".rf64";
+	        /* our goal when using RF64 is to be able to fall back to a
+	           regular RIFF/WAV if the data size is small enough. Rather than
+	           confuse people in the common case where this happens by having
+	           files named "foo.rf64", deal with the common case as ".wav" and
+	           leave potential confusion for the actual RF64 files.
+	        */
+	        return ".wav";
         }
 
         fatal << string_compose (_("programming error: unknown native header format: %1"), hf);
@@ -618,45 +668,30 @@ bool
 ARDOUR::matching_unsuffixed_filename_exists_in (const string& dir, const string& path)
 {
 	string bws = basename_nosuffix (path);
-	struct dirent* dentry;
-	GStatBuf statbuf;
-	DIR* dead;
-	bool ret = false;
 
-        if ((dead = ::opendir (dir.c_str())) == 0) {
-                error << string_compose (_("cannot open directory %1 (%2)"), dir, strerror (errno)) << endl;
-                return false;
-        }
+	try {
+		Glib::Dir directory (dir);
 
-        while ((dentry = ::readdir (dead)) != 0) {
+		for (const auto& name : directory) {
+			if (name == "." || name == "..") {
+				continue;
+			}
 
-                /* avoid '.' and '..' */
+			string fullpath = Glib::build_filename (dir, name);
+			if (!Glib::file_test (fullpath, Glib::FILE_TEST_IS_REGULAR)) {
+				continue;
+			}
 
-                if ((dentry->d_name[0] == '.' && dentry->d_name[1] == '\0') ||
-                    (dentry->d_name[2] == '\0' && dentry->d_name[0] == '.' && dentry->d_name[1] == '.')) {
-                        continue;
-                }
+			if (basename_nosuffix (name) == bws) {
+				return true;
+			}
+		}
+	} catch (const Glib::Error& e) {
+		error << string_compose (_("cannot open directory %1 (%2)"), dir, e.what()) << endl;
+		return false;
+	}
 
-                string fullpath = Glib::build_filename (dir, dentry->d_name);
-
-                if (g_stat (fullpath.c_str(), &statbuf)) {
-                        continue;
-                }
-
-                if (!S_ISREG (statbuf.st_mode)) {
-                        continue;
-                }
-
-                string bws2 = basename_nosuffix (dentry->d_name);
-
-                if (bws2 == bws) {
-                        ret = true;
-                        break;
-                }
-        }
-
-        ::closedir (dead);
-        return ret;
+	return false;
 }
 
 uint32_t
@@ -664,7 +699,7 @@ ARDOUR::how_many_dsp_threads ()
 {
         /* CALLER MUST HOLD PROCESS LOCK */
 
-        int num_cpu = hardware_concurrency();
+        int num_cpu = PBD::hardware_concurrency();
         int pu = Config->get_processor_usage ();
         uint32_t num_threads = max (num_cpu - 1, 2); // default to number of cpus minus one, or 2, whichever is larger
 
@@ -691,6 +726,27 @@ ARDOUR::how_many_dsp_threads ()
         }
 
         return num_threads;
+}
+
+uint32_t
+ARDOUR::how_many_io_threads ()
+{
+	int num_cpu = PBD::hardware_concurrency();
+	int pu = Config->get_io_thread_count ();
+	uint32_t num_threads = max (num_cpu - 2, 2);
+	if (pu < 0) {
+		if (-pu < num_cpu) {
+			num_threads = num_cpu + pu;
+		} else {
+			num_threads = 1;
+		}
+	} else if (pu == 0) {
+		num_threads = num_cpu;
+
+	} else {
+		num_threads = min (num_cpu, pu);
+	}
+	return num_threads;
 }
 
 double
@@ -727,3 +783,132 @@ ARDOUR::compute_sha1_of_file (std::string path)
 	sha1_result_hash (&s, hash);
 	return std::string (hash);
 }
+
+bool
+ARDOUR::estimate_audio_tempo_region (std::shared_ptr<Region> region, Sample* data, samplecnt_t data_length, samplecnt_t sample_rate, double& qpm, Temporal::Meter& meter, double& beatcount)
+{
+	assert (region->source());
+
+	TimelineRange range (region->start(), region->start() + region->length(), 0);
+	SegmentDescriptor segment;
+
+	if (region->source()->get_segment_descriptor (range, segment)) {
+
+		qpm = segment.tempo().quarter_notes_per_minute ();
+		meter = segment.meter();
+		DEBUG_TRACE (DEBUG::TempoEstimation, string_compose ("%1: tempo and meter from segment descriptor\n", region->name()));
+
+		return true;
+	}
+
+	return estimate_audio_tempo_source (range, region->source(), data, data_length, sample_rate, qpm, meter, beatcount);
+}
+
+bool
+ARDOUR::estimate_audio_tempo_source (TimelineRange const & range, std::shared_ptr<Source> source, Sample* data, samplecnt_t data_length, samplecnt_t sample_rate, double& qpm, Temporal::Meter& meter, double& beatcount)
+{
+	using namespace Temporal;
+	TempoMap::SharedPtr tm (TempoMap::use());
+
+	/* not a great guess, but what else can we do? */
+
+	TempoMetric const & metric (tm->metric_at (timepos_t (AudioTime)));
+
+	meter = metric.meter ();
+
+	/* check the name to see if there's a (heuristically obvious) hint
+	 * about the tempo.
+	 */
+
+	string str = source->name();
+	string::size_type bi;
+	string::size_type ni;
+	double text_tempo = -1.;
+
+	if (((bi = str.find (" bpm")) != string::npos) ||
+	    ((bi = str.find ("bpm")) != string::npos)  ||
+	    ((bi = str.find (" BPM")) != string::npos) ||
+	    ((bi = str.find ("BPM")) != string::npos)  ){
+
+		string sub (str.substr (0, bi));
+
+		if ((ni = sub.find_last_of ("0123456789.,_-")) != string::npos) {
+
+			int nni = ni; /* ni is unsigned, nni is signed */
+
+			while (nni >= 0) {
+				if (!isdigit (sub[nni]) &&
+				    (sub[nni] != '.') &&
+				    (sub[nni] != ',')) {
+					break;
+				}
+				--nni;
+			}
+
+			if (nni > 0) {
+				std::stringstream p (sub.substr (nni + 1));
+				p >> text_tempo;
+				if (!p) {
+					text_tempo = -1.;
+				} else {
+					qpm = text_tempo;
+				}
+			}
+		}
+	}
+
+	if (text_tempo < 0) {
+
+		breakfastquay::MiniBPM mbpm (sample_rate);
+
+		qpm = mbpm.estimateTempoOfSamples (data, data_length);
+
+		//cerr << name() << "MiniBPM Estimated: " << qpm << " bpm from " << (double) data.length / _box.session().sample_rate() << " seconds\n";
+	}
+
+	const double seconds = (double) data_length  / sample_rate;
+
+	/* now check the determined tempo and force it to a value that gives us
+	   an integer beat/quarter count. This is a heuristic that tries to
+	   avoid clips that slightly over- or underrun a quantization point,
+	   resulting in small or larger gaps in output if they are repeating.
+	*/
+
+	if ((qpm != 0.)) {
+		/* fractional beatcnt */
+		double maybe_beats = (seconds / 60.) * qpm;
+		beatcount = round (maybe_beats);
+
+		/* the vast majority of third-party clips are 1,2,4,8, or 16-bar 'beats'.
+		 *  Given no other metadata, it makes things 'just work' if we assume 4/4 time signature, and power-of-2 bars  (1,2,4,8 or 16)
+		 *  TODO:  someday we could provide a widget for users who have unlabeled, un-metadata'd, clips that they *know* are 3/4 or 5/4 or 11/4 */
+		{
+			double barcount = round (beatcount/4);
+			if (barcount <= 18) {  /* why not 16 here? fuzzy logic allows minibpm to misjudge the clip a bit */
+				for (int pwr = 0; pwr <= 4; pwr++) {
+					float bc = pow(2,pwr);
+					if (barcount <= bc) {
+						barcount = bc;
+						break;
+					}
+				}
+			}
+			beatcount = round(barcount * 4);
+		}
+
+		DEBUG_RESULT (double, est, qpm);
+		qpm = beatcount / (seconds/60.);
+		DEBUG_TRACE (DEBUG::TempoEstimation, string_compose ("given original estimated tempo %1, rounded beatcnt is %2 : resulting in working bpm = %3\n", est, beatcount, qpm));
+
+	}
+
+#if 0
+	cerr << "estimated tempo: " << qpm << endl;
+	const samplecnt_t one_beat = tm->bbt_duration_at (timepos_t (AudioTime), BBT_Offset (0, 1, 0)).samples();
+	cerr << "one beat in samples: " << one_beat << endl;
+	cerr << "rounded beatcount = " << round (beatcount) << endl;
+#endif
+
+	return true;
+}
+

@@ -124,11 +124,11 @@ AutomationController::AutomationController(std::shared_ptr<AutomationControl> ac
 	_adjustment->signal_value_changed().connect(
 		sigc::mem_fun(*this, &AutomationController::value_adjusted));
 
-	ac->Changed.connect (_changed_connections, invalidator (*this), boost::bind (&AutomationController::display_effective_value, this), gui_context());
+	ac->Changed.connect (_changed_connections, invalidator (*this), std::bind (&AutomationController::display_effective_value, this), gui_context());
 	display_effective_value ();
 
 	if (ac->alist ()) {
-		ac->alist()->automation_state_changed.connect (_changed_connections, invalidator (*this), boost::bind (&AutomationController::automation_state_changed, this), gui_context());
+		ac->alist()->automation_state_changed.connect (_changed_connections, invalidator (*this), std::bind (&AutomationController::automation_state_changed, this), gui_context());
 		automation_state_changed ();
 	}
 
@@ -212,14 +212,14 @@ AutomationController::value_adjusted ()
 }
 
 void
-AutomationController::start_touch()
+AutomationController::start_touch (int state)
 {
 	_grabbed = true;
 	_controllable->start_touch (timepos_t (_controllable->session().transport_sample()));
 }
 
 void
-AutomationController::end_touch ()
+AutomationController::end_touch (int state)
 {
 	_controllable->stop_touch (timepos_t (_controllable->session().transport_sample()));
 	if (_grabbed) {
@@ -229,20 +229,20 @@ AutomationController::end_touch ()
 }
 
 bool
-AutomationController::button_press (GdkEventButton*)
+AutomationController::button_press (GdkEventButton* ev)
 {
 	ArdourButton* but = dynamic_cast<ArdourButton*>(_widget);
 	if (but) {
-		start_touch ();
+		start_touch (ev->state);
 		_controllable->set_value (but->get_active () ? 0.0 : 1.0, Controllable::UseGroup);
 	}
 	return false;
 }
 
 bool
-AutomationController::button_release (GdkEventButton*)
+AutomationController::button_release (GdkEventButton* ev)
 {
-	end_touch ();
+	end_touch (ev->state);
 	return true;
 }
 
@@ -284,7 +284,7 @@ AutomationController::set_freq_beats(double beats)
 	const ARDOUR::ParameterDescriptor& desc    = _controllable->desc();
 	const ARDOUR::Session&             session = _controllable->session();
 	const samplepos_t                  pos     = session.transport_sample();
-	const Temporal::Tempo&             tempo   = Temporal::TempoMap::use()->metric_at (pos).tempo();
+	const Temporal::Tempo&             tempo   = Temporal::TempoMap::use()->metric_at (timepos_t (pos)).tempo();
 	const double                       bpm     = tempo.note_types_per_minute();
 	const double                       bps     = bpm / 60.0;
 	const double                       freq    = bps / beats;
@@ -314,7 +314,7 @@ AutomationController::on_button_release(GdkEventButton* ev)
 		MenuList&  items = menu->items();
 		items.push_back(MenuElem(_("Select Note..."),
 		                         sigc::mem_fun(*this, &AutomationController::run_note_select_dialog)));
-		menu->popup(1, ev->time);
+		menu->popup(ev->button, ev->time);
 		return true;
 	} else if (desc.unit == ARDOUR::ParameterDescriptor::HZ) {
 		Gtk::Menu* menu  = ARDOUR_UI_UTILS::shared_popup_menu ();
@@ -338,7 +338,7 @@ AutomationController::on_button_release(GdkEventButton* ev)
 				                                    (double)beats)));
 			}
 		}
-		menu->popup(1, ev->time);
+		menu->popup(ev->button, ev->time);
 		return true;
 	}
 

@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_port_insert_h__
-#define __ardour_port_insert_h__
+#pragma once
 
 #include <vector>
 #include <string>
@@ -58,9 +57,7 @@ public:
 
 	void run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, double speed, pframes_t nframes, bool);
 
-	void flush_buffers (samplecnt_t nframes) {
-		_out->flush_buffers (nframes);
-	}
+	void flush_buffers (samplecnt_t nframes);
 
 	samplecnt_t signal_latency () const;
 
@@ -148,4 +145,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_port_insert_h__ */

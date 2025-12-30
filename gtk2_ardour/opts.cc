@@ -65,7 +65,7 @@ print_help (const char *execname)
 	cout
 		<< _("Usage: ") << PROGRAM_NAME << _(" [ OPTIONS ] [ SESSION-NAME ]")
 		<< "\n\n"
-		<< _("Ardour is a multichannel hard disk recorder (HDR) and digital audio workstation (DAW).")
+		<< string_compose (_("%1 is a digital audio workstation, used for multitrack recording, nonlinear, nondestructive editing and much more."), PROGRAM_NAME)
 		<< "\n\n"
 		<< _("Options:\n")
 		<< _("  -a, --no-announcements      Do not contact website for announcements\n")
@@ -84,6 +84,7 @@ print_help (const char *execname)
 		<< _("  -N, --new <session-name>    Create a new session from the command line\n")
 		<< _("  -O, --no-hw-optimizations   Disable h/w specific optimizations\n")
 		<< _("  -P, --no-connect-ports      Do not connect any ports at startup\n")
+		<< _("  -s, --no-strobe             Avoid \"strobe-like\" effects in GUI\n")
 		<< _("  -S, --sync                  Draw the GUI synchronously\n")
 		<< _("  -T, --template <name>       Use given template for new session\n")
 		<< _("  -v, --version               Print version and exit\n")
@@ -178,6 +179,8 @@ ARDOUR_COMMAND_LINE::parse_opts (int argc, char *argv[])
 			if (PBD::parse_debug_options (optarg)) {
 				exit (EXIT_SUCCESS);
 			}
+#else
+			cerr << "This is not a debug build - ignoring '-D " << optarg << "'" << endl;
 #endif /* NDEBUG */
 			break;
 

@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_auditioner_h__
-#define __ardour_auditioner_h__
+#pragma once
 
 #include <string>
 
@@ -71,7 +70,7 @@ public:
 
 	virtual ChanCount input_streams () const;
 
-	PBD::Signal2<void, ARDOUR::samplecnt_t, ARDOUR::samplecnt_t> AuditionProgress;
+	PBD::Signal<void(ARDOUR::samplecnt_t, ARDOUR::samplecnt_t)> AuditionProgress;
 
 	/* Track */
 	int roll (pframes_t nframes, samplepos_t start_sample, samplepos_t end_sample, bool& need_butler);
@@ -94,7 +93,7 @@ public:
 		return std::shared_ptr<Region> ();
 	}
 
-	std::shared_ptr<Region> bounce_range (samplepos_t, samplepos_t, InterThreadInfo&, std::shared_ptr<Processor>, bool, std::string const&) {
+	std::shared_ptr<Region> bounce_range (samplepos_t, samplepos_t, InterThreadInfo&, std::shared_ptr<Processor>, bool, std::string const&, bool) {
 		return std::shared_ptr<Region> ();
 	}
 
@@ -141,4 +140,3 @@ private:
 
 }; /* namespace ARDOUR */
 
-#endif /* __ardour_auditioner_h__ */

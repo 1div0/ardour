@@ -68,6 +68,7 @@
 #include "ardour/solo_isolate_control.h"
 #include "ardour/solo_safe_control.h"
 #include "ardour/vca_manager.h"
+#include "ardour/well_known_enum.h"
 #include "ardour/zeroconf.h"
 
 #include "osc_select_observer.h"
@@ -83,9 +84,7 @@ using namespace std;
 using namespace Glib;
 using namespace ArdourSurface;
 
-#include "pbd/abstract_ui.cc" // instantiate template
-
-OSC* OSC::_instance = 0;
+#include "pbd/abstract_ui.inc.cc" // instantiate template
 
 #ifdef DEBUG
 static void error_callback(int num, const char *m, const char *path)
@@ -128,28 +127,13 @@ OSC::OSC (Session& s, uint32_t port)
 	, _zeroconf (0)
 	, gui (0)
 {
-	_instance = this;
-
-	session->Exported.connect (*this, MISSING_INVALIDATOR, boost::bind (&OSC::session_exported, this, _1, _2), this);
+	session->Exported.connect (*this, MISSING_INVALIDATOR, std::bind (&OSC::session_exported, this, _1, _2), this);
 }
 
 OSC::~OSC()
 {
 	tick = false;
 	stop ();
-	tear_down_gui ();
-	_instance = 0;
-}
-
-void*
-OSC::request_factory (uint32_t num_requests)
-{
-	/* AbstractUI<T>::request_buffer_factory() is a template method only
-	   instantiated in this source module. To provide something visible for
-	   use in the interface/descriptor, we have this static method that is
-	   template-free.
-	*/
-	return request_buffer_factory (num_requests);
 }
 
 void
@@ -278,11 +262,11 @@ OSC::start ()
 
 	// catch track reordering
 	// receive routes added
-	session->RouteAdded.connect(session_connections, MISSING_INVALIDATOR, boost::bind (&OSC::notify_routes_added, this, _1), this);
+	session->RouteAdded.connect(session_connections, MISSING_INVALIDATOR, std::bind (&OSC::notify_routes_added, this, _1), this);
 	// receive VCAs added
-	session->vca_manager().VCAAdded.connect(session_connections, MISSING_INVALIDATOR, boost::bind (&OSC::notify_vca_added, this, _1), this);
+	session->vca_manager().VCAAdded.connect(session_connections, MISSING_INVALIDATOR, std::bind (&OSC::notify_vca_added, this, _1), this);
 	// order changed
-	PresentationInfo::Change.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&OSC::recalcbanks, this), this);
+	PresentationInfo::Change.connect (session_connections, MISSING_INVALIDATOR, std::bind (&OSC::recalcbanks, this), this);
 
 	_select = ControlProtocol::first_selected_stripable();
 	if(!_select) {
@@ -295,8 +279,6 @@ OSC::start ()
 void
 OSC::thread_init ()
 {
-	pthread_set_name (event_loop_name().c_str());
-
 	if (_osc_unix_server) {
 		Glib::RefPtr<IOSource> src = IOSource::create (lo_server_get_socket_fd (_osc_unix_server), IO_IN|IO_HUP|IO_ERR);
 		src->connect (sigc::bind (sigc::mem_fun (*this, &OSC::osc_input_handler), _osc_unix_server));
@@ -325,6 +307,8 @@ OSC::thread_init ()
 int
 OSC::stop ()
 {
+	tear_down_gui ();
+
 	periodic_connection.disconnect ();
 	session_connections.drop_connections ();
 
@@ -603,7 +587,6 @@ OSC::register_callbacks()
 		REGISTER_CALLBACK (serv, X_("/select/pan_lfe_control"), "f", sel_pan_lfe);
 		REGISTER_CALLBACK (serv, X_("/select/comp_enable"), "f", sel_comp_enable);
 		REGISTER_CALLBACK (serv, X_("/select/comp_threshold"), "f", sel_comp_threshold);
-		REGISTER_CALLBACK (serv, X_("/select/comp_speed"), "f", sel_comp_speed);
 		REGISTER_CALLBACK (serv, X_("/select/comp_mode"), "f", sel_comp_mode);
 		REGISTER_CALLBACK (serv, X_("/select/comp_makeup"), "f", sel_comp_makeup);
 		REGISTER_CALLBACK (serv, X_("/select/eq_enable"), "f", sel_eq_enable);
@@ -1076,6 +1059,8 @@ OSC::routes_list (lo_message msg)
 				lo_message_add_string (reply, "MA");
 			} else if (s->is_monitor()) {
 				lo_message_add_string (reply, "MO");
+			} else if (s->is_surround_master()) {
+				lo_message_add_string (reply, "SM");
 			} else if (std::dynamic_pointer_cast<Route>(s) && !std::dynamic_pointer_cast<Track>(s)) {
 				if (!(s->presentation_info().flags() & PresentationInfo::MidiBus)) {
 					if (s->is_foldbackbus()) {
@@ -1416,7 +1401,7 @@ OSC::clear_devices ()
 	link_sets.clear ();
 	_ports.clear ();
 
-	PresentationInfo::Change.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&OSC::recalcbanks, this), this);
+	PresentationInfo::Change.connect (session_connections, MISSING_INVALIDATOR, std::bind (&OSC::recalcbanks, this), this);
 
 	observer_busy = false;
 	tick = true;
@@ -1881,14 +1866,15 @@ OSC::set_surface (uint32_t b_size, uint32_t strips, uint32_t fb, uint32_t gm, ui
 	s->bank_size = b_size;
 	s->strip_types = strips;
 	s->feedback = fb;
+	if (s->sel_obs) {
+		s->sel_obs->set_feedback(fb);
+	}
 	s->gainmode = gm;
 	if (s->strip_types[10]) {
 		s->usegroup = PBD::Controllable::UseGroup;
 	} else {
 		s->usegroup = PBD::Controllable::NoGroup;
 	}
-	s->send_page_size = se_size;
-	s->plug_page_size = pi_size;
 	if (s->temp_mode) {
 		s->temp_mode = TempOff;
 	}
@@ -1961,6 +1947,9 @@ OSC::set_surface_feedback (uint32_t fb, lo_message msg)
 	}
 	OSCSurface *s = get_surface(get_address (msg), true);
 	s->feedback = fb;
+	if (s->sel_obs) {
+		s->sel_obs->set_feedback(fb);
+	}
 
 	strip_feedback (s, true);
 	global_feedback (s);
@@ -2489,7 +2478,7 @@ OSC::parse_sel_group (const char *path, const char* types, lo_arg **argv, int ar
 			PBD::warning << "OSC: VCAs can not be part of a group." << endmsg;
 			return ret;
 		}
-		RouteGroup *rg = rt->route_group();
+		std::shared_ptr<RouteGroup> rg = rt->route_group();
 		if (!rg) {
 			PBD::warning << "OSC: This strip is not part of a group." << endmsg;
 		}
@@ -2632,7 +2621,7 @@ OSC::set_temp_mode (lo_address addr)
 		if (sur->temp_mode == GroupOnly) {
 			std::shared_ptr<Route> rt = std::dynamic_pointer_cast<Route> (s);
 			if (rt) {
-				RouteGroup *rg = rt->route_group();
+				std::shared_ptr<RouteGroup> rg = rt->route_group();
 				if (rg) {
 					sur->temp_strips.clear();
 					std::shared_ptr<RouteList> rl = rg->route_list();
@@ -3192,20 +3181,6 @@ OSC::mixer_scene_state (lo_address addr, bool zero_it)
 	return 0;
 }
 
-// two structs to help with going to markers
-struct LocationMarker {
-	LocationMarker (const std::string& l, samplepos_t w)
-		: label (l), when (w) {}
-	std::string label;
-	samplepos_t  when;
-};
-
-struct LocationMarkerSort {
-	bool operator() (const LocationMarker& a, const LocationMarker& b) {
-		return (a.when < b.when);
-	}
-};
-
 int
 OSC::set_marker (const char* types, lo_arg **argv, int argc, lo_message msg)
 {
@@ -3213,6 +3188,7 @@ OSC::set_marker (const char* types, lo_arg **argv, int argc, lo_message msg)
 		PBD::warning << "Wrong number of parameters, one only." << endmsg;
 		return -1;
 	}
+
 	const Locations::LocationList& ll (session->locations ()->list ());
 	uint32_t marker = 0;
 
@@ -3248,15 +3224,15 @@ OSC::set_marker (const char* types, lo_arg **argv, int argc, lo_message msg)
 			return -1;
 			break;
 	}
-	std::vector<LocationMarker> lm;
+	std::vector<ArdourSurface::LocationMarker> lm;
 	// get Locations that are marks
 	for (Locations::LocationList::const_iterator l = ll.begin(); l != ll.end(); ++l) {
 		if ((*l)->is_mark ()) {
-			lm.push_back (LocationMarker((*l)->name(), (*l)->start_sample ()));
+			lm.push_back (ArdourSurface::LocationMarker((*l)->name(), (*l)->start_sample ()));
 		}
 	}
 	// sort them by position
-	LocationMarkerSort location_marker_sort;
+	ArdourSurface::LocationMarkerSort location_marker_sort;
 	std::sort (lm.begin(), lm.end(), location_marker_sort);
 	// go there
 	if (marker < lm.size()) {
@@ -3281,9 +3257,8 @@ OSC::send_group_list (lo_address addr)
 
 	lo_message_add_string (reply, X_("none"));
 
-	std::list<RouteGroup*> groups = session->route_groups ();
-	for (std::list<RouteGroup *>::iterator i = groups.begin(); i != groups.end(); ++i) {
-		RouteGroup *rg = *i;
+	RouteGroupList groups = session->route_groups ();
+	for (auto const & rg : groups) {
 		lo_message_add_string (reply, rg->name().c_str());
 	}
 	lo_send_message (addr, X_("/group/list"), reply);
@@ -3377,13 +3352,13 @@ OSC::route_get_receives(lo_message msg) {
 		return -1;
 	}
 
-	std::shared_ptr<RouteList> route_list = session->get_routes();
+	std::shared_ptr<RouteList const> route_list = session->get_routes();
 
 	lo_message reply = lo_message_new();
 	lo_message_add_int32(reply, rid);
 
-	for (RouteList::iterator i = route_list->begin(); i != route_list->end(); ++i) {
-		std::shared_ptr<Route> tr = std::dynamic_pointer_cast<Route> (*i);
+	for (auto const& i : *route_list) {
+		std::shared_ptr<Route> tr = std::dynamic_pointer_cast<Route> (i);
 		if (!tr) {
 			continue;
 		}
@@ -4020,7 +3995,7 @@ OSC::_strip_parse (const char *path, const char *sub_path, const char* types, lo
 	else if (!strncmp (sub_path, X_("group"), 5)) {
 		if (!control_disabled) {
 			if (rt) {
-				RouteGroup *rg = rt->route_group();
+				std::shared_ptr<RouteGroup> rg = rt->route_group();
 				if (argc > (param_1)) {
 					if (types[param_1] == 's') {
 
@@ -4029,12 +4004,12 @@ OSC::_strip_parse (const char *path, const char *sub_path, const char* types, lo
 							strng = "none";
 						}
 
-						RouteGroup* new_rg = session->route_group_by_name (strng);
+						std::shared_ptr<RouteGroup> new_rg = session->route_group_by_name (strng);
 						if (rg) {
 							string old_group = rg->name();
 							if (strng == "none") {
 								if (rg->size () == 1) {
-									session->remove_route_group (*rg);
+									session->remove_route_group (rg);
 								} else {
 									rg->remove (rt);
 								}
@@ -4064,8 +4039,7 @@ OSC::_strip_parse (const char *path, const char *sub_path, const char* types, lo
 								ret = 0;
 							} else {
 								// create new group with this strip in it
-								RouteGroup* new_rg = new RouteGroup (*session, strng);
-								session->add_route_group (new_rg);
+								std::shared_ptr<RouteGroup> new_rg (session->new_route_group (strng));
 								new_rg->add (rt);
 								ret = 0;
 							}
@@ -4630,7 +4604,7 @@ OSC::spill (const char *path, const char* types, lo_arg **argv, int argc, lo_mes
 		if (strstr (path, X_("/group"))) {
 			//strp must be in a group
 			if (rt) {
-				RouteGroup *rg = rt->route_group();
+				std::shared_ptr<RouteGroup> rg = rt->route_group();
 				if (rg) {
 					new_mode = GroupOnly;
 				} else {
@@ -4768,6 +4742,9 @@ OSC::_strip_select2 (std::shared_ptr<Stripable> s, OSCSurface *sur, lo_address a
 		}
 		_select = s;
 	}
+	if (!s) {
+		return 0;
+	}
 	if (s != old_sel) {
 		sur->select = s;
 	}
@@ -4782,7 +4759,7 @@ OSC::_strip_select2 (std::shared_ptr<Stripable> s, OSCSurface *sur, lo_address a
 	} while (sends);
 	sur->nsends = nsends;
 
-	s->DropReferences.connect (*this, MISSING_INVALIDATOR, boost::bind (&OSC::recalcbanks, this), this);
+	s->DropReferences.connect (*this, MISSING_INVALIDATOR, std::bind (&OSC::recalcbanks, this), this);
 
 	OSCSelectObserver* so = dynamic_cast<OSCSelectObserver*>(sur->sel_obs);
 	if (sur->feedback[13]) {
@@ -4815,7 +4792,7 @@ OSC::_strip_select2 (std::shared_ptr<Stripable> s, OSCSurface *sur, lo_address a
 	string address = lo_address_get_url (addr);
 	std::shared_ptr<Route> r = std::dynamic_pointer_cast<Route>(s);
 	if (r) {
-		r->processors_changed.connect  (sur->proc_connection, MISSING_INVALIDATOR, boost::bind (&OSC::processor_changed, this, address), this);
+		r->processors_changed.connect  (sur->proc_connection, MISSING_INVALIDATOR, std::bind (&OSC::processor_changed, this, address), this);
 		_sel_plugin (sur->plugin_id, addr);
 	}
 
@@ -5758,8 +5735,8 @@ OSC::sel_comp_enable (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->comp_enable_controllable()) {
-			s->comp_enable_controllable()->set_value (s->comp_enable_controllable()->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (Comp_Enable)) {
+			s->mapped_control (Comp_Enable)->set_value (s->mapped_control (Comp_Enable)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5773,27 +5750,12 @@ OSC::sel_comp_threshold (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->comp_threshold_controllable()) {
-			s->comp_threshold_controllable()->set_value (s->comp_threshold_controllable()->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (Comp_Threshold)) {
+			s->mapped_control (Comp_Threshold)->set_value (s->mapped_control (Comp_Threshold)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
 	return float_message(X_("/select/comp_threshold"), 0, get_address (msg));
-}
-
-int
-OSC::sel_comp_speed (float val, lo_message msg)
-{
-	OSCSurface *sur = get_surface(get_address (msg));
-	std::shared_ptr<Stripable> s;
-	s = sur->select;
-	if (s) {
-		if (s->comp_speed_controllable()) {
-			s->comp_speed_controllable()->set_value (s->comp_speed_controllable()->interface_to_internal (val), PBD::Controllable::NoGroup);
-			return 0;
-		}
-	}
-	return float_message(X_("/select/comp_speed"), 0, get_address (msg));
 }
 
 int
@@ -5803,8 +5765,8 @@ OSC::sel_comp_mode (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->comp_mode_controllable()) {
-			s->comp_mode_controllable()->set_value (s->comp_mode_controllable()->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (Comp_Mode)) {
+			s->mapped_control (Comp_Mode)->set_value (s->mapped_control (Comp_Mode)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5818,8 +5780,8 @@ OSC::sel_comp_makeup (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->comp_makeup_controllable()) {
-			s->comp_makeup_controllable()->set_value (s->comp_makeup_controllable()->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (Comp_Makeup)) {
+			s->mapped_control (Comp_Makeup)->set_value (s->mapped_control (Comp_Makeup)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5835,8 +5797,8 @@ OSC::sel_eq_enable (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->eq_enable_controllable()) {
-			s->eq_enable_controllable()->set_value (s->eq_enable_controllable()->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control(EQ_Enable)) {
+			s->mapped_control(EQ_Enable)->set_value (s->mapped_control(EQ_Enable)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5850,8 +5812,8 @@ OSC::sel_eq_hpf_freq (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->filter_freq_controllable(true)) {
-			s->filter_freq_controllable(true)->set_value (s->filter_freq_controllable(true)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (HPF_Freq)) {
+			s->mapped_control (HPF_Freq)->set_value (s->mapped_control (HPF_Freq)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5865,8 +5827,8 @@ OSC::sel_eq_lpf_freq (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->filter_freq_controllable(false)) {
-			s->filter_freq_controllable(false)->set_value (s->filter_freq_controllable(false)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (LPF_Freq)) {
+			s->mapped_control (LPF_Freq)->set_value (s->mapped_control (LPF_Freq)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5880,8 +5842,8 @@ OSC::sel_eq_hpf_enable (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->filter_enable_controllable(true)) {
-			s->filter_enable_controllable(true)->set_value (s->filter_enable_controllable(true)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (HPF_Enable)) {
+			s->mapped_control (HPF_Enable)->set_value (s->mapped_control (HPF_Enable)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5895,8 +5857,8 @@ OSC::sel_eq_lpf_enable (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->filter_enable_controllable(false)) {
-			s->filter_enable_controllable(false)->set_value (s->filter_enable_controllable(false)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (LPF_Enable)) {
+			s->mapped_control (LPF_Enable)->set_value (s->mapped_control (LPF_Enable)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5910,8 +5872,8 @@ OSC::sel_eq_hpf_slope (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->filter_slope_controllable(true)) {
-			s->filter_slope_controllable(true)->set_value (s->filter_slope_controllable(true)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (HPF_Slope)) {
+			s->mapped_control (HPF_Slope)->set_value (s->mapped_control (HPF_Slope)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5925,8 +5887,8 @@ OSC::sel_eq_lpf_slope (float val, lo_message msg)
 	std::shared_ptr<Stripable> s;
 	s = sur->select;
 	if (s) {
-		if (s->filter_slope_controllable(false)) {
-			s->filter_slope_controllable(false)->set_value (s->filter_slope_controllable(false)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (LPF_Slope)) {
+			s->mapped_control (LPF_Slope)->set_value (s->mapped_control (LPF_Slope)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5943,8 +5905,8 @@ OSC::sel_eq_gain (int id, float val, lo_message msg)
 		if (id > 0) {
 			--id;
 		}
-		if (s->eq_gain_controllable (id)) {
-			s->eq_gain_controllable (id)->set_value (s->eq_gain_controllable(id)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (EQ_BandGain, id)) {
+			s->mapped_control (EQ_BandGain, id)->set_value (s->mapped_control(EQ_BandGain, id)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5961,8 +5923,8 @@ OSC::sel_eq_freq (int id, float val, lo_message msg)
 		if (id > 0) {
 			--id;
 		}
-		if (s->eq_freq_controllable (id)) {
-			s->eq_freq_controllable (id)->set_value (s->eq_freq_controllable(id)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (EQ_BandFreq, id)) {
+			s->mapped_control (EQ_BandFreq, id)->set_value (s->mapped_control (EQ_BandFreq, id)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5979,8 +5941,8 @@ OSC::sel_eq_q (int id, float val, lo_message msg)
 		if (id > 0) {
 			--id;
 		}
-		if (s->eq_q_controllable (id)) {
-			s->eq_q_controllable (id)->set_value (s->eq_q_controllable(id)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (EQ_BandQ, id)) {
+			s->mapped_control (EQ_BandQ, id)->set_value (s->mapped_control (EQ_BandQ, id)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -5997,8 +5959,8 @@ OSC::sel_eq_shape (int id, float val, lo_message msg)
 		if (id > 0) {
 			--id;
 		}
-		if (s->eq_shape_controllable (id)) {
-			s->eq_shape_controllable (id)->set_value (s->eq_shape_controllable(id)->interface_to_internal (val), PBD::Controllable::NoGroup);
+		if (s->mapped_control (EQ_BandShape, id)) {
+			s->mapped_control (EQ_BandShape, id)->set_value (s->mapped_control (EQ_BandShape, id)->interface_to_internal (val), PBD::Controllable::NoGroup);
 			return 0;
 		}
 	}
@@ -6392,7 +6354,7 @@ OSC::_cue_set (uint32_t aux, lo_address addr)
 			if (aux == n+1) {
 				// aux must be at least one
 
-				stp->DropReferences.connect (*this, MISSING_INVALIDATOR, boost::bind (&OSC::_cue_set, this, aux, addr), this);
+				stp->DropReferences.connect (*this, MISSING_INVALIDATOR, std::bind (&OSC::_cue_set, this, aux, addr), this);
 				// make a list of stripables with sends that go to this bus
 				s->sends = cue_get_sorted_stripables(stp, aux, addr);
 				if (s->cue_obs) {
@@ -6423,16 +6385,16 @@ OSC::cue_new_aux (string name, string dest_1, string dest_2, uint32_t count, lo_
 	if (aux) {
 		std::shared_ptr<Route> r = std::dynamic_pointer_cast<Route>(aux);
 		if (dest_1.size()) {
-			PortSet& ports = r->output()->ports ();
+			std::shared_ptr<PortSet> ports = r->output()->ports ();
 			if (atoi( dest_1.c_str())) {
 				dest_1 = string_compose ("system:playback_%1", dest_1);
 			}
-			r->output ()->connect (*(ports.begin()), dest_1, this);
+			r->output ()->connect (*(ports->begin()), dest_1, this);
 			if (count == 2) {
 				if (atoi( dest_2.c_str())) {
 					dest_2 = string_compose ("system:playback_%1", dest_2);
 				}
-				PortSet::iterator i = ports.begin();
+				PortSet::iterator i = ports->begin();
 				++i;
 				r->output ()->connect (*(i), dest_2, this);
 			}
@@ -6488,8 +6450,8 @@ OSC::cue_connect_aux (std::string dest, lo_message msg)
 				if (atoi( dest.c_str())) {
 					dest = string_compose ("system:playback_%1", dest);
 				}
-				PortSet& ports = rt->output()->ports ();
-				rt->output ()->connect (*(ports.begin()), dest, this);
+				std::shared_ptr<PortSet> ports = rt->output()->ports ();
+				rt->output ()->connect (*(ports->begin()), dest, this);
 				session->set_dirty();
 				ret = 0;
 			}
@@ -6747,7 +6709,7 @@ OSC::cue_get_sorted_stripables(std::shared_ptr<Stripable> aux, uint32_t id, lo_a
 	std::shared_ptr<Route> aux_rt = std::dynamic_pointer_cast<Route> (aux);
 	for (auto const& s : aux_rt->signal_sources (true)) {
 		sorted.push_back (s);
-		s->DropReferences.connect (*this, MISSING_INVALIDATOR, boost::bind (&OSC::_cue_set, this, id, addr), this);
+		s->DropReferences.connect (*this, MISSING_INVALIDATOR, std::bind (&OSC::_cue_set, this, id, addr), this);
 	}
 	sort (sorted.begin(), sorted.end(), StripableByPresentationOrder());
 

@@ -23,7 +23,7 @@
 #include "gtk2ardour-config.h"
 #endif
 
-#include <gtkmm/stock.h>
+#include <ytkmm/stock.h>
 
 #include "ardour/lv2_plugin.h"
 #include "ardour/plugin_insert.h"
@@ -36,7 +36,11 @@
 
 #include "gtkmm2ext/utils.h"
 
-#include "lv2/lv2plug.in/ns/extensions/ui/ui.h"
+#ifdef HAVE_LV2_1_18_6
+#include <lv2/ui/ui.h>
+#else
+#include <lv2/lv2plug.in/ns/extensions/ui/ui.h>
+#endif
 
 #include <lilv/lilv.h>
 #include <suil/suil.h>
@@ -66,9 +70,8 @@ LV2PluginUI::write_from_ui(void*       controller,
 
 		std::shared_ptr<AutomationControl> ac = me->_controllables[port_index];
 
-		me->_updates.insert (port_index);
-
 		if (ac) {
+			me->_updates.insert (port_index);
 			ac->set_value(*(const float*)buffer, Controllable::NoGroup);
 		}
 	} else if (format == URIMap::instance().urids.atom_eventTransfer) {
@@ -196,6 +199,7 @@ LV2PluginUI::on_external_ui_closed(void* controller)
 	//printf("LV2PluginUI::on_external_ui_closed\n");
 	LV2PluginUI* me = (LV2PluginUI*)controller;
 	me->_screen_update_connection.disconnect();
+	me->_message_update_connection.disconnect();
 	me->_external_ui_ptr = NULL;
 }
 
@@ -203,7 +207,7 @@ void
 LV2PluginUI::control_changed (uint32_t port_index)
 {
 	/* Must run in GUI thread because we modify _updates with no lock */
-	if (_lv2->get_parameter (port_index) != _values_last_sent_to_ui[port_index]) {
+	if (_controllables[port_index]->get_value () != _values_last_sent_to_ui[port_index]) {
 		/* current plugin parameter does not match last value received
 		   from GUI, so queue an update to push it to the GUI during
 		   our regular timeout.
@@ -234,10 +238,8 @@ LV2PluginUI::queue_port_update()
 {
 	const uint32_t num_ports = _lv2->num_ports();
 	for (uint32_t i = 0; i < num_ports; ++i) {
-		bool     ok;
-		uint32_t port = _lv2->nth_parameter(i, ok);
-		if (ok) {
-			_updates.insert (port);
+		if (_lv2->parameter_is_control (i) && _lv2->parameter_is_input(i)) {
+			_updates.insert (i);
 		}
 	}
 }
@@ -245,7 +247,7 @@ LV2PluginUI::queue_port_update()
 void
 LV2PluginUI::output_update()
 {
-	//cout << "output_update" << endl;
+	//std::cout << "output_update" << std::endl;
 	if (_external_ui_ptr) {
 		LV2_EXTERNAL_UI_RUN(_external_ui_ptr);
 		if (_lv2->is_external_kx() && !_external_ui_ptr) {
@@ -269,10 +271,8 @@ LV2PluginUI::output_update()
 
 	/* output ports (values set by DSP) need propagating to GUI */
 
-	uint32_t nports = _output_ports.size();
-	for (uint32_t i = 0; i < nports; ++i) {
-		uint32_t index = _output_ports[i];
-		float val = _lv2->get_parameter (index);
+	for (auto const& index: _output_ports) {
+		float val = _pib->control_output (index)->get_parameter ();
 
 		if (val != _values_last_sent_to_ui[index]) {
 			/* Send to GUI */
@@ -283,14 +283,14 @@ LV2PluginUI::output_update()
 	}
 
 	/* Input ports marked for update because the control value changed
-	   since the last redisplay.
-	*/
+	 * since the last redisplay.
+	 */
 
-	for (Updates::iterator i = _updates.begin(); i != _updates.end(); ++i) {
-		float val = _lv2->get_parameter (*i);
+	for (auto const& i : _updates) {
+		float val = _controllables[i]->get_value ();
 		/* push current value to the GUI */
-		suil_instance_port_event ((SuilInstance*)_inst, (*i), 4, 0, &val);
-		_values_last_sent_to_ui[(*i)] = val;
+		suil_instance_port_event ((SuilInstance*)_inst, i, 4, 0, &val);
+		_values_last_sent_to_ui[i] = val;
 	}
 
 	_updates.clear ();
@@ -311,7 +311,7 @@ LV2PluginUI::LV2PluginUI(std::shared_ptr<PlugInsertBase> pib,
 
 	add_common_widgets (&_ardour_buttons_box);
 
-	plugin->PresetLoaded.connect (*this, invalidator (*this), boost::bind (&LV2PluginUI::queue_port_update, this), gui_context ());
+	plugin->PresetLoaded.connect (*this, invalidator (*this), std::bind (&LV2PluginUI::queue_port_update, this), gui_context ());
 }
 
 void
@@ -431,15 +431,6 @@ LV2PluginUI::lv2ui_instantiate(const std::string& title)
 
 #define GET_WIDGET(inst) suil_instance_get_widget((SuilInstance*)inst);
 
-	const uint32_t num_ports = _lv2->num_ports();
-	for (uint32_t i = 0; i < num_ports; ++i) {
-		if (_lv2->parameter_is_output(i)
-		    && _lv2->parameter_is_control(i)
-		    && is_update_wanted(i)) {
-			_output_ports.push_back(i);
-		}
-	}
-
 	_external_ui_ptr = NULL;
 	if (!is_external_ui) {
 		GtkWidget* c_widget = (GtkWidget*)GET_WIDGET(_inst);
@@ -460,29 +451,31 @@ LV2PluginUI::lv2ui_instantiate(const std::string& title)
 		_external_ui_ptr = (struct lv2_external_ui*)GET_WIDGET(_inst);
 	}
 
+	const uint32_t num_ports = _lv2->num_ports();
+
 	_values_last_sent_to_ui = new float[num_ports];
 	_controllables.resize(num_ports);
 
 	for (uint32_t i = 0; i < num_ports; ++i) {
-		bool     ok;
-		uint32_t port = _lv2->nth_parameter(i, ok);
-		if (ok) {
-			/* Cache initial value of the parameter, regardless of
-			   whether it is input or output
-			*/
+		if (!_lv2->parameter_is_control (i)) {
+			continue;
+		}
 
-			_values_last_sent_to_ui[port]        = _lv2->get_parameter(port);
-			_controllables[port] = std::dynamic_pointer_cast<ARDOUR::AutomationControl> (
-				_pib->control(Evoral::Parameter(PluginAutomation, 0, port)));
+		/* Cache initial value of the parameter, regardless of whether it is input or output */
 
-			if (_lv2->parameter_is_control(port) && _lv2->parameter_is_input(port)) {
-				if (_controllables[port]) {
-					_controllables[port]->Changed.connect (control_connections, invalidator (*this), boost::bind (&LV2PluginUI::control_changed, this, port), gui_context());
-				}
-			}
+		_values_last_sent_to_ui[i] = _lv2->get_parameter(i);
+		_controllables[i] = std::dynamic_pointer_cast<ARDOUR::AutomationControl> (_pib->control(Evoral::Parameter(PluginAutomation, 0, i)));
 
+		if (_lv2->parameter_is_input(i)) {
+			assert (_controllables[i]);
+			_controllables[i]->Changed.connect (control_connections, invalidator (*this), std::bind (&LV2PluginUI::control_changed, this, i), gui_context());
 			/* queue for first update ("push") to GUI */
-			_updates.insert (port);
+			_updates.insert (i);
+		}
+
+		if (_lv2->parameter_is_output(i) && is_update_wanted(i)) {
+			_output_ports.push_back (i);
+			_values_last_sent_to_ui[i] -= 1; // force update
 		}
 	}
 
@@ -585,7 +578,7 @@ LV2PluginUI::is_update_wanted(uint32_t /*index*/)
 bool
 LV2PluginUI::on_window_show(const std::string& title)
 {
-	//cout << "on_window_show - " << title << endl; flush(cout);
+	//std::cout << "on_window_show - " << title << std::endl;// flush(cout);
 
 	if (_lv2->is_external_ui()) {
 		if (_external_ui_ptr) {
@@ -639,4 +632,16 @@ LV2PluginUI::on_window_hide()
 	} else {
 		lv2ui_free();
 	}
+}
+
+bool
+LV2PluginUI::is_external () const
+{
+	return _lv2->is_external_ui ();
+}
+
+bool
+LV2PluginUI::is_external_visible () const
+{
+	return _external_ui_ptr != 0;
 }

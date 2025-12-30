@@ -22,15 +22,15 @@
 #ifndef __gtk2_ardour_rhythm_ferret_h__
 #define __gtk2_ardour_rhythm_ferret_h__
 
-#include <gtkmm/box.h>
-#include <gtkmm/scale.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/radiobutton.h>
-#include <gtkmm/radiobuttongroup.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/image.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/button.h>
+#include <ytkmm/box.h>
+#include <ytkmm/scale.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/radiobutton.h>
+#include <ytkmm/radiobuttongroup.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/image.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/button.h>
 
 #include "ardour_dialog.h"
 #include "region_selection.h"
@@ -109,7 +109,7 @@ private:
 
 	void clear_transients ();
 	/** Regions that we have added transient marks to */
-	RegionSelection regions_with_transients;
+	ARDOUR::RegionList regions_with_transients;
 
 	AnalysisMode get_analysis_mode () const;
 	Action get_action() const;

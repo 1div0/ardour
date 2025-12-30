@@ -22,14 +22,14 @@
 #include <vector>
 #include <string>
 
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/combobox.h>
-#include <gtkmm/image.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treestore.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/notebook.h>
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/combobox.h>
+#include <ytkmm/image.h>
+#include <ytkmm/table.h>
+#include <ytkmm/treestore.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/notebook.h>
 
 namespace Gtk {
 	class ListStore;
@@ -49,7 +49,6 @@ public:
 
 private:
 	Push2&                    _p2;
-	PBD::ScopedConnectionList _p2_connections;
 	Gtk::HBox                 _hpacker;
 	Gtk::Table                _table;
 	Gtk::Table                _action_table;

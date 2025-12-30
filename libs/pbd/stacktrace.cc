@@ -44,7 +44,7 @@ PBD::trace_twb ()
 
 /* Obtain a backtrace and print it to stdout. */
 
-#ifdef HAVE_EXECINFO
+#ifdef HAVE_EXECINFO_H
 
 #include <execinfo.h>
 
@@ -131,3 +131,13 @@ PBD::stacktrace (std::ostream& out, int, size_t)
 }
 
 #endif
+
+extern "C" {
+
+void
+libpbd_c_stacktrace (int levels)
+{
+	PBD::stacktrace (std::cerr, levels);
+}
+
+}

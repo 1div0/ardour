@@ -20,13 +20,13 @@
 #include <iostream>
 #include <errno.h>
 #include <sys/types.h>
-#include <unistd.h>
 
 #include "pbd/error.h"
 #include "pbd/failed_constructor.h"
 #include "pbd/pthread_utils.h"
 
 #include "ardour/debug.h"
+#include "ardour/dsp_filter.h"
 #include "ardour/profile.h"
 #include "ardour/transport_master.h"
 #include "ardour/session.h"
@@ -58,10 +58,11 @@ LTC_TransportMaster::LTC_TransportMaster (std::string const & name)
 	, ltc_detect_fps_max (0)
 	, sync_lock_broken (false)
 	, samples_per_timecode_frame (0)
+	, _filter_enable (false)
 {
 	memset (&prev_frame, 0, sizeof(LTCFrameExt));
 
-	AudioEngine::instance()->Xrun.connect_same_thread (port_connection, boost::bind (&LTC_TransportMaster::resync_xrun, this));
+	AudioEngine::instance()->Xrun.connect_same_thread (port_connection, std::bind (&LTC_TransportMaster::resync_xrun, this));
 
 }
 
@@ -97,11 +98,26 @@ LTC_TransportMaster::set_session (Session *s)
 
 		decoder = ltc_decoder_create((int) samples_per_ltc_frame, 128 /*queue size*/);
 
+		DSP::Biquad bq (AudioEngine::instance()->sample_rate());
+		bq.compute (DSP::Biquad::LowPass, 3500, 0.9, 0);
+		bq.coefficients (_lpf.a1, _lpf.a2, _lpf.b0, _lpf.b1, _lpf.b2);
+		bq.compute (DSP::Biquad::HighPass, 100, 0.707, 0);
+		bq.coefficients (_hpf.a1, _hpf.a2, _hpf.b0, _hpf.b1, _hpf.b2);
+		_lpf.reset ();
+		_hpf.reset ();
+
+		// TODO add a per master preference to enable filter (and set gain)
+		//_filter_enable = true;
+
 		parse_timecode_offset();
 		reset (true);
 
-		_session->config.ParameterChanged.connect_same_thread (session_connections, boost::bind (&LTC_TransportMaster::parameter_changed, this, _1));
-		_session->LatencyUpdated.connect_same_thread (session_connections, boost::bind (&LTC_TransportMaster::resync_latency, this, _1));
+		fps_detected = false;
+
+		_session->config.ParameterChanged.connect_same_thread (session_connections, std::bind (&LTC_TransportMaster::parameter_changed, this, _1));
+		_session->LatencyUpdated.connect_same_thread (session_connections, std::bind (&LTC_TransportMaster::resync_latency, this, _1));
+	} else {
+		_filter_enable = false;
 	}
 }
 
@@ -121,6 +137,7 @@ LTC_TransportMaster::connection_handler (std::weak_ptr<ARDOUR::Port> w0, std::st
 	std::shared_ptr<Port> p = w1.lock ();
 	if (p == _port) {
 		resync_latency (false);
+		fps_detected = false;
 	}
 }
 
@@ -206,6 +223,8 @@ LTC_TransportMaster::resync_latency (bool playback)
 	if (old != ltc_slave_latency.max) {
 		sync_lock_broken = false;
 	}
+	_lpf.reset ();
+	_hpf.reset ();
 }
 
 void
@@ -228,26 +247,40 @@ LTC_TransportMaster::reset (bool with_position)
 }
 
 void
-LTC_TransportMaster::parse_ltc (const ARDOUR::pframes_t nframes, const Sample* const in, const ARDOUR::samplecnt_t posinfo)
+LTC_TransportMaster::parse_ltc (pframes_t const n_samples, Sample const* in, samplecnt_t posinfo)
 {
-	pframes_t i;
-	unsigned char sound[8192];
+	pframes_t remain = n_samples;
 
-	if (nframes > 8192) {
-		/* TODO warn once or wrap, loop conversion below
-		 * does jack/A3 support > 8192 spp anyway?
-		 */
-		return;
-	}
+	bool  const fe   = _filter_enable;
+	float const gain = 127.0; // relative to signed 8bit, 127.0 == 0dB
 
-	for (i = 0; i < nframes; i++) {
-		const int snd=(int) rint ((127.0*in[i])+128.0);
-		sound[i] = (unsigned char) (snd&0xff);
-	}
-
-	ltc_decoder_write (decoder, sound, nframes, posinfo);
-
-	return;
+	while (remain > 0) {
+    ltcsnd_sample_t sound[8192];
+    pframes_t c = std::min<pframes_t> (remain, 8192);
+		if (fe) {
+			for (pframes_t i = 0; i < c; ++i) {
+				/* LPF */
+				float xn = *in++;
+				float z  = _lpf.b0 * xn + _lpf.z1;
+				_lpf.z1  = _lpf.b1 * xn - _lpf.a1 * z + _lpf.z2;
+				_lpf.z2  = _lpf.b2 * xn - _lpf.a2 * z;
+				/* HPF */
+				xn       = z;
+				z        = _hpf.b0 * xn + _hpf.z1;
+				_hpf.z1  = _hpf.b1 * xn - _hpf.a1 * z + _hpf.z2;
+				_hpf.z2  = _hpf.b2 * xn - _hpf.a2 * z;
+				/* convert */
+				sound[i] = 128 + min (127, max<int> (-127, gain * z));
+			}
+		} else {
+			for (pframes_t i = 0; i < c; ++i) {
+				sound[i] = 128 + min (127, max<int> (-127, gain * (*in++)));
+			}
+		}
+    ltc_decoder_write (decoder, sound, c, posinfo);
+    posinfo += c;
+    remain -= c;
+  }
 }
 
 bool
@@ -354,12 +387,12 @@ LTC_TransportMaster::detect_ltc_fps(int frameno, bool df)
 				}
 			}
 
-			timecode_format_valid = true; /* SET FLAG */
+			if (!timecode_format_valid) {
+				fps_changed = true;
+			}
 
 			if (timecode.rate != detected_fps || timecode.drop != df) {
 				DEBUG_TRACE (DEBUG::LTC, string_compose ("detected FPS: %1%2\n", detected_fps, df?"df":"ndf"));
-			} else {
-				detected_fps = 0; /* no change */
 			}
 		}
 		ltc_detect_fps_cnt = ltc_detect_fps_max = 0;
@@ -384,22 +417,22 @@ LTC_TransportMaster::detect_ltc_fps(int frameno, bool df)
 void
 LTC_TransportMaster::process_ltc(samplepos_t const now)
 {
-	LTCFrameExt sample;
+	LTCFrameExt ltc_frame;
 	LTC_TV_STANDARD tv_standard = LTC_TV_625_50;
 
-	while (ltc_decoder_read (decoder, &sample)) {
+	while (ltc_decoder_read (decoder, &ltc_frame)) {
 
 		SMPTETimecode stime;
 
-		ltc_frame_to_time (&stime, &sample.ltc, 0);
+		ltc_frame_to_time (&stime, &ltc_frame.ltc, 0);
 		timecode.negative  = false;
 		timecode.subframes  = 0;
 
 		/* set timecode.rate and timecode.drop: */
 
-		const bool ltc_is_stationary = equal_ltc_sample_time (&prev_frame.ltc, &sample.ltc);
+		const bool ltc_is_stationary = equal_ltc_sample_time (&prev_frame.ltc, &ltc_frame.ltc);
 
-		if (detect_discontinuity (&sample, ceil(timecode.rate), !fps_detected)) {
+		if (detect_discontinuity (&ltc_frame, ceil(timecode.rate), !fps_detected)) {
 			if (frames_since_reset > 1) {
 				reset (false);
 			}
@@ -410,9 +443,10 @@ LTC_TransportMaster::process_ltc(samplepos_t const now)
 			}
 		}
 
-		if (!ltc_is_stationary && detect_ltc_fps (stime.frame, (sample.ltc.dfbit) ? true : false)) {
+		if (!ltc_is_stationary && detect_ltc_fps (stime.frame, (ltc_frame.ltc.dfbit) ? true : false)) {
 			reset (true);
 			fps_detected = true;
+			timecode_format_valid = true; /* SET FLAG */
 		}
 
 #ifndef NDEBUG
@@ -428,20 +462,20 @@ LTC_TransportMaster::process_ltc(samplepos_t const now)
 			          stime.hours,
 			          stime.mins,
 			          stime.secs,
-			          (sample.ltc.dfbit) ? '.' : ':',
+			          (ltc_frame.ltc.dfbit) ? '.' : ':',
 			          stime.frame,
-			          sample.off_start,
-			          sample.off_end,
-			          sample.reverse ? " R" : "  "
+			          ltc_frame.off_start,
+			          ltc_frame.off_end,
+			          ltc_frame.reverse ? " R" : "  "
 				);
 			DEBUG_TRACE (DEBUG::LTC, buf);
 		}
 #endif
 
-		/* when a full LTC sample is decoded, the timecode the LTC sample
+		/* when a full LTC frame is decoded, the timecode the LTC frame
 		 * is referring has just passed.
 		 * So we send the _next_ timecode which
-		 * is expected to start at the end of the current sample
+		 * is expected to start at the end of the current LTC frame
 		 */
 		int fps_i = ceil(timecode.rate);
 
@@ -461,17 +495,17 @@ LTC_TransportMaster::process_ltc(samplepos_t const now)
 				break;
 		}
 
-		if (!sample.reverse) {
-			ltc_frame_increment(&sample.ltc, fps_i, tv_standard, 0);
-			ltc_frame_to_time(&stime, &sample.ltc, 0);
+		if (!ltc_frame.reverse) {
+			ltc_frame_increment(&ltc_frame.ltc, fps_i, tv_standard, 0);
+			ltc_frame_to_time(&stime, &ltc_frame.ltc, 0);
 			transport_direction = 1;
-			sample.off_start -= ltc_frame_alignment(samples_per_timecode_frame, tv_standard);
-			sample.off_end -= ltc_frame_alignment(samples_per_timecode_frame, tv_standard);
+			ltc_frame.off_start -= ltc_frame_alignment(samples_per_timecode_frame, tv_standard);
+			ltc_frame.off_end -= ltc_frame_alignment(samples_per_timecode_frame, tv_standard);
 		} else {
-			ltc_frame_decrement(&sample.ltc, fps_i, tv_standard, 0);
-			int off = sample.off_end - sample.off_start;
-			sample.off_start += off - ltc_frame_alignment(samples_per_timecode_frame, tv_standard);
-			sample.off_end += off - ltc_frame_alignment(samples_per_timecode_frame, tv_standard);
+			ltc_frame_decrement(&ltc_frame.ltc, fps_i, tv_standard, 0);
+			int off = ltc_frame.off_end - ltc_frame.off_start;
+			ltc_frame.off_start += off - ltc_frame_alignment(samples_per_timecode_frame, tv_standard);
+			ltc_frame.off_end += off - ltc_frame_alignment(samples_per_timecode_frame, tv_standard);
 			transport_direction = -1;
 		}
 
@@ -501,10 +535,10 @@ LTC_TransportMaster::process_ltc(samplepos_t const now)
 		 *
 		 */
 
-		samplepos_t cur_timestamp = sample.off_end + 1;
+		samplepos_t cur_timestamp = ltc_frame.off_end + 1;
 		double ltc_speed = current.speed;
 
-		DEBUG_TRACE (DEBUG::LTC, string_compose ("LTC ltc-sample: %1 prev-ltc-sample %2  cur-timestamp: %3 last-timestamp: %4 frame-spans %5..%6\n", ltc_sample, current.position, cur_timestamp, current.timestamp, sample.off_start, sample.off_end));
+		DEBUG_TRACE (DEBUG::LTC, string_compose ("LTC ltc-sample: %1 prev-ltc-sample %2  cur-timestamp: %3 last-timestamp: %4 frame-spans %5..%6\n", ltc_sample, current.position, cur_timestamp, current.timestamp, ltc_frame.off_start, ltc_frame.off_end));
 
 		if (cur_timestamp <= current.timestamp || current.timestamp == 0) {
 			DEBUG_TRACE (DEBUG::LTC, string_compose ("LTC speed: UNCHANGED: %1\n", current.speed));
@@ -525,11 +559,11 @@ LTC_TransportMaster::process_ltc(samplepos_t const now)
 		DEBUG_TRACE (DEBUG::LTC, string_compose ("update current to %1 %2 %3\n", ltc_sample, cur_timestamp, ltc_speed));
 		current.update (ltc_sample, cur_timestamp, ltc_speed);
 
-	} /* end foreach decoded LTC sample */
+	} /* end foreach decoded LTC frame */
 }
 
 void
-LTC_TransportMaster::pre_process (ARDOUR::pframes_t nframes, samplepos_t now, boost::optional<samplepos_t> session_pos)
+LTC_TransportMaster::pre_process (ARDOUR::pframes_t nframes, samplepos_t now, std::optional<samplepos_t> session_pos)
 {
 	if (!_port) {
 		reset (true);

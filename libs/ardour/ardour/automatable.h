@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_automatable_h__
-#define __ardour_automatable_h__
+#pragma once
 
 #include <map>
 #include <memory>
@@ -33,6 +32,8 @@
 #include "pbd/controllable.h"
 
 #include "evoral/ControlSet.h"
+
+#include "temporal/domain_provider.h"
 
 #include "ardour/libardour_visibility.h"
 #include "ardour/slavable.h"
@@ -48,10 +49,10 @@ class AutomationControl;
 /* The inherited ControlSet is virtual because AutomatableSequence inherits
  * from this AND EvoralSequence, which is also a ControlSet
  */
-class LIBARDOUR_API Automatable : virtual public Evoral::ControlSet, public Slavable
+class LIBARDOUR_API Automatable : virtual public Evoral::ControlSet, public Slavable, public Temporal::TimeDomainProvider
 {
 public:
-	Automatable(Session&, Temporal::TimeDomain);
+	Automatable(Session&, Temporal::TimeDomainProvider const &);
 	Automatable (const Automatable& other);
 
 	virtual ~Automatable();
@@ -115,9 +116,13 @@ public:
 	int set_automation_xml_state (const XMLNode&, Evoral::Parameter default_param);
 	XMLNode& get_automation_xml_state() const;
 
-	PBD::Signal0<void> AutomationStateChanged;
+	PBD::Signal<void()> AutomationStateChanged;
 
-	Temporal::TimeDomain time_domain() const { return _time_domain; }
+	void start_domain_bounce (Temporal::DomainBounceInfo&);
+	void finish_domain_bounce (Temporal::DomainBounceInfo&);
+
+	static void find_next_ac_event (std::shared_ptr<AutomationControl>, Temporal::timepos_t const & start, Temporal::timepos_t const & end, Evoral::ControlEvent& ev);
+	static void find_prev_ac_event (std::shared_ptr<AutomationControl>, Temporal::timepos_t const & start, Temporal::timepos_t const & end, Evoral::ControlEvent& ev);
 
 protected:
 	Session& _a_session;
@@ -125,7 +130,7 @@ protected:
 	void can_automate(Evoral::Parameter);
 
 	virtual void automation_list_automation_state_changed (Evoral::Parameter const&, AutoState);
-	SerializedRCUManager<ControlList> _automated_controls;
+	SerializedRCUManager<AutomationControlList> _automated_controls;
 
 	int load_automation (const std::string& path);
 	int old_set_automation_state(const XMLNode&);
@@ -134,17 +139,12 @@ protected:
 
 	samplepos_t _last_automation_snapshot;
 
-	SlavableControlList slavables () const { return SlavableControlList(); }
-
-	void find_next_ac_event (std::shared_ptr<AutomationControl>, Temporal::timepos_t const & start, Temporal::timepos_t const & end, Evoral::ControlEvent& ev) const;
-	void find_prev_ac_event (std::shared_ptr<AutomationControl>, Temporal::timepos_t const & start, Temporal::timepos_t const & end, Evoral::ControlEvent& ev) const;
+	SlavableAutomationControlList slavables () const { return SlavableAutomationControlList(); }
 
 private:
 	PBD::ScopedConnectionList _control_connections; ///< connections to our controls' signals
-	Temporal::TimeDomain _time_domain;
 };
 
 
 } // namespace ARDOUR
 
-#endif /* __ardour_automatable_h__ */

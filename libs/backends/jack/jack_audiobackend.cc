@@ -22,7 +22,6 @@
 #include <list>
 #include <math.h>
 
-#include <boost/scoped_ptr.hpp>
 #include <glibmm/timer.h>
 #include <glibmm/spawn.h>
 
@@ -48,6 +47,8 @@ using std::vector;
 
 #define GET_PRIVATE_JACK_POINTER(localvar)  jack_client_t* localvar = _jack_connection->jack(); if (!(localvar)) { return; }
 #define GET_PRIVATE_JACK_POINTER_RET(localvar,r) jack_client_t* localvar = _jack_connection->jack(); if (!(localvar)) { return r; }
+// #define JACK_SERVER_CALL(expr) { std::cerr << "JACK SERVER CALL: " << DEBUG_THREAD_SELF << '/' << pthread_name() << ' ' << #expr << std::endl; Glib::Threads::Mutex::Lock lm (server_call_mutex); expr; }
+#define JACK_SERVER_CALL(expr) { Glib::Threads::Mutex::Lock lm (server_call_mutex); expr; }
 
 JACKAudioBackend::JACKAudioBackend (AudioEngine& e, AudioBackendInfo& info, std::shared_ptr<JackConnection> jc)
 	: AudioBackend (e, info)
@@ -67,8 +68,8 @@ JACKAudioBackend::JACKAudioBackend (AudioEngine& e, AudioBackendInfo& info, std:
 	, _jack_ports (new JackPorts)
 	, _session (0)
 {
-	_jack_connection->Connected.connect_same_thread (jack_connection_connection, boost::bind (&JACKAudioBackend::when_connected_to_jack, this));
-	_jack_connection->Disconnected.connect_same_thread (disconnect_connection, boost::bind (&JACKAudioBackend::disconnected, this, _1));
+	_jack_connection->Connected.connect_same_thread (jack_connection_connection, std::bind (&JACKAudioBackend::when_connected_to_jack, this));
+	_jack_connection->Disconnected.connect_same_thread (disconnect_connection, std::bind (&JACKAudioBackend::disconnected, this, _1));
 }
 
 JACKAudioBackend::~JACKAudioBackend()
@@ -85,7 +86,11 @@ JACKAudioBackend::~JACKAudioBackend()
 string
 JACKAudioBackend::name() const
 {
+#if ! (defined(__APPLE__) || defined(PLATFORM_WINDOWS))
+	return X_("JACK/Pipewire");
+#else
 	return X_("JACK");
+#endif
 }
 
 void*
@@ -225,18 +230,6 @@ JACKAudioBackend::available_period_sizes (const std::string& driver, const std::
 	return s;
 }
 
-uint32_t
-JACKAudioBackend::available_input_channel_count (const string& /*device*/) const
-{
-	return 128;
-}
-
-uint32_t
-JACKAudioBackend::available_output_channel_count (const string& /*device*/) const
-{
-	return 128;
-}
-
 /* -- parameter setting -- */
 
 int
@@ -305,36 +298,6 @@ JACKAudioBackend::set_interleaved (bool yn)
 		return 0;
 	}
 	return -1;
-}
-
-int
-JACKAudioBackend::set_input_channels (uint32_t cnt)
-{
-	if (available()) {
-		if (cnt != 0) {
-			/* can't set a real value for this while JACK runs */
-			return -1;
-		}
-	}
-
-	_target_input_channels = cnt;
-
-	return 0;
-}
-
-int
-JACKAudioBackend::set_output_channels (uint32_t cnt)
-{
-	if (available()) {
-		if (cnt != 0) {
-			/* can't set a real value for this while JACK runs */
-			return -1;
-		}
-	}
-
-	_target_output_channels = cnt;
-
-	return 0;
 }
 
 int
@@ -429,42 +392,6 @@ string
 JACKAudioBackend::midi_option () const
 {
 	return _target_midi_option;
-}
-
-uint32_t
-JACKAudioBackend::input_channels () const
-{
-	if (!_jack_connection->in_control()) {
-		if (available()) {
-			return n_physical (JackPortIsInput).n_audio();
-		} else {
-			return 0;
-		}
-	} else {
-		if (available()) {
-			return n_physical (JackPortIsInput).n_audio();
-		} else {
-			return _target_input_channels;
-		}
-	}
-}
-
-uint32_t
-JACKAudioBackend::output_channels () const
-{
-	if (!_jack_connection->in_control()) {
-		if (available()) {
-			return n_physical (JackPortIsOutput).n_audio();
-		} else {
-			return 0;
-		}
-	} else {
-		if (available()) {
-			return n_physical (JackPortIsOutput).n_audio();
-		} else {
-			return _target_output_channels;
-		}
-	}
 }
 
 uint32_t
@@ -618,7 +545,11 @@ JACKAudioBackend::freewheel (bool onoff)
 		return 0;
 	}
 
-	if (jack_set_freewheel (_priv_jack, onoff) == 0) {
+	int ret;
+
+	JACK_SERVER_CALL (ret = jack_set_freewheel (_priv_jack, onoff));
+
+	if (ret == 0) {
 		_freewheeling = onoff;
 		return 0;
 	}
@@ -669,9 +600,9 @@ JACKAudioBackend::set_time_master (bool yn)
 {
 	GET_PRIVATE_JACK_POINTER_RET (_priv_jack, -1);
 	if (yn) {
-		return jack_set_timebase_callback (_priv_jack, 0, _jack_timebase_callback, this);
+		JACK_SERVER_CALL (return jack_set_timebase_callback (_priv_jack, 0, _jack_timebase_callback, this));
 	} else {
-		return jack_release_timebase (_priv_jack);
+		JACK_SERVER_CALL (return jack_release_timebase (_priv_jack));
 	}
 }
 
@@ -737,22 +668,25 @@ JACKAudioBackend::set_jack_callbacks ()
 {
 	GET_PRIVATE_JACK_POINTER (_priv_jack);
 
-        jack_set_thread_init_callback (_priv_jack, AudioEngine::thread_init_callback, 0);
+	/* no need to set the thread_init_callback because we use the
+	 * non-callback API, and run the thread init callback in our own code.
+	 */
 
-        jack_set_process_thread (_priv_jack, _process_thread, this);
-        jack_set_sample_rate_callback (_priv_jack, _sample_rate_callback, this);
-        jack_set_buffer_size_callback (_priv_jack, _bufsize_callback, this);
-        jack_set_xrun_callback (_priv_jack, _xrun_callback, this);
-        jack_set_sync_callback (_priv_jack, _jack_sync_callback, this);
-        jack_set_freewheel_callback (_priv_jack, _freewheel_callback, this);
+	JACK_SERVER_CALL (jack_set_process_thread (_priv_jack, _process_thread, this));
+	JACK_SERVER_CALL (jack_set_sample_rate_callback (_priv_jack, _sample_rate_callback, this));
+	JACK_SERVER_CALL (jack_set_buffer_size_callback (_priv_jack, _bufsize_callback, this));
+	JACK_SERVER_CALL (jack_set_xrun_callback (_priv_jack, _xrun_callback, this));
+	JACK_SERVER_CALL (jack_set_sync_callback (_priv_jack, _jack_sync_callback, this));
+	JACK_SERVER_CALL (jack_set_freewheel_callback (_priv_jack, _freewheel_callback, this));
 
 #ifdef HAVE_JACK_SESSION
-        if( jack_set_session_callback)
-                jack_set_session_callback (_priv_jack, _session_callback, this);
+	if (jack_set_session_callback) {
+		JACK_SERVER_CALL (jack_set_session_callback (_priv_jack, _session_callback, this));
+	}
 #endif
 
         if (jack_set_latency_callback) {
-                jack_set_latency_callback (_priv_jack, _latency_callback, this);
+	        JACK_SERVER_CALL (jack_set_latency_callback (_priv_jack, _latency_callback, this));
         }
 
         jack_set_error_function (ardour_jack_error);
@@ -762,6 +696,7 @@ void
 JACKAudioBackend::_jack_timebase_callback (jack_transport_state_t state, pframes_t nframes,
 				      jack_position_t* pos, int new_position, void *arg)
 {
+	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose ("%1/%2 jack timebase callback\n", DEBUG_THREAD_SELF, pthread_name()));
 	static_cast<JACKAudioBackend*> (arg)->jack_timebase_callback (state, nframes, pos, new_position);
 }
 
@@ -780,6 +715,7 @@ JACKAudioBackend::jack_timebase_callback (jack_transport_state_t state, pframes_
 int
 JACKAudioBackend::_jack_sync_callback (jack_transport_state_t state, jack_position_t* pos, void* arg)
 {
+	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose ("%1/%2 jack sync callback\n", DEBUG_THREAD_SELF, pthread_name()));
 	return static_cast<JACKAudioBackend*> (arg)->jack_sync_callback (state, pos);
 }
 
@@ -818,6 +754,8 @@ JACKAudioBackend::jack_sync_callback (jack_transport_state_t state, jack_positio
 int
 JACKAudioBackend::_xrun_callback (void *arg)
 {
+	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose ("%1/%2 jack sync callback\n", DEBUG_THREAD_SELF, pthread_name()));
+
 	JACKAudioBackend* jab = static_cast<JACKAudioBackend*> (arg);
 	if (jab->available()) {
 		jab->engine.Xrun (); /* EMIT SIGNAL */
@@ -828,6 +766,8 @@ JACKAudioBackend::_xrun_callback (void *arg)
 void
 JACKAudioBackend::_session_callback (jack_session_event_t *event, void *arg)
 {
+	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose ("%1/%2 jack session callback\n", DEBUG_THREAD_SELF, pthread_name()));
+
 	JACKAudioBackend* jab = static_cast<JACKAudioBackend*> (arg);
 	ARDOUR::Session* session = jab->engine.session();
 
@@ -840,6 +780,7 @@ JACKAudioBackend::_session_callback (jack_session_event_t *event, void *arg)
 void
 JACKAudioBackend::_freewheel_callback (int onoff, void *arg)
 {
+	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose ("%1/%2 jack freewheel callback\n", DEBUG_THREAD_SELF, pthread_name()));
 	static_cast<JACKAudioBackend*>(arg)->freewheel_callback (onoff);
 }
 
@@ -853,11 +794,12 @@ JACKAudioBackend::freewheel_callback (int onoff)
 void
 JACKAudioBackend::_latency_callback (jack_latency_callback_mode_t mode, void* arg)
 {
+	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose ("%1/%2 jack latency callback\n", DEBUG_THREAD_SELF, pthread_name()));
 	return static_cast<JACKAudioBackend*> (arg)->jack_latency_callback (mode);
 }
 
 int
-JACKAudioBackend::create_process_thread (boost::function<void()> f)
+JACKAudioBackend::create_process_thread (std::function<void()> f)
 {
         GET_PRIVATE_JACK_POINTER_RET (_priv_jack, -1);
 
@@ -880,16 +822,15 @@ JACKAudioBackend::join_process_threads ()
 
 	int ret = 0;
 
-	for (std::vector<jack_native_thread_t>::const_iterator i = _jack_threads.begin ();
-	     i != _jack_threads.end(); i++) {
+	for (auto & thread : _jack_threads) {
 
 #if defined(USING_JACK2_EXPANSION_OF_JACK_API) || defined __jack_systemdeps_h__
 		// jack_client is not used by JACK2's implementation
 		// also jack_client_close() leaves threads active
-		if (jack_client_stop_thread (_priv_jack, *i) != 0)
+		if (jack_client_stop_thread (_priv_jack, thread) != 0)
 #else
 		void* status;
-		if (pthread_join (*i, &status) != 0)
+		if (pthread_join (thread, &status) != 0)
 #endif
 		{
 			error << "AudioEngine: cannot stop process thread" << endmsg;
@@ -905,7 +846,7 @@ JACKAudioBackend::join_process_threads ()
 bool
 JACKAudioBackend::in_process_thread ()
 {
-#if defined COMPILER_MINGW && (!defined PTW32_VERSION || defined __jack_systemdeps_h__)
+#if defined COMPILER_MINGW && (!defined __PTW32_VERSION || defined __jack_systemdeps_h__)
 	if (_main_thread == GetCurrentThread()) {
 		return true;
 	}
@@ -915,15 +856,14 @@ JACKAudioBackend::in_process_thread ()
 	}
 #endif
 
-	for (std::vector<jack_native_thread_t>::const_iterator i = _jack_threads.begin ();
-	     i != _jack_threads.end(); i++) {
+	for (auto & thread : _jack_threads) {
 
-#if defined COMPILER_MINGW && (!defined PTW32_VERSION || defined __jack_systemdeps_h__)
-		if (*i == GetCurrentThread()) {
+#if defined COMPILER_MINGW && (!defined __PTW32_VERSION || defined __jack_systemdeps_h__)
+		if (thread == GetCurrentThread()) {
 			return true;
 		}
 #else // pthreads
-		if (pthread_equal (*i, pthread_self()) != 0) {
+		if (pthread_equal (thread, pthread_self()) != 0) {
 			return true;
 		}
 #endif
@@ -949,7 +889,7 @@ void*
 JACKAudioBackend::_start_process_thread (void* arg)
 {
         ThreadData* td = reinterpret_cast<ThreadData*> (arg);
-        boost::function<void()> f = td->f;
+        std::function<void()> f = td->f;
         delete td;
 
         f ();
@@ -969,7 +909,7 @@ JACKAudioBackend::process_thread ()
         /* JACK doesn't do this for us when we use the wait API
          */
 
-#if defined COMPILER_MINGW && (!defined PTW32_VERSION || defined __jack_systemdeps_h__)
+#if defined COMPILER_MINGW && (!defined __PTW32_VERSION || defined __jack_systemdeps_h__)
 	_main_thread = GetCurrentThread();
 #else
 	_main_thread = pthread_self ();
@@ -999,6 +939,7 @@ JACKAudioBackend::process_thread ()
 int
 JACKAudioBackend::_sample_rate_callback (pframes_t nframes, void *arg)
 {
+	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose ("%1/%2 jack sample rate callback\n", DEBUG_THREAD_SELF, pthread_name()));
 	return static_cast<JACKAudioBackend*> (arg)->jack_sample_rate_callback (nframes);
 }
 
@@ -1018,6 +959,7 @@ JACKAudioBackend::jack_latency_callback (jack_latency_callback_mode_t mode)
 int
 JACKAudioBackend::_bufsize_callback (pframes_t nframes, void *arg)
 {
+	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose ("%1/%2 jack buffer size callback\n", DEBUG_THREAD_SELF, pthread_name()));
 	return static_cast<JACKAudioBackend*> (arg)->jack_bufsize_callback (nframes);
 }
 
@@ -1084,7 +1026,7 @@ void
 JACKAudioBackend::update_latencies ()
 {
 	GET_PRIVATE_JACK_POINTER (_priv_jack);
-	jack_recompute_total_latencies (_priv_jack);
+	JACK_SERVER_CALL (jack_recompute_total_latencies (_priv_jack));
 }
 
 ChanCount

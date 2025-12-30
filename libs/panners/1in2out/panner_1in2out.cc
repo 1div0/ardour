@@ -28,7 +28,6 @@
 #include <float.h>
 #include <locale.h>
 #include <string>
-#include <unistd.h>
 
 #include <glibmm.h>
 
@@ -91,7 +90,7 @@ Panner1in2out::Panner1in2out (std::shared_ptr<Pannable> p)
 	left_interp  = left;
 	right_interp = right;
 
-	_pannable->pan_azimuth_control->Changed.connect_same_thread (*this, boost::bind (&Panner1in2out::update, this));
+	_pannable->pan_azimuth_control->Changed.connect_same_thread (*this, std::bind (&Panner1in2out::update, this));
 }
 
 Panner1in2out::~Panner1in2out ()

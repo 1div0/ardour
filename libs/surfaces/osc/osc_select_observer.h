@@ -28,8 +28,10 @@
 
 #include "pbd/controllable.h"
 #include "pbd/stateful.h"
-#include "ardour/types.h"
+
 #include "ardour/processor.h"
+#include "ardour/route_group.h"
+#include "ardour/types.h"
 
 #include "osc.h"
 
@@ -54,6 +56,7 @@ class OSCSelectObserver
 	void set_plugin_id (int id, uint32_t page);
 	void set_plugin_page (uint32_t page);
 	void set_plugin_size (uint32_t size);
+	void set_feedback (std::bitset<32> fb);
 
   private:
 	std::shared_ptr<ARDOUR::Stripable> _strip;
@@ -101,7 +104,7 @@ class OSCSelectObserver
 	void name_changed (const PBD::PropertyChange& what_changed);
 	void panner_changed ();
 	void group_name ();
-	void group_sharing (ARDOUR::RouteGroup *rg_c);
+	void group_sharing (std::shared_ptr<ARDOUR::RouteGroup> rg_c);
 	void comment_changed ();
 	void pi_changed (PBD::PropertyChange const&);
 	void change_message (std::string path, std::shared_ptr<PBD::Controllable> controllable);

@@ -51,7 +51,6 @@
 
 class OSCControllable;
 class OSCRouteObserver;
-class OSCGlobalObserver;
 class OSCSelectObserver;
 class OSCCueObserver;
 
@@ -68,6 +67,8 @@ class ZeroConf;
 
 namespace ArdourSurface {
 
+class OSCGlobalObserver;
+
 struct OSCUIRequest : public BaseUI::BaseRequestObject {
   public:
 	OSCUIRequest () {}
@@ -79,8 +80,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
   public:
 	OSC (ARDOUR::Session&, uint32_t port);
 	virtual ~OSC();
-
-	static OSC* instance() { return _instance; }
 
 	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
@@ -107,8 +106,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 
 	int start ();
 	int stop ();
-
-	static void* request_factory (uint32_t);
 
 	enum OSCDebugMode {
 		Off,
@@ -555,7 +552,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK1_MSG(sel_plugin_activate,f);
 	PATH_CALLBACK1_MSG(sel_comp_enable,f);
 	PATH_CALLBACK1_MSG(sel_comp_threshold,f);
-	PATH_CALLBACK1_MSG(sel_comp_speed,f);
 	PATH_CALLBACK1_MSG(sel_comp_mode,f);
 	PATH_CALLBACK1_MSG(sel_comp_makeup,f);
 	PATH_CALLBACK1_MSG(sel_eq_enable,f);
@@ -733,7 +729,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	int sel_pan_lfe (float val, lo_message msg);
 	int sel_comp_enable (float val, lo_message msg);
 	int sel_comp_threshold (float val, lo_message msg);
-	int sel_comp_speed (float val, lo_message msg);
 	int sel_comp_mode (float val, lo_message msg);
 	int sel_comp_makeup (float val, lo_message msg);
 	int sel_eq_enable (float val, lo_message msg);
@@ -770,8 +765,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PBD::ScopedConnectionList session_connections;
 
 	void debugmsg (const char *prefix, const char *path, const char* types, lo_arg **argv, int argc);
-
-	static OSC* _instance;
 
 	mutable void *gui;
 	void build_gui ();

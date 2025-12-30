@@ -18,17 +18,19 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_uri_map_h__
-#define __ardour_uri_map_h__
+#pragma once
 
 #include <map>
 
-#include <boost/utility.hpp>
-
 #include <glibmm/threads.h>
 
+#ifdef HAVE_LV2_1_18_6
+#include <lv2/core/lv2.h>
+#include <lv2/urid/urid.h>
+#else
 #include <lv2/lv2plug.in/ns/lv2core/lv2.h>
 #include <lv2/lv2plug.in/ns/ext/urid/urid.h>
+#endif
 
 #include "ardour/libardour_visibility.h"
 
@@ -39,11 +41,13 @@ namespace ARDOUR {
  * This just uses a pair of std::map and is not so great in the space overhead
  * department, but it's fast enough and not really performance critical anyway.
  */
-class LIBARDOUR_API URIMap : public boost::noncopyable {
+class LIBARDOUR_API URIMap {
 public:
 	static URIMap& instance();
 
 	URIMap();
+	URIMap(const URIMap&) = delete;
+	URIMap& operator=(const URIMap&) = delete;
 
 	LV2_Feature* urid_map_feature()   { return &_urid_map_feature; }
 	LV2_Feature* urid_unmap_feature() { return &_urid_unmap_feature; }
@@ -69,6 +73,7 @@ public:
 		uint32_t atom_Float;
 		uint32_t atom_Long;
 		uint32_t atom_Int;
+		uint32_t atom_Bool;
 		uint32_t log_Error;
 		uint32_t log_Note;
 		uint32_t log_Trace;
@@ -96,6 +101,32 @@ public:
 		uint32_t auto_end;
 		uint32_t auto_parameter;
 		uint32_t auto_value;
+		uint32_t surr_MetaData;
+		uint32_t surr_Channel;
+		uint32_t surr_PosX;
+		uint32_t surr_PosY;
+		uint32_t surr_PosZ;
+		uint32_t surr_Size;
+		uint32_t surr_Snap;
+		uint32_t surr_ElevEn;
+		uint32_t surr_Zones;
+		uint32_t surr_Ramp;
+		uint32_t surr_Settings;
+		uint32_t surr_BinauralRenderMode;
+		uint32_t surr_ChannelCount;
+		uint32_t surr_ChannelDescription;
+		uint32_t surr_ChannelTypes;
+		uint32_t surr_ChannelBedIds;
+		uint32_t surr_ProgramData;
+		uint32_t surr_ContentFFOA;
+		uint32_t surr_ContentStart;
+		uint32_t surr_ContentFPS;
+		uint32_t surr_DownmixMode;
+		uint32_t surr_OutputFormat;
+		uint32_t surr_WarpMode;
+		uint32_t surr_ExportStart;
+		uint32_t surr_ExportStop;
+		uint32_t surr_ReferenceFile;
 #endif
 	};
 
@@ -120,4 +151,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif // __ardour_uri_map_h__

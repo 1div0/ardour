@@ -71,11 +71,6 @@ class FaderPort : public MIDISurface {
 
 	int set_active (bool yn);
 
-	/* we probe for a device when our ports are connected. Before that,
-	   there's no way to know if the device exists or not.
-	 */
-	static bool probe() { return true; }
-
 	std::string input_port_name () const;
 	std::string output_port_name () const;
 
@@ -136,12 +131,16 @@ class FaderPort : public MIDISurface {
 		ShiftDown = 0x1,
 		RewindDown = 0x2,
 		StopDown = 0x4,
-		UserDown = 0x8,
+		/* gap when we removed UserMode as a modifier */
 		LongPress = 0x10
 	};
 
 	void set_action (ButtonID, std::string const& action_name, bool on_press, FaderPort::ButtonState = ButtonState (0));
 	std::string get_action (ButtonID, bool on_press, FaderPort::ButtonState = ButtonState (0));
+
+	void notify_record_state_changed ();
+	void notify_transport_state_changed ();
+	void notify_loop_state_changed ();
 
   private:
 	std::shared_ptr<ARDOUR::Stripable> _current_stripable;
@@ -167,9 +166,10 @@ class FaderPort : public MIDISurface {
 
 	int begin_using_device ();
 	int stop_using_device ();
-
 	int device_acquire () { return 0; }
-	void device_release () {}
+	void device_release () { }
+	void run_event_loop ();
+	void stop_event_loop ();
 
 	ButtonState button_state;
 
@@ -192,7 +192,7 @@ class FaderPort : public MIDISurface {
 		{}
 
 		void set_action (std::string const& action_name, bool on_press, FaderPort::ButtonState = ButtonState (0));
-		void set_action (boost::function<void()> function, bool on_press, FaderPort::ButtonState = ButtonState (0));
+		void set_action (std::function<void()> function, bool on_press, FaderPort::ButtonState = ButtonState (0));
 		std::string get_action (bool press, FaderPort::ButtonState bs = ButtonState (0));
 
 		void set_led_state (bool onoff);
@@ -214,11 +214,11 @@ class FaderPort : public MIDISurface {
 
 		struct ToDo {
 			ActionType type;
-			/* could be a union if boost::function didn't require a
+			/* could be a union if std::function didn't require a
 			 * constructor
 			 */
 			std::string action_name;
-			boost::function<void()> function;
+			std::function<void()> function;
 		};
 
 		typedef std::map<FaderPort::ButtonState,ToDo> ToDoMap;

@@ -36,6 +36,7 @@
 
 #include <glib.h>
 #include "pbd/gstdio_compat.h"
+#include "pbd/progress.h"
 
 #ifdef COMPILER_MSVC
 #include <sys/utime.h>
@@ -328,6 +329,8 @@ SndFileSource::SndFileSource (Session& s, const AudioFileSource& other, const st
 		tbuf.modtime = statbuf.st_mtime; // = time ((time_t*) 0);
 		g_utime (path.c_str(), &tbuf);
 	}
+
+	copy_segment_descriptors (other);
 }
 
 void
@@ -339,7 +342,7 @@ SndFileSource::init_sndfile ()
 
 	memset (&_info, 0, sizeof(_info));
 
-	AudioFileSource::HeaderPositionOffsetChanged.connect_same_thread (header_position_connection, boost::bind (&SndFileSource::handle_header_position_change, this));
+	AudioFileSource::HeaderPositionOffsetChanged.connect_same_thread (header_position_connection, std::bind (&SndFileSource::handle_header_position_change, this));
 }
 
 void
@@ -403,7 +406,7 @@ SndFileSource::open ()
 #ifdef HAVE_RF64_RIFF
 	if (_file_is_new && _length == 0 && writable()) {
 		if (_flags & RF64_RIFF) {
-			if (sf_command (_sndfile, SFC_RF64_AUTO_DOWNGRADE, 0, 0) != SF_TRUE) {
+			if (sf_command (_sndfile, SFC_RF64_AUTO_DOWNGRADE, 0, 1) != SF_TRUE) {
 				char errbuf[256];
 				sf_error_str (_sndfile, errbuf, sizeof (errbuf) - 1);
 				error << string_compose (_("Cannot mark RF64 audio file for automatic downgrade to WAV: %1"), errbuf)
@@ -552,7 +555,9 @@ SndFileSource::read_unlocked (Sample *dst, samplepos_t start, samplecnt_t cnt) c
 		if (sf_seek (_sndfile, (sf_count_t) start, SEEK_SET|SFM_READ) != (sf_count_t) start) {
 			char errbuf[256];
 			sf_error_str (0, errbuf, sizeof (errbuf) - 1);
-			error << string_compose(_("SndFileSource: could not seek to sample %1 within %2 (%3)"), start, _name, errbuf) << endmsg;
+			if ((_info.format & SF_FORMAT_TYPEMASK ) != SF_FORMAT_FLAC && writable ()) {
+				error << string_compose(_("SndFileSource: could not seek to sample %1 within %2 (%3)"), start, _name, errbuf) << endmsg;
+			}
 			return 0;
 		}
 
@@ -598,7 +603,7 @@ SndFileSource::read_unlocked (Sample *dst, samplepos_t start, samplecnt_t cnt) c
 }
 
 samplecnt_t
-SndFileSource::write_unlocked (Sample *data, samplecnt_t cnt)
+SndFileSource::write_unlocked (Sample const * data, samplecnt_t cnt)
 {
         if (open()) {
                 return 0; // failure
@@ -608,7 +613,7 @@ SndFileSource::write_unlocked (Sample *data, samplecnt_t cnt)
 }
 
 samplecnt_t
-SndFileSource::nondestructive_write_unlocked (Sample *data, samplecnt_t cnt)
+SndFileSource::nondestructive_write_unlocked (Sample const * data, samplecnt_t cnt)
 {
 	if (!writable()) {
 		warning << string_compose (_("attempt to write a non-writable audio file source (%1)"), _path) << endmsg;
@@ -735,7 +740,7 @@ SndFileSource::set_header_natural_position ()
 }
 
 samplecnt_t
-SndFileSource::write_float (Sample* data, samplepos_t sample_pos, samplecnt_t cnt)
+SndFileSource::write_float (Sample const * data, samplepos_t sample_pos, samplecnt_t cnt)
 {
 	if ((_info.format & SF_FORMAT_TYPEMASK ) == SF_FORMAT_FLAC) {
 		assert (_length == sample_pos);

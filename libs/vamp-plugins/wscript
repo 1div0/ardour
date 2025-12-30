@@ -2,12 +2,8 @@
 from waflib.extras import autowaf as autowaf
 import os
 
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     autowaf.check_pkg(conf, 'fftw3f', uselib_store='FFTW3F', mandatory=True)
@@ -52,6 +48,3 @@ def build(bld):
         obj.source += ' Onset.cpp '
         obj.uselib += ' AUBIO '
     obj.install_path = os.path.join(bld.env['LIBDIR'], 'vamp')
-
-def shutdown():
-    autowaf.shutdown()

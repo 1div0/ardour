@@ -38,7 +38,7 @@
 #include "ardour/port.h"
 #include "ardour/port_set.h"
 #include "ardour/lv2_plugin.h"
-#include "lv2_evbuf.h"
+#include "ardour/lv2_evbuf.h"
 #include "ardour/uri_map.h"
 #if defined WINDOWS_VST_SUPPORT || defined LXVST_SUPPORT || defined MACVST_SUPPORT
 #include "ardour/vestige/vestige.h"
@@ -89,7 +89,7 @@ BufferSet::clear()
 #endif
 
 	for (LV2Buffers::iterator i = _lv2_buffers.begin(); i != _lv2_buffers.end(); ++i) {
-		free ((*i).second);
+		lv2_evbuf_free ((*i).second);
 	}
 	_lv2_buffers.clear ();
 
@@ -102,7 +102,7 @@ BufferSet::clear()
  *  XXX: this *is* called in a process context; I'm not sure quite what `should not' means above.
  */
 void
-BufferSet::attach_buffers (PortSet& ports)
+BufferSet::attach_buffers (PortSet const& ports)
 {
 	const ChanCount& count (ports.count());
 
@@ -155,11 +155,19 @@ void
 BufferSet::ensure_buffers(DataType type, size_t num_buffers, size_t buffer_capacity)
 {
 	assert(type != DataType::NIL);
-	assert(type < _buffers.size());
+	assert(type < _buffers.capacity());
 
 	if (num_buffers == 0) {
 		return;
 	}
+
+	/* after a clear (), re-initlaize buffers */
+	if (_buffers.empty ()) {
+		for (size_t i=0; i < DataType::num_types; ++i) {
+			_buffers.push_back(BufferVec());
+		}
+	}
+	assert(_buffers.size() == DataType::num_types);
 
 	// The vector of buffers of the type we care about
 	BufferVec& bufs = _buffers[type];
@@ -229,6 +237,19 @@ BufferSet::ensure_buffers(const ChanCount& chns, size_t buffer_capacity)
 	}
 }
 
+bool
+BufferSet::silent_data () const
+{
+	for (DataType::iterator t = DataType::begin(); t != DataType::end(); ++t) {
+		for (BufferSet::const_iterator i = begin (*t); i != end (*t); ++i) {
+			if (!i->silent_data ()) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 /** Get the capacity (size) of the available buffers of the given type.
  *
  * All buffers of a certain type always have the same capacity.
@@ -285,12 +306,10 @@ BufferSet::get_lv2_midi(bool input, size_t i)
 }
 
 void
-BufferSet::forward_lv2_midi(LV2_Evbuf* buf, size_t i, bool purge_ardour_buffer)
+BufferSet::forward_lv2_midi(LV2_Evbuf* buf, size_t i, pframes_t n_samples, samplecnt_t offset)
 {
 	MidiBuffer& mbuf  = get_midi(i);
-	if (purge_ardour_buffer) {
-		mbuf.silence(0, 0);
-	}
+	mbuf.silence (n_samples, offset);
 	for (LV2_Evbuf_Iterator i = lv2_evbuf_begin(buf);
 			 lv2_evbuf_is_valid(i);
 			 i = lv2_evbuf_next(i)) {
@@ -298,19 +317,19 @@ BufferSet::forward_lv2_midi(LV2_Evbuf* buf, size_t i, bool purge_ardour_buffer)
 		uint8_t* data;
 		lv2_evbuf_get(i, &samples, &subframes, &type, &size, &data);
 		if (type == URIMap::instance().urids.midi_MidiEvent) {
-			mbuf.push_back(samples, Evoral::MIDI_EVENT, size, data);
+			mbuf.push_back(samples + offset, Evoral::MIDI_EVENT, size, data);
 		}
 	}
 }
 
 void
-BufferSet::flush_lv2_midi(bool input, size_t i)
+BufferSet::flush_lv2_midi(bool input, size_t i, pframes_t n_samples, samplecnt_t offset)
 {
 	MidiBuffer&            mbuf  = get_midi(i);
 	LV2Buffers::value_type b     = _lv2_buffers.at(i * 2 + (input ? 0 : 1));
 	LV2_Evbuf*             evbuf = b.second;
 
-	mbuf.silence(0, 0);
+	mbuf.silence (n_samples, offset);
 	for (LV2_Evbuf_Iterator i = lv2_evbuf_begin(evbuf);
 	     lv2_evbuf_is_valid(i);
 	     i = lv2_evbuf_next(i)) {
@@ -328,7 +347,7 @@ BufferSet::flush_lv2_midi(bool input, size_t i)
 #endif
 		if (type == URIMap::instance().urids.midi_MidiEvent) {
 			// TODO: Make Ardour event buffers generic so plugins can communicate
-			mbuf.push_back(samples, Evoral::MIDI_EVENT, size, data);
+			mbuf.push_back(samples + offset, Evoral::MIDI_EVENT, size, data);
 		}
 	}
 }

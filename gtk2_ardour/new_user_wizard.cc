@@ -33,7 +33,7 @@
 
 #include "pbd/gstdio_compat.h"
 
-#include <gtkmm.h>
+#include <ytkmm/ytkmm.h>
 
 #include "pbd/basename.h"
 #include "pbd/failed_constructor.h"
@@ -44,6 +44,7 @@
 #include "pbd/openuri.h"
 
 #include "ardour/audioengine.h"
+#include "ardour/clip_library.h"
 #include "ardour/filesystem_paths.h"
 #include "ardour/filename_extensions.h"
 #include "ardour/plugin_manager.h"
@@ -69,6 +70,10 @@ using namespace Glib;
 using namespace PBD;
 using namespace ARDOUR;
 using namespace ARDOUR_UI_UTILS;
+
+#ifdef __APPLE__
+extern void set_default_cocoa_invalidation (); // cocoacarbon.mm
+#endif
 
 NewUserWizard::NewUserWizard ()
 	: _splash_pushed (false)
@@ -103,6 +108,7 @@ NewUserWizard::NewUserWizard ()
 
 	setup_new_user_page ();
 	setup_first_time_config_page ();
+	setup_clip_lib_page ();
 	setup_final_page ();
 }
 
@@ -117,6 +123,12 @@ NewUserWizard::required ()
 	if (Glib::file_test (ARDOUR::been_here_before_path (), Glib::FILE_TEST_EXISTS)) {
 		return false;
 	}
+#ifdef __APPLE__
+	/* since we cannot use std::optional<bool> as UI_CONFIG_VARIABLE
+	 * this is likely the best place for a special case..
+	 */
+	set_default_cocoa_invalidation ();
+#endif
 
 	return true;
 }
@@ -171,7 +183,18 @@ using the program.</span> \
 	hbox->show ();
 	cbox->show ();
 
-	guess_default_ui_scale ();
+	int ui_scale = guess_default_ui_scale ();
+	if (ui_scale <= 100) {
+		ui_font_scale.set_active (0); // 100%
+	} else if (ui_scale <= 150) {
+		ui_font_scale.set_active (1); // 150%
+	} else if (ui_scale <= 200) {
+		ui_font_scale.set_active (2); // 200%
+	} else {
+		ui_font_scale.set_active (3); // 250%
+	}
+	rescale_ui ();
+
 	ui_font_scale.signal_changed ().connect (sigc::mem_fun (*this, &NewUserWizard::rescale_ui));
 #endif
 
@@ -189,7 +212,7 @@ void
 NewUserWizard::rescale_ui ()
 {
 	int rn = ui_font_scale.get_active_row_number ();
-	if (rn < 0 ) {
+	if (rn < 0) {
 		return;
 	}
 	float ui_scale = 100 + rn * 50;
@@ -198,46 +221,20 @@ NewUserWizard::rescale_ui ()
 }
 
 void
-NewUserWizard::guess_default_ui_scale ()
-{
-	gint width = 0;
-	gint height = 0;
-	GdkScreen* screen = gdk_display_get_screen (gdk_display_get_default (), 0);
-	gint n_monitors = gdk_screen_get_n_monitors (screen);
-
-	if (!screen) {
-		return;
-	}
-
-	for (gint i = 0; i < n_monitors; ++i) {
-		GdkRectangle rect;
-		gdk_screen_get_monitor_geometry (screen, i, &rect);
-		width = std::max (width, rect.width);
-		height = std::max (height, rect.height);
-	}
-
-	float wx = width  / 1920.f;
-	float hx = height / 1080.f;
-	float sx = std::min (wx, hx);
-
-	if (sx < 1.25) {
-		ui_font_scale.set_active (0); // 100%
-	} else if (sx < 1.6) {
-		ui_font_scale.set_active (1); // 150%
-	} else if (sx < 2.1) {
-		ui_font_scale.set_active (2); // 200%
-	} else {
-		ui_font_scale.set_active (3); // 250%
-	}
-	rescale_ui ();
-}
-
-void
 NewUserWizard::default_dir_changed ()
 {
 	Config->set_default_session_parent_dir (default_dir_chooser->get_filename());
 	// make new session folder chooser point to the new default
 	new_folder_chooser.set_current_folder (Config->get_default_session_parent_dir());
+	default_dir_label->set_text (Config->get_default_session_parent_dir());
+	config_modified = true;
+}
+
+void
+NewUserWizard::clip_lib_changed ()
+{
+	Config->set_clip_library_dir (clip_lib_chooser->get_filename());
+	clip_lib_label->set_text (clip_lib_chooser->get_filename());
 	config_modified = true;
 }
 
@@ -246,6 +243,8 @@ NewUserWizard::setup_first_time_config_page ()
 {
 	default_dir_chooser = manage (new FileChooserButton (string_compose (_("Default folder for %1 sessions"), PROGRAM_NAME),
 							     FILE_CHOOSER_ACTION_SELECT_FOLDER));
+	default_dir_label = manage (new Label);
+
 	Gtk::Label* txt = manage (new Label);
 	HBox* hbox = manage (new HBox);
 	VBox* vbox = manage (new VBox);
@@ -263,19 +262,74 @@ Where would you like new %1 sessions to be stored by default?\n\n\
 	vbox->set_border_width (24);
 
 	hbox->pack_start (*default_dir_chooser, false, true, 8);
+	hbox->pack_start (*default_dir_label, false, false, 8);
+
 	vbox->pack_start (*txt, false, false);
 	vbox->pack_start (*hbox, false, true);
 
-	cerr << "set default folder to " << poor_mans_glob (Config->get_default_session_parent_dir()) << endl;
+	default_dir_label->set_text (poor_mans_glob (Config->get_default_session_parent_dir()));
+
 	Gtkmm2ext::add_volume_shortcuts (*default_dir_chooser);
+	default_dir_chooser->set_title (_("Default Session Location"));
 	default_dir_chooser->set_current_folder (poor_mans_glob (Config->get_default_session_parent_dir()));
-	default_dir_chooser->signal_current_folder_changed().connect (sigc::mem_fun (*this, &NewUserWizard::default_dir_changed));
+	default_dir_chooser->signal_selection_changed().connect (sigc::mem_fun (*this, &NewUserWizard::default_dir_changed));
 	default_dir_chooser->show ();
 
 	vbox->show_all ();
 
 	append_page (*vbox);
 	set_page_title (*vbox, _("Default folder for new sessions"));
+	set_page_header_image (*vbox, icon_pixbuf);
+	set_page_type (*vbox, ASSISTANT_PAGE_CONTENT);
+
+	/* user can just skip all these settings if they want to */
+
+	set_page_complete (*vbox, true);
+}
+
+void
+NewUserWizard::setup_clip_lib_page ()
+{
+	clip_lib_chooser = manage (new FileChooserButton (string_compose (_("Default folder where %1 should look for samples"), PROGRAM_NAME),
+	                                                    FILE_CHOOSER_ACTION_SELECT_FOLDER));
+	clip_lib_label = manage (new Label);
+
+	Gtk::Label* txt = manage (new Label);
+	HBox* hbox = manage (new HBox);
+	VBox* vbox = manage (new VBox);
+
+	txt->set_markup (string_compose (_("<span size=\"larger\">\
+If you have an existing collection of samples, telling %1\n\
+where they are will make it easier to find them in the program.\
+\n\
+\n\
+Where would you like %1 to look for samples by default? If you\n\
+don't have any samples, just leave this setting as it is.\n\n\
+<i>(You can store samples anywhere you want, this is just an initial default)</i></span>"), PROGRAM_NAME));
+	txt->set_alignment (0.0, 0.0);
+	txt->set_justify (JUSTIFY_FILL);
+
+	vbox->set_spacing (18);
+	vbox->set_border_width (24);
+
+	hbox->pack_start (*clip_lib_chooser, false, true, 8);
+	hbox->pack_start (*clip_lib_label, false, false, 8);
+
+	vbox->pack_start (*txt, false, false);
+	vbox->pack_start (*hbox, false, true);
+
+	clip_lib_label->set_text (ARDOUR::platform_default_clip_library_dir());
+
+	Gtkmm2ext::add_volume_shortcuts (*clip_lib_chooser);
+	clip_lib_chooser->set_title (_("Default sample library location"));
+	clip_lib_chooser->set_current_folder (ARDOUR::platform_default_clip_library_dir());
+	clip_lib_chooser->signal_selection_changed().connect (sigc::mem_fun (*this, &NewUserWizard::clip_lib_changed));
+	clip_lib_chooser->show ();
+
+	vbox->show_all ();
+
+	append_page (*vbox);
+	set_page_title (*vbox, _("Default Sample Library Location"));
 	set_page_header_image (*vbox, icon_pixbuf);
 	set_page_type (*vbox, ASSISTANT_PAGE_CONTENT);
 

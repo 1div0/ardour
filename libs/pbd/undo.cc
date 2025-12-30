@@ -30,6 +30,7 @@
 
 using namespace std;
 using namespace sigc;
+using namespace PBD;
 
 UndoTransaction::UndoTransaction ()
 	: _clearing (false)
@@ -86,7 +87,7 @@ UndoTransaction::add_command (Command* const cmd)
 	 * so there is no need to manage this connection.
 	 */
 
-	cmd->DropReferences.connect_same_thread (*this, boost::bind (&command_death, this, cmd));
+	cmd->DropReferences.connect_same_thread (*this, std::bind (&command_death, this, cmd));
 	actions.push_back (cmd);
 }
 
@@ -98,7 +99,6 @@ UndoTransaction::remove_command (Command* const action)
 		return;
 	}
 	actions.erase (i);
-	delete action;
 }
 
 bool
@@ -208,7 +208,7 @@ UndoHistory::add (UndoTransaction* const ut)
 {
 	uint32_t current_depth = UndoList.size ();
 
-	ut->DropReferences.connect_same_thread (*this, boost::bind (&UndoHistory::remove, this, ut));
+	ut->DropReferences.connect_same_thread (*this, std::bind (&UndoHistory::remove, this, ut));
 
 	/* if the current undo history is larger than or equal to the currently
 		 requested depth, then pop off at least 1 element to make space

@@ -16,13 +16,15 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libpbd_cpus_h__
-#define __libpbd_cpus_h__
+#pragma once
 
 #include <stdint.h>
 
 #include "pbd/libpbd_visibility.h"
 
-LIBPBD_API extern uint32_t hardware_concurrency ();
+namespace PBD{
 
-#endif /* __libpbd_cpus_h__ */
+LIBPBD_API extern uint32_t hardware_concurrency ();
+LIBPBD_API extern int32_t max_mmcss_threads_per_process ();
+
+}

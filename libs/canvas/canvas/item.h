@@ -23,7 +23,7 @@
 
 #include <stdint.h>
 
-#include <gdk/gdk.h>
+#include <ydk/gdk.h>
 
 #include <cairomm/context.h>
 
@@ -82,6 +82,7 @@ public:
 	 *  @param area Area to draw, in **window** coordinates
 	 */
 	virtual void prepare_for_render (Rect const & area) const { }
+	virtual bool needs_prepare_for_render () const { return false; }
 
 	/** Adds one or more items to the vector \p items based on their
 	 * covering \p point which is in window coordinates

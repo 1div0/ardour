@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_legatize_h__
-#define __ardour_legatize_h__
+#pragma once
 
 #include <string>
 
@@ -41,9 +40,9 @@ public:
 
 	typedef Evoral::Sequence<Temporal::Beats>::Notes Notes;
 
-	Command* operator()(std::shared_ptr<ARDOUR::MidiModel> model,
-	                    Temporal::Beats                      position,
-	                    std::vector<Notes>&                  seqs);
+	PBD::Command* operator()(std::shared_ptr<ARDOUR::MidiModel> model,
+	                         Temporal::Beats                      position,
+	                         std::vector<Notes>&                  seqs);
 
 	std::string name () const { return (_shrink_only ? std::string ("remove overlap") : std::string ("legatize")); }
 
@@ -53,4 +52,3 @@ private:
 
 } /* namespace */
 
-#endif /* __ardour_legatize_h__ */

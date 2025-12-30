@@ -36,11 +36,13 @@
 #include "ardour/audioregion.h"
 #include "ardour/debug.h"
 #include "ardour/filter.h"
+#include "ardour/lua_api.h"
 #include "ardour/playlist.h"
 #include "ardour/playlist_source.h"
 #include "ardour/profile.h"
 #include "ardour/region.h"
 #include "ardour/region_factory.h"
+#include "ardour/region_fx_plugin.h"
 #include "ardour/session.h"
 #include "ardour/source.h"
 #include "ardour/tempo.h"
@@ -54,7 +56,6 @@ using namespace ARDOUR;
 using namespace PBD;
 
 namespace ARDOUR {
-	class Progress;
 	namespace Properties {
 		PBD::PropertyDescriptor<bool> muted;
 		PBD::PropertyDescriptor<bool> opaque;
@@ -81,7 +82,11 @@ namespace ARDOUR {
 		PBD::PropertyDescriptor<float> shift;
 		PBD::PropertyDescriptor<uint64_t> layering_index;
 		PBD::PropertyDescriptor<std::string> tags;
+		PBD::PropertyDescriptor<uint64_t> reg_group;
 		PBD::PropertyDescriptor<bool> contents;
+		PBD::PropertyDescriptor<bool> region_fx;
+		PBD::PropertyDescriptor<bool> region_tempo;
+		PBD::PropertyDescriptor<bool> region_meter;
 
 /* these properties are used as a convenience for announcing changes to state, but aren't stored as properties */
 		PBD::PropertyDescriptor<Temporal::TimeDomain> time_domain;
@@ -89,7 +94,45 @@ namespace ARDOUR {
 	}
 }
 
-PBD::Signal2<void,std::shared_ptr<ARDOUR::RegionList>,const PropertyChange&> Region::RegionsPropertyChanged;
+PBD::Signal<void(std::shared_ptr<ARDOUR::RegionList>,const PropertyChange&)> Region::RegionsPropertyChanged;
+
+/* these static values are used by Region Groups to assign a group-id across the scope of an operation that might span many function calls */
+uint64_t Region::_retained_group_id = 0;
+uint64_t Region::_retained_take_cnt = 0;
+uint64_t Region::_next_group_id     = 0;
+
+std::map<uint64_t, uint64_t> Region::_operation_rgroup_map;
+Glib::Threads::Mutex         Region::_operation_rgroup_mutex;
+
+/* access the group-id for an operation on a region, honoring the existing region's group status */
+uint64_t
+Region::get_region_operation_group_id (uint64_t old_region_group, RegionOperationFlag flags) {
+	/* if the region was ungrouped, stay ungrouped */
+	if ((old_region_group == NoGroup) || (old_region_group == Explicit)) {
+		return old_region_group;
+	}
+
+	/* separate and preserve the Explicit flag: */
+	bool expl = (old_region_group & Explicit) == Explicit;
+
+	/* remove all flags */
+	old_region_group = (old_region_group >> 4) << 4;
+
+	/* apply flags to create a key, which will be used to recognize regions that belong in the same group */
+	uint64_t region_group_key = old_region_group | flags;
+
+	/* since the GUI is single-threaded, and it's hard/impossible to edit
+	 * during a rec-stop, this 'should' never be contentious
+	 */
+	Glib::Threads::Mutex::Lock lm (_operation_rgroup_mutex);
+
+	/* if a region group has not been assigned for this key, assign one */
+	if (_operation_rgroup_map.find (region_group_key) == _operation_rgroup_map.end ()) {
+		_operation_rgroup_map[region_group_key] = ++_next_group_id;
+	}
+
+	return ((_operation_rgroup_map[region_group_key] << 4) | expl);
+}
 
 void
 Region::make_property_quarks ()
@@ -146,8 +189,16 @@ Region::make_property_quarks ()
 	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for tags = %1\n",	Properties::tags.property_id));
 	Properties::contents.property_id = g_quark_from_static_string (X_("contents"));
 	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for contents = %1\n",	Properties::contents.property_id));
+	Properties::region_fx.property_id = g_quark_from_static_string (X_("region-fx"));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for region-fx = %1\n",	Properties::region_fx.property_id));
 	Properties::time_domain.property_id = g_quark_from_static_string (X_("time_domain"));
 	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for time_domain = %1\n",	Properties::time_domain.property_id));
+	Properties::reg_group.property_id = g_quark_from_static_string (X_("rgroup"));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for region_group = %1\n", Properties::reg_group.property_id));
+	Properties::region_tempo.property_id = g_quark_from_static_string (X_("region-tempo"));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for region_tempo = %1\n", Properties::region_tempo.property_id));
+	Properties::region_meter.property_id = g_quark_from_static_string (X_("region-meter"));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for region_meter = %1\n", Properties::region_meter.property_id));
 }
 
 void
@@ -178,11 +229,12 @@ Region::register_properties ()
 	add_property (_shift);
 	add_property (_layering_index);
 	add_property (_tags);
+	add_property (_reg_group);
 	add_property (_contents);
 }
 
 #define REGION_DEFAULT_STATE(s,l) \
-	_sync_marked (Properties::sync_marked, false) \
+	  _sync_marked (Properties::sync_marked, false) \
 	, _left_of_split (Properties::left_of_split, false) \
 	, _right_of_split (Properties::right_of_split, false) \
 	, _valid_transients (Properties::valid_transients, false) \
@@ -209,10 +261,11 @@ Region::register_properties ()
 	, _shift (Properties::shift, 1.0) \
 	, _layering_index (Properties::layering_index, 0) \
 	, _tags (Properties::tags, "") \
+	, _reg_group (Properties::reg_group, 0) \
 	, _contents (Properties::contents, false)
 
 #define REGION_COPY_STATE(other) \
-	  _sync_marked (Properties::sync_marked, other->_sync_marked) \
+     	  _sync_marked (Properties::sync_marked, other->_sync_marked) \
 	, _left_of_split (Properties::left_of_split, other->_left_of_split) \
 	, _right_of_split (Properties::right_of_split, other->_right_of_split) \
 	, _valid_transients (Properties::valid_transients, other->_valid_transients) \
@@ -241,19 +294,23 @@ Region::register_properties ()
 	, _shift (Properties::shift, other->_shift) \
 	, _layering_index (Properties::layering_index, other->_layering_index) \
 	, _tags (Properties::tags, other->_tags) \
+	, _reg_group (Properties::reg_group, other->_reg_group) \
 	, _contents (Properties::contents, other->_contents)
 
 /* derived-from-derived constructor (no sources in constructor) */
 Region::Region (Session& s, timepos_t const & start, timecnt_t const & length, const string& name, DataType type)
 	: SessionObject(s, name)
 	, _type (type)
-        , REGION_DEFAULT_STATE (start,length)
+	, _fx_latency (0)
+	, _fx_tail (0)
+	, REGION_DEFAULT_STATE (start,length)
 	, _last_length (length)
 	, _first_edit (EditChangesNothing)
 	, _layer (0)
 	, _changemap (0)
 {
 	register_properties ();
+	ensure_length_sanity ();
 
 	/* no sources at this point */
 }
@@ -262,6 +319,8 @@ Region::Region (Session& s, timepos_t const & start, timecnt_t const & length, c
 Region::Region (const SourceList& srcs)
 	: SessionObject(srcs.front()->session(), "toBeRenamed")
 	, _type (srcs.front()->type())
+	, _fx_latency (0)
+	, _fx_tail (0)
 	, REGION_DEFAULT_STATE(_type == DataType::MIDI ? timepos_t (Temporal::Beats()) : timepos_t::from_superclock (0),
 	                       _type == DataType::MIDI ? timecnt_t (Temporal::Beats()) : timecnt_t::from_superclock (0))
 	, _last_length (_type == DataType::MIDI ? timecnt_t (Temporal::Beats()) : timecnt_t::from_superclock (0))
@@ -271,9 +330,8 @@ Region::Region (const SourceList& srcs)
 {
 	register_properties ();
 
-	_type = srcs.front()->type();
-
 	use_sources (srcs);
+	ensure_length_sanity ();
 
 	assert(_sources.size() > 0);
 	assert (_type == srcs.front()->type());
@@ -283,6 +341,8 @@ Region::Region (const SourceList& srcs)
 Region::Region (std::shared_ptr<const Region> other)
 	: SessionObject(other->session(), other->name())
 	, _type (other->data_type())
+	, _fx_latency (0)
+	, _fx_tail (0)
 	, REGION_COPY_STATE (other)
 	, _last_length (other->_last_length)
 	, _first_edit (EditChangesNothing)
@@ -330,6 +390,7 @@ Region::Region (std::shared_ptr<const Region> other)
 		_sync_position = _start;
 	}
 
+	ensure_length_sanity ();
 	assert (_type == other->data_type());
 }
 
@@ -341,6 +402,8 @@ Region::Region (std::shared_ptr<const Region> other)
 Region::Region (std::shared_ptr<const Region> other, timecnt_t const & offset)
 	: SessionObject(other->session(), other->name())
 	, _type (other->data_type())
+	, _fx_latency (0)
+	, _fx_tail (0)
 	, REGION_COPY_STATE (other)
 	, _last_length (other->_last_length)
 	, _first_edit (EditChangesNothing)
@@ -379,6 +442,7 @@ Region::Region (std::shared_ptr<const Region> other, timecnt_t const & offset)
 		_sync_position = _start;
 	}
 
+	ensure_length_sanity ();
 	assert (_type == other->data_type());
 }
 
@@ -386,6 +450,8 @@ Region::Region (std::shared_ptr<const Region> other, timecnt_t const & offset)
 Region::Region (std::shared_ptr<const Region> other, const SourceList& srcs)
 	: SessionObject (other->session(), other->name())
 	, _type (srcs.front()->type())
+	, _fx_latency (0)
+	, _fx_tail (0)
 	, REGION_COPY_STATE (other)
 	, _last_length (other->_last_length)
 	, _first_edit (EditChangesID)
@@ -406,6 +472,7 @@ Region::Region (std::shared_ptr<const Region> other, const SourceList& srcs)
 	}
 
 	use_sources (srcs);
+	ensure_length_sanity ();
 	assert(_sources.size() > 0);
 }
 
@@ -508,8 +575,37 @@ Region::set_length_internal (timecnt_t const & len)
 	 * component of _length, and set_position() can only be used to set the
 	 * position component.
 	 */
+
 	_last_length = timecnt_t (_length.val().distance(), _last_length.position());
-	_length = timecnt_t (len.distance(), _length.val().position());
+
+	if (_type == DataType::AUDIO) {
+
+		/* Equivalent to what AudioRegion::ensure_length_sanity() does */
+		_length = timecnt_t (timepos_t (len.samples()), _length.val().position());
+
+	} else {
+
+		std::shared_ptr<Playlist> pl (playlist());
+
+		if (pl) {
+			Temporal::TimeDomain td (pl->time_domain());
+
+			/* Note: timecnt_t::time_domain() returns the domain for the
+			 * length component, *not* the position.
+			 */
+
+			if (td != len.time_domain()) {
+				timecnt_t l = _length.val();
+				l.set_time_domain (td);
+				_length = l;
+				return;
+			}
+		}
+
+		/* either no playlist or time domain for distance is not changing */
+
+		_length = timecnt_t (len.distance(), _length.val().position());
+	}
 }
 
 void
@@ -609,7 +705,20 @@ Region::set_position_time_domain (Temporal::TimeDomain td)
 	timecnt_t t (length ().distance (), p);
 	_length = t;
 
-	/* ensure time-domain matches Datatype -- this may trigger in old broken sessions */
+	/* for a while, we allowed the time domain of _length to not match the
+	 * region time domain. This ought to be prevented as of August 7th 2023
+	 * or earlier, but let's not abort() out if asked to load sessions
+	 * where this happened. Note that for reasons described in the previous
+	 * comment, this could still cause issues during reading from disk.
+	 */
+
+	if  (_length.val().time_domain () != time_domain ()) {
+		_length.non_const_val().set_time_domain (time_domain());
+#ifndef NDEBUG
+		std::cerr << "Fixed up a" << (time_domain() == Temporal::AudioTime ? "n audio" : " music") << "-timed region called " << name() << std::endl;
+#endif
+	}
+
 	assert (_length.val().time_domain () == time_domain ());
 
 	send_change (Properties::time_domain);
@@ -690,6 +799,10 @@ Region::set_position_unchecked (timepos_t const & pos)
 void
 Region::set_position_internal (timepos_t const & pos)
 {
+	if (position() == pos) {
+		return;
+	}
+
 	/* We emit a change of Properties::length even if the position hasn't changed
 	 * (see Region::set_position), so we must always set this up so that
 	 * e.g. Playlist::notify_region_moved doesn't use an out-of-date last_position.
@@ -701,20 +814,41 @@ Region::set_position_internal (timepos_t const & pos)
 	 * position component.
 	 */
 
-	if (position() != pos) {
+	_last_length.set_position (position());
 
-		_last_length.set_position (position());
-		_length = timecnt_t (_length.val().distance(), pos);
+	std::shared_ptr<Playlist> pl (playlist());
 
-		/* check that the new _position wouldn't make the current
-		 * length impossible - if so, change the length.
-		 *
-		 * XXX is this the right thing to do?
+	if (pl) {
+		Temporal::TimeDomain td (pl->time_domain());
+
+		/* Note: timecnt_t::time_domain() returns the domain for the
+		 * length component, *not* the position.
 		 */
-		if (timepos_t::max (_length.val().time_domain()).earlier (_length) < position()) {
-			_last_length = _length;
-			_length = position().distance (timepos_t::max (position().time_domain()));
+
+		if (td != _length.val().position().time_domain()) {
+			timecnt_t l = _length.val();
+			l.set_position (pos);
+			l.set_time_domain (td);
+			_length = l;
+		} else {
+			/* time domain of position not changing */
+			_length = timecnt_t (_length.val().distance(), pos);
 		}
+
+	} else {
+		/* no playlist, so time domain is free to change */
+		_length = timecnt_t (_length.val().distance(), pos);
+	}
+
+
+	/* check that the new _position wouldn't make the current
+	 * length impossible - if so, change the length.
+	 *
+	 * XXX is this the right thing to do?
+	 */
+	if (timepos_t::max (_length.val().time_domain()).earlier (_length) < position()) {
+		_last_length = _length;
+		_length = position().distance (timepos_t::max (position().time_domain()));
 	}
 }
 
@@ -899,10 +1033,13 @@ Region::cut_end (timepos_t const & new_endpoint)
 
 
 void
-Region::modify_front_unchecked (timepos_t const & new_position, bool reset_fade)
+Region::modify_front_unchecked (timepos_t const & npos, bool reset_fade)
 {
-	timepos_t last = end().decrement();
+	timepos_t last = nt_last();
 	timepos_t source_zero;
+	timepos_t new_position (npos);
+
+	new_position.set_time_domain (time_domain());
 
 	if (position() > start()) {
 		source_zero = source_position ();
@@ -910,34 +1047,35 @@ Region::modify_front_unchecked (timepos_t const & new_position, bool reset_fade)
 		source_zero = timepos_t (source_position().time_domain()); // its actually negative, but this will work for us
 	}
 
-	if (new_position < last) { /* can't trim it zero or negative length */
-
-		timecnt_t newlen (_length);
-		timepos_t np = new_position;
-
-		if (!can_trim_start_before_source_start ()) {
-			/* can't trim it back past where source position zero is located */
-			np = max (np, source_zero);
-		}
-
-		if (np > position()) {
-			newlen = length() - (position().distance (np));
-		} else {
-			newlen = length() + (np.distance (position()));
-		}
-
-		trim_to_internal (np, newlen);
-
-		if (reset_fade) {
-			_right_of_split = true;
-		}
-
-		if (!property_changes_suspended()) {
-			recompute_at_start ();
-		}
-
-		maybe_invalidate_transients ();
+	if (new_position >= last) { /* can't trim it zero or negative length */
+		return;
 	}
+
+	timecnt_t newlen (_length);
+	timepos_t np = new_position;
+
+	if (!can_trim_start_before_source_start ()) {
+		/* can't trim it back past where source position zero is located */
+		np = max (np, source_zero);
+	}
+
+	if (np > position()) {
+		newlen = length() - (position().distance (np));
+	} else {
+		newlen = length() + (np.distance (position()));
+	}
+
+	trim_to_internal (np, newlen);
+
+	if (reset_fade) {
+		_right_of_split = true;
+	}
+
+	if (!property_changes_suspended()) {
+		recompute_at_start ();
+	}
+
+	maybe_invalidate_transients ();
 }
 
 void
@@ -982,10 +1120,14 @@ Region::trim_to (timepos_t const & position, timecnt_t const & length)
 }
 
 void
-Region::trim_to_internal (timepos_t const & pos, timecnt_t const & len)
+Region::trim_to_internal (timepos_t const & npos, timecnt_t const & nlen)
 {
-	timepos_t new_start (len.time_domain());
+	timepos_t pos (npos);
+	pos.set_time_domain (time_domain());
+	timecnt_t len (nlen);
+	len.set_time_domain (time_domain());
 
+	timepos_t new_start (time_domain());
 	timecnt_t const start_shift = position().distance (pos);
 
 	if (start_shift.is_positive()) {
@@ -1339,6 +1481,13 @@ Region::state () const
 		node->add_child_copy (*_extra_xml);
 	}
 
+	{
+		Glib::Threads::RWLock::ReaderLock lm (_fx_lock);
+		for (auto const & p : _plugins) {
+			node->add_child_nocopy (p->get_state ());
+		}
+	}
+
 	return *node;
 }
 
@@ -1410,7 +1559,20 @@ Region::_set_state (const XMLNode& node, int version, PropertyChange& what_chang
 		   match.
 		*/
 		if ((length().time_domain() == Temporal::AudioTime) && (_sources.front()->length().time_domain() == Temporal::AudioTime) && (length().distance() > _sources.front()->length())) {
-			_length = timecnt_t (start().distance (_sources.front()->length()), _length.val().position());
+			/* A bug in the 8.x release series led to Regions which
+			   were a fractional sample longer than their
+			   sources. This bug has been fixed, and we can now
+			   non-silently just force the region length to the
+			   correct value.
+			*/
+			error << "Correcting region " << _name << " with start offset " << start() << " length " << _length << " to match it's (first) source's length of " << _sources.front()->length().str() << endmsg;
+			if (start() >= _sources.front()->length()) {
+				_length = timecnt_t (0, _length.val().position());
+				error << "Truncated region " << _name << " length to " << _length << endmsg;
+			} else {
+				_length = timecnt_t (start().distance (_sources.front()->length()), _length.val().position());
+				error << "Corrected region " << _name << " length to " << _length << endmsg;
+			}
 		}
 	}
 
@@ -1442,6 +1604,40 @@ Region::_set_state (const XMLNode& node, int version, PropertyChange& what_chang
 	// saved property is invalid, region-transients are not saved
 	if (_user_transients.size() == 0){
 		_valid_transients = false;
+	}
+
+	{
+		Glib::Threads::RWLock::WriterLock lm (_fx_lock);
+		bool changed = !_plugins.empty ();
+
+		for (auto const& rfx : _plugins) {
+			rfx->drop_references ();
+		}
+
+		_plugins.clear ();
+
+		for (auto const& child : node.children ()) {
+			if (child->name() == X_("RegionFXPlugin")) {
+				std::shared_ptr<RegionFxPlugin> rfx (new RegionFxPlugin (_session, time_domain ()));
+				if (rfx->set_state (*child, version)) {
+					PBD::warning << string_compose (_("Failed to load RegionFx Plugin for region `%1'"), name()) << endmsg;
+					// TODO replace w/stub, retain config
+					continue;
+				}
+				if (!_add_plugin (rfx, std::shared_ptr<RegionFxPlugin>(), true)) {
+					continue;
+				}
+				_plugins.push_back (rfx);
+				changed = true;
+			}
+		}
+		lm.release ();
+		if (changed) {
+			fx_latency_changed (true);
+			fx_tail_changed (true);
+			send_change (PropertyChange (Properties::region_fx)); // trigger DiskReader overwrite
+			RegionFxChanged (); /* EMIT SIGNAL */
+		}
 	}
 
 	return 0;
@@ -1553,18 +1749,24 @@ Region::size_equivalent (std::shared_ptr<const Region> other) const
 void
 Region::source_deleted (std::weak_ptr<Source>)
 {
+	if (_source_deleted.fetch_add (1)) {
+		return;
+	}
 	drop_sources ();
 
 	if (!_session.deletion_in_progress()) {
 		/* this is a very special case: at least one of the region's
-		   sources has bee deleted, so invalidate all references to
-		   ourselves. Do NOT do this during session deletion, because
-		   then we run the risk that this will actually result
-		   in this object being deleted (as refcnt goes to zero)
-		   while emitting DropReferences.
-		*/
-
-		drop_references ();
+		 * sources has been deleted, so invalidate all references to
+		 * ourselves. We run the risk that this will actually result
+		 * in this object being deleted (as refcnt goes to zero)
+		 * while emitting DropReferences.
+		 */
+		try {
+			std::shared_ptr<Region> me (shared_from_this ());
+			drop_references ();
+		} catch (...) {
+			/* relax */
+		}
 	}
 }
 
@@ -1584,6 +1786,7 @@ Region::master_source_names ()
 void
 Region::set_master_sources (const SourceList& srcs)
 {
+	Glib::Threads::Mutex::Lock lx (_source_list_lock);
 	for (SourceList::const_iterator i = _master_sources.begin (); i != _master_sources.end(); ++i) {
 		(*i)->dec_use_count ();
 	}
@@ -1594,6 +1797,7 @@ Region::set_master_sources (const SourceList& srcs)
 	for (SourceList::const_iterator i = _master_sources.begin (); i != _master_sources.end(); ++i) {
 		(*i)->inc_use_count ();
 	}
+	subscribe_to_source_drop ();
 }
 
 bool
@@ -1942,6 +2146,7 @@ Region::rename_cue_marker (CueMarker& cm, std::string const & str)
 void
 Region::drop_sources ()
 {
+	Glib::Threads::Mutex::Lock lx (_source_list_lock);
 	for (SourceList::const_iterator i = _sources.begin (); i != _sources.end(); ++i) {
 		(*i)->dec_use_count ();
 	}
@@ -1953,26 +2158,38 @@ Region::drop_sources ()
 	}
 
 	_master_sources.clear ();
+	_source_deleted_connections.drop_connections ();
 }
 
 void
 Region::use_sources (SourceList const & s)
 {
-	set<std::shared_ptr<Source> > unique_srcs;
-
+	Glib::Threads::Mutex::Lock lx (_source_list_lock);
 	for (SourceList::const_iterator i = s.begin (); i != s.end(); ++i) {
-
 		_sources.push_back (*i);
 		(*i)->inc_use_count ();
 		_master_sources.push_back (*i);
 		(*i)->inc_use_count ();
+	}
+	subscribe_to_source_drop ();
+}
 
-		/* connect only once to DropReferences, even if sources are replicated
-		 */
-
-		if (unique_srcs.find (*i) == unique_srcs.end ()) {
-			unique_srcs.insert (*i);
-			(*i)->DropReferences.connect_same_thread (*this, boost::bind (&Region::source_deleted, this, std::weak_ptr<Source>(*i)));
+void
+Region::subscribe_to_source_drop ()
+{
+	_source_deleted.store (0);
+	_source_deleted_connections.drop_connections ();
+	set<std::shared_ptr<Source> > unique_srcs;
+	for (auto const& i : _sources) {
+		if (unique_srcs.find (i) == unique_srcs.end ()) {
+			unique_srcs.insert (i);
+			i->DropReferences.connect_same_thread (_source_deleted_connections, std::bind (&Region::source_deleted, this, std::weak_ptr<Source>(i)));
+		}
+	}
+	for (auto const& i : _master_sources) {
+		if (unique_srcs.find (i) == unique_srcs.end ()) {
+			unique_srcs.insert (i);
+			i->DropReferences.connect_same_thread (_source_deleted_connections, std::bind (&Region::source_deleted, this, std::weak_ptr<Source>(i)));
 		}
 	}
 }
@@ -2069,7 +2286,7 @@ Region::end() const
 	/* one day we might want to enforce _position, _start and _length (or
 	   some combination thereof) all being in the same time domain.
 	*/
-	return position() + _length.val();
+	return _length.val().end();
 }
 
 timepos_t
@@ -2094,10 +2311,10 @@ Region::source_beats_to_absolute_beats (Temporal::Beats beats) const
 	return source_position().beats() + beats;
 }
 
-Temporal::Beats
-Region::absolute_time_to_region_beats(timepos_t const & b) const
+Temporal::timepos_t
+Region::absolute_time_to_region_time (timepos_t const & t) const
 {
-	 return (position().distance (b)).beats () + start().beats();;
+	return start() + position().distance (t);
 }
 
 Temporal::timepos_t
@@ -2173,13 +2390,220 @@ Region::time_domain() const
 }
 
 void
-Region::globally_change_time_domain (Temporal::TimeDomain from, Temporal::TimeDomain to)
+Region::start_domain_bounce (Temporal::DomainBounceInfo& cmd)
 {
-	assert (Temporal::domain_swap);
-
-	if (_length.val().time_domain() == from) {
-		timecnt_t& l (_length.non_const_val());
-		l.set_time_domain (to);
-		Temporal::domain_swap->add (l);
+	if (locked()) {
+		return;
 	}
+
+	/* recall that the _length member is a timecnt_t, and so holds both
+	 * position *and* length.
+	 */
+
+	if (_length.val().time_domain() != cmd.from) {
+		return;
+	}
+
+	timecnt_t& l (_length.non_const_val());
+
+	timecnt_t  saved (l);
+	saved.set_time_domain (cmd.to);
+
+	cmd.counts.insert (std::make_pair (&l, saved));
+}
+
+void
+Region::finish_domain_bounce (Temporal::DomainBounceInfo& cmd)
+{
+	clear_changes ();
+
+	Temporal::TimeDomainCntChanges::iterator tc = cmd.counts.find (&_length.non_const_val());
+	if (tc == cmd.counts.end()) {
+		/* must have already been in the correct time domain */
+		return;
+	}
+
+	/* switch domains back (but with modified TempoMap, presumably */
+	tc->second.set_time_domain (cmd.from);
+	_length = tc->second;
+
+	send_change (Properties::length);
+}
+
+bool
+Region::load_plugin (ARDOUR::PluginType type, std::string const& name)
+{
+	PluginInfoPtr pip = LuaAPI::new_plugin_info (name, type);
+	if (!pip) {
+		return false;
+	}
+	PluginPtr p (pip->load (_session));
+	if (!p) {
+		return false;
+	}
+	std::shared_ptr<RegionFxPlugin> rfx (new RegionFxPlugin (_session, time_domain (), p));
+	return add_plugin (rfx);
+}
+
+bool
+Region::add_plugin (std::shared_ptr<RegionFxPlugin> rfx, std::shared_ptr<RegionFxPlugin> pos)
+{
+	bool rv = _add_plugin (rfx, pos, false);
+	if (rv) {
+		_session.set_dirty ();
+	}
+	return rv;
+}
+
+void
+Region::reorder_plugins (RegionFxList const& new_order)
+{
+	Glib::Threads::RWLock::WriterLock lm (_fx_lock);
+
+	RegionFxList                 as_it_will_be;
+	RegionFxList::iterator       oiter = _plugins.begin ();
+	RegionFxList::const_iterator niter = new_order.begin ();
+
+	while (niter != new_order.end ()) {
+		if (oiter == _plugins.end ()) {
+			as_it_will_be.insert (as_it_will_be.end (), niter, new_order.end ());
+			while (niter != new_order.end ()) {
+				++niter;
+			}
+			break;
+		}
+		if (find (new_order.begin (), new_order.end (), *oiter) != new_order.end ()) {
+			as_it_will_be.push_back (*niter);
+			++niter;
+		}
+		oiter = _plugins.erase (oiter);
+	}
+	_plugins.insert (oiter, as_it_will_be.begin (), as_it_will_be.end ());
+	_session.set_dirty ();
+}
+
+void
+Region::fx_latency_changed (bool)
+{
+	uint32_t l = 0;
+	for (auto const& rfx : _plugins) {
+		l += rfx->effective_latency ();
+	}
+	if (l == _fx_latency) {
+		return;
+	}
+	_fx_latency = l;
+}
+
+void
+Region::fx_tail_changed (bool)
+{
+	uint32_t t = 0;
+	for (auto const& rfx : _plugins) {
+		t = max<uint32_t> (t, rfx->effective_tailtime ());
+	}
+	if (t == _fx_tail) {
+		return;
+	}
+	_fx_tail = t;
+}
+
+void
+Region::set_tempo (Temporal::Tempo const & t)
+{
+	assert (!_sources.empty());
+
+	bool changed = false;
+	TimelineRange r (start(), start() + length(), 0); /* ID doesn't matter */
+	SegmentDescriptor sd;
+
+	if (_sources.front()->get_segment_descriptor (r, sd)) {
+		if (t != sd.tempo()) {
+			changed = true;
+		}
+	} else {
+		changed = true;
+	}
+
+	if (!changed) {
+		return;
+	}
+
+	sd.set_position (start().samples());
+	sd.set_duration (length().samples());
+	sd.set_tempo (t);
+
+	for (auto & s : _sources) {
+		s->set_segment_descriptor (sd, true);
+	}
+
+	send_change (Properties::region_tempo);
+}
+
+void
+Region::set_meter (Temporal::Meter const & m)
+{
+	assert (!_sources.empty());
+
+	bool changed = false;
+	TimelineRange r (start(), start() + length(), 0); /* ID doesn't matter */
+	SegmentDescriptor sd;
+
+	if (_sources.front()->get_segment_descriptor (r, sd)) {
+		if (m != sd.meter()) {
+			changed = true;
+		}
+	} else {
+		changed = true;
+	}
+
+	if (!changed) {
+		return;
+	}
+
+	sd.set_position (start().samples());
+	sd.set_duration (length().samples());
+	sd.set_meter (m);
+
+	for (auto & s : _sources) {
+		s->set_segment_descriptor (sd, true);
+	}
+
+	send_change (Properties::region_meter);
+}
+
+std::shared_ptr<Temporal::TempoMap>
+Region::tempo_map () const
+{
+	assert (!_sources.empty());
+
+	TimelineRange r (start(), start() + length(), 0); /* ID doesn't matter */
+	SegmentDescriptor sd;
+
+	if (!_sources.front()->get_segment_descriptor (r, sd)) {
+		Temporal::TempoMap::SharedPtr tmap (Temporal::TempoMap::use());
+		return std::make_shared<Temporal::TempoMap> (tmap->tempo_at (position()), tmap->meter_at (position()));
+	}
+
+	return std::make_shared<Temporal::TempoMap> (sd.tempo(), sd.meter());
+}
+
+std::optional<Temporal::Tempo>
+Region::tempo() const
+{
+	std::shared_ptr<Temporal::TempoMap> tmap = tempo_map ();
+	if (!tmap) {
+		return std::optional<Temporal::Tempo>();
+	}
+	return tmap->tempo_at (0);
+}
+
+std::optional<Temporal::Meter>
+Region::meter() const
+{
+	std::shared_ptr<Temporal::TempoMap> tmap = tempo_map ();
+	if (!tmap) {
+		return std::optional<Temporal::Meter>();
+	}
+	return tmap->meter_at (0);
 }

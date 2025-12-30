@@ -18,11 +18,11 @@
 
 #include <glib/gstdio.h>
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/filechooserdialog.h>
-#include <gtkmm/menu.h>
-#include <gtkmm/menuitem.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/filechooserdialog.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/menuitem.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/compose.h"
 #include "pbd/convert.h"
@@ -40,6 +40,7 @@
 #include "ardour/triggerbox.h"
 
 #include "gtkmm2ext/colors.h"
+#include <gtkmm2ext/utils.h>
 
 #include "slot_properties_box.h"
 
@@ -48,6 +49,7 @@
 #include "keyboard.h"
 #include "public_editor.h"
 #include "region_view.h"
+#include "stripable_colorpicker.h"
 #include "trigger_jump_dialog.h"
 #include "ui_config.h"
 
@@ -77,6 +79,7 @@ TriggerUI::TriggerUI ()
 	, _follow_context_menu (0)
 	, _context_menu (0)
 	, _ignore_menu_action (false)
+	, _color_dialog (nullptr)
 {
 	if (follow_strings.empty()) {
 		follow_strings.push_back (follow_action_to_string (FollowAction (FollowAction::None)));
@@ -120,6 +123,7 @@ TriggerUI::TriggerUI ()
 
 TriggerUI::~TriggerUI()
 {
+	delete _color_dialog;
 	trigger_swap_connection.disconnect ();
 	trigger_connections.drop_connections ();
 }
@@ -127,42 +131,30 @@ TriggerUI::~TriggerUI()
 void
 TriggerUI::trigger_swap (uint32_t n)
 {
-	if (n != tref.slot) {
+	if (n != tref.slot()) {
 		/* some other slot in the same box got swapped. we don't care */
 		return;
 	}
 	trigger_connections.drop_connections ();
 
-	trigger()->PropertyChanged.connect (trigger_connections, invalidator (*this), boost::bind (&TriggerUI::trigger_changed, this, _1), gui_context ());
-	tref.box->PropertyChanged.connect (trigger_connections, invalidator (*this), boost::bind (&TriggerUI::trigger_changed, this, _1), gui_context ());
+	trigger()->PropertyChanged.connect (trigger_connections, invalidator (*this), std::bind (&TriggerUI::trigger_changed, this, _1), gui_context ());
+	tref.box()->PropertyChanged.connect (trigger_connections, invalidator (*this), std::bind (&TriggerUI::trigger_changed, this, _1), gui_context ());
 
 	trigger_changed (Properties::name);
 }
 
 void
-TriggerUI::choose_color ()
+TriggerUI::choose_color (Gtk::Window* parent)
 {
-	_color_dialog.get_color_selection()->set_has_opacity_control (false);
-	_color_dialog.get_color_selection()->set_has_palette (true);
-	_color_dialog.get_ok_button()->signal_clicked().connect (sigc::bind (sigc::mem_fun (_color_dialog, &Gtk::Dialog::response), Gtk::RESPONSE_ACCEPT));
-	_color_dialog.get_cancel_button()->signal_clicked().connect (sigc::bind (sigc::mem_fun (_color_dialog, &Gtk::Dialog::response), Gtk::RESPONSE_CANCEL));
-
-	Gdk::Color c = Gtkmm2ext::gdk_color_from_rgba(trigger()->color());
-
-	_color_dialog.get_color_selection()->set_previous_color (c);
-	_color_dialog.get_color_selection()->set_current_color (c);
-
-	switch (_color_dialog.run()) {
-		case Gtk::RESPONSE_ACCEPT: {
-			c = _color_dialog.get_color_selection()->get_current_color();
-			color_t ct = Gtkmm2ext::gdk_color_to_rgba(c);
-			trigger()->set_color(ct);
-		} break;
-		default:
-			break;
+	if (!_color_dialog) {
+		_color_dialog = new StripableColorDialog;
+		color_connection.disconnect ();
 	}
 
-	_color_dialog.hide ();
+	tref.box()->DropReferences.connect (trigger_connections,invalidator (*this), [this]() { _color_dialog->reset (); color_connection.disconnect (); }, gui_context());
+	color_connection = _color_dialog->ColorChanged.connect ([this](uint32_t color) { if (trigger ()) { trigger()->set_color(color); }});
+
+	_color_dialog->popup (_("Set Trigger Color"), trigger()->color(), parent);
 }
 
 void
@@ -398,14 +390,13 @@ TriggerUI::context_menu ()
 
 	items.push_back (MenuElem (_("Load..."), sigc::bind(sigc::mem_fun (*this, (&TriggerUI::choose_sample)), true)));
 	items.push_back (SeparatorElem());
-	items.push_back (MenuElem (_("Color..."), sigc::mem_fun (*this, &TriggerUI::choose_color)));
+	items.push_back (MenuElem (_("Color..."), sigc::bind (sigc::mem_fun (*this, &TriggerUI::choose_color), (Gtk::Window*)NULL)));
 	items.push_back (MenuElem (_("Clear"), sigc::mem_fun (*this, &TriggerUI::clear_trigger)));
 	items.push_back (SeparatorElem());
 	items.push_back (MenuElem (_("MIDI Learn"), sigc::mem_fun (*this, &TriggerUI::trigger_midi_learn)));
 	items.push_back (MenuElem (_("MIDI un-Learn"), sigc::mem_fun (*this, &TriggerUI::trigger_midi_unlearn)));
 
-
-	_context_menu->popup (3, gtk_get_current_event_time ());
+	_context_menu->popup (1, gtk_get_current_event_time ());
 }
 
 void
@@ -415,13 +406,13 @@ TriggerUI::trigger_midi_learn ()
 		return;
 	}
 
-	tref.box->begin_midi_learn (trigger()->index());
+	tref.box()->begin_midi_learn (trigger()->index());
 }
 
 void
 TriggerUI::trigger_midi_unlearn ()
 {
-	tref.box->midi_unlearn (trigger()->index());
+	tref.box()->midi_unlearn (trigger()->index());
 }
 
 void
@@ -544,7 +535,7 @@ TriggerUI::launch_context_menu ()
 }
 
 void
-TriggerUI::follow_context_menu ()
+TriggerUI::follow_context_menu (GdkEventButton* ev)
 {
 	using namespace Gtk;
 	using namespace Gtk::Menu_Helpers;
@@ -577,7 +568,7 @@ TriggerUI::follow_context_menu ()
 
 	_ignore_menu_action = false;
 
-	_follow_context_menu->popup (1, gtk_get_current_event_time ());
+	_follow_context_menu->popup (ev->button, ev->time);
 }
 
 void
@@ -621,14 +612,6 @@ TriggerUI::clear_trigger ()
 void
 TriggerUI::edit_trigger ()
 {
-	SlotPropertyWindow* tw      = static_cast<SlotPropertyWindow*> (trigger()->ui ());
-
-	if (!tw) {
-		tw = new SlotPropertyWindow (TriggerReference (trigger()->box(), trigger()->index()));
-		trigger()->set_ui (tw);
-	}
-
-	tw->present ();
 }
 
 void
@@ -791,7 +774,6 @@ TriggerUI::trigger_changed (PropertyChange const& what)
 	on_trigger_changed(what);
 }
 
-
 void
 TriggerUI::set_trigger (ARDOUR::TriggerReference tr)
 {
@@ -802,10 +784,21 @@ TriggerUI::set_trigger (ARDOUR::TriggerReference tr)
 
 	trigger_changed (TriggerBox::all_trigger_props());
 
-	trigger()->PropertyChanged.connect (trigger_connections, invalidator (*this), boost::bind (&TriggerUI::trigger_changed, this, _1), gui_context());
-	tref.box->PropertyChanged.connect (trigger_connections, invalidator (*this), boost::bind (&TriggerUI::trigger_changed, this, _1), gui_context ());
+	trigger()->PropertyChanged.connect (trigger_connections, invalidator (*this), std::bind (&TriggerUI::trigger_changed, this, _1), gui_context());
+	tref.box()->PropertyChanged.connect (trigger_connections, invalidator (*this), std::bind (&TriggerUI::trigger_changed, this, _1), gui_context ());
 
-	tref.box->TriggerSwapped.connect (trigger_swap_connection, invalidator (*this), boost::bind (&TriggerUI::trigger_swap, this, _1), gui_context ());
+	tref.box()->TriggerSwapped.connect (trigger_swap_connection, invalidator (*this), std::bind (&TriggerUI::trigger_swap, this, _1), gui_context ());
+
+	if (_color_dialog) {
+		if (trigger()) {
+			Gdk::Color c = Gtkmm2ext::gdk_color_from_rgba(trigger()->color());
+			_color_dialog->get_color_selection()->set_previous_color (c);
+			_color_dialog->get_color_selection()->set_current_color (c);
+		} else {
+			color_connection.disconnect ();
+			_color_dialog->reset ();
+		}
+	}
 
 	on_trigger_set();  //derived classes can do initialization here
 }

@@ -51,7 +51,7 @@ using namespace Gtk;
 using namespace Glib;
 using Gtkmm2ext::Keyboard;
 
-EditorSources::EditorSources (Editor* e)
+EditorSources::EditorSources (Editor& e)
 	: EditorComponent (e)
 {
 	init ();
@@ -68,8 +68,8 @@ EditorSources::EditorSources (Editor* e)
 
 	_change_connection = _display.get_selection ()->signal_changed ().connect (sigc::mem_fun (*this, &EditorSources::selection_changed));
 
-	e->EditorFreeze.connect (_editor_freeze_connection, MISSING_INVALIDATOR, boost::bind (&EditorSources::freeze_tree_model, this), gui_context ());
-	e->EditorThaw.connect (_editor_thaw_connection, MISSING_INVALIDATOR, boost::bind (&EditorSources::thaw_tree_model, this), gui_context ());
+	_editor.EditorFreeze.connect (_editor_freeze_connection, MISSING_INVALIDATOR, std::bind (&EditorSources::freeze_tree_model, this), gui_context ());
+	_editor.EditorThaw.connect (_editor_thaw_connection, MISSING_INVALIDATOR, std::bind (&EditorSources::thaw_tree_model, this), gui_context ());
 }
 
 void
@@ -109,7 +109,7 @@ EditorSources::selection_changed ()
 		TreeIter                             iter;
 		TreeView::Selection::ListHandle_Path rows = _display.get_selection ()->get_selected_rows ();
 
-		_editor->get_selection ().clear_regions ();
+		_editor.get_selection ().clear_regions ();
 
 		for (TreeView::Selection::ListHandle_Path::iterator i = rows.begin (); i != rows.end (); ++i) {
 			if ((iter = _model->get_iter (*i))) {
@@ -125,14 +125,14 @@ EditorSources::selection_changed ()
 
 					for (set<std::shared_ptr<Region>>::iterator region = regions.begin (); region != regions.end (); region++) {
 						_change_connection.block (true);
-						_editor->set_selected_regionview_from_region_list (*region, Selection::Add);
+						_editor.set_selected_regionview_from_region_list (*region, SelectionAdd);
 						_change_connection.block (false);
 					}
 				}
 			}
 		}
 	} else {
-		_editor->get_selection ().clear_regions ();
+		_editor.get_selection ().clear_regions ();
 	}
 }
 
@@ -148,7 +148,7 @@ EditorSources::show_context_menu (int button, int time)
 #endif
 	items.push_back (MenuElem (_("Remove the selected Sources"),
 	                           sigc::mem_fun (*this, &EditorSources::remove_selected_sources)));
-	menu->popup (1, time);
+	menu->popup (button, time);
 }
 
 void
@@ -170,7 +170,7 @@ EditorSources::recover_selected_sources ()
 	}
 
 	/* ToDo */
-	_editor->recover_regions (to_be_recovered); // this operation should be undo-able
+	_editor.recover_regions (to_be_recovered); // this operation should be undo-able
 }
 
 void
@@ -181,7 +181,7 @@ EditorSources::remove_selected_sources ()
 
 	prompt = _("Do you want to remove the selected Sources?"
 	           "\nThis operation cannot be undone."
-	           "\nThe source files will not actually be deleted until you execute Session->Cleanup.");
+	           "\nThe source files will not actually be deleted until you execute Session -> Cleanup.");
 
 	choices.push_back (_("No, do nothing."));
 	choices.push_back (_("Only remove the Regions that use these Sources."));
@@ -192,42 +192,56 @@ EditorSources::remove_selected_sources ()
 	int opt = prompter.run ();
 
 	if (opt >= 1) {
-		std::list<std::weak_ptr<ARDOUR::Source>> to_be_removed;
+		struct WeakPtrCompare {
+			bool operator() (weak_ptr<ARDOUR::Source> const& lhs, weak_ptr<ARDOUR::Source> const& rhs) const {
+				auto lptr = lhs.lock(), rptr = rhs.lock();
+				if (!rptr) return false;
+				if (!lptr) return true;
+				return lptr->id() < rptr->id();
+			}
+		};
+		std::set<std::weak_ptr<ARDOUR::Source>, WeakPtrCompare> to_be_removed;
 
 		if (_display.get_selection ()->count_selected_rows () > 0) {
 			TreeIter                             iter;
 			TreeView::Selection::ListHandle_Path rows = _display.get_selection ()->get_selected_rows ();
 
-			_editor->get_selection ().clear_regions ();
+			_editor.get_selection ().clear_regions ();
 
 			for (TreeView::Selection::ListHandle_Path::iterator i = rows.begin (); i != rows.end (); ++i) {
 				if ((iter = _model->get_iter (*i))) {
 					std::shared_ptr<ARDOUR::Region> region = (*iter)[_columns.region];
 
-					if (!region)
+					if (!region) {
 						continue;
+					}
 
-					std::shared_ptr<ARDOUR::Source> source = region->source ();
-					if (source) {
+					for (auto const& source : region->sources ()) {
 						set<std::shared_ptr<Region>> regions;
 						RegionFactory::get_regions_using_source (source, regions);
 
-						for (set<std::shared_ptr<Region>>::iterator region = regions.begin (); region != regions.end (); region++) {
+						for (auto const& region : regions) {
 							_change_connection.block (true);
-							_editor->set_selected_regionview_from_region_list (*region, Selection::Add);
+							/* Note: this ignores regions without RegionView.
+							 * When removing sources (opt == 2),
+							 * Playlist::region_going_away takes care of that
+							 * (Source::drop_references -> Region::source_deleted,
+							 *  -> Region::drop_references). see f58f5bef55a5aa1
+							 */
+							_editor.set_selected_regionview_from_region_list (region, SelectionAdd);
 							_change_connection.block (false);
 						}
 
-						to_be_removed.push_back (source);
+						to_be_removed.insert (source);
 					}
 				}
 			}
 
-			_editor->remove_regions (_editor->get_regions_from_selection_and_entered (), false /*can_ripple*/, false /*as_part_of_other_command*/); // this operation is undo-able
+			_editor.remove_regions (_editor.get_regions_from_selection_and_entered (), false /*can_ripple*/, false /*as_part_of_other_command*/); // this operation is undo-able
 
 			if (opt == 2) {
-				for (std::list<std::weak_ptr<ARDOUR::Source>>::iterator i = to_be_removed.begin (); i != to_be_removed.end (); ++i) {
-					_session->remove_source (*i); // this operation is (currently) not undo-able
+				for (auto const& s : to_be_removed) {
+					_session->remove_source (s); // this operation is (currently) not undo-able
 				}
 			}
 		}
@@ -269,7 +283,7 @@ EditorSources::drag_data_received (const RefPtr<Gdk::DragContext>& context,
 
 	if (data.get_target () == "GTK_TREE_MODEL_ROW") {
 		/* something is being dragged over the source list */
-		_editor->_drags->abort ();
+		_editor._drags->abort ();
 		_display.on_drag_data_received (context, x, y, data, info, dtime);
 		return;
 	}
@@ -279,10 +293,10 @@ EditorSources::drag_data_received (const RefPtr<Gdk::DragContext>& context,
 		bool      copy = ((context->get_actions () & (Gdk::ACTION_COPY | Gdk::ACTION_LINK | Gdk::ACTION_MOVE)) == Gdk::ACTION_COPY);
 
 		if (UIConfiguration::instance ().get_only_copy_imported_files () || copy) {
-			_editor->do_import (paths, Editing::ImportDistinctFiles, Editing::ImportAsRegion,
-			                    SrcBest, SMFTrackNumber, SMFTempoIgnore, pos);
+			_editor.do_import (paths, Editing::ImportDistinctFiles, Editing::ImportAsRegion,
+			                   SrcBest, SMFFileAndTrackName, SMFTempoIgnore, pos);
 		} else {
-			_editor->do_embed (paths, Editing::ImportDistinctFiles, Editing::ImportAsRegion, pos);
+			_editor.do_embed (paths, Editing::ImportDistinctFiles, Editing::ImportAsRegion, pos);
 		}
 		context->drag_finish (true, false, dtime);
 	}

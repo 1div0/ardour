@@ -17,8 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __libardour_pannable_h__
-#define __libardour_pannable_h__
+#pragma once
 
 #include <memory>
 #include <string>
@@ -38,7 +37,7 @@ class Panner;
 class LIBARDOUR_API Pannable : public PBD::Stateful, public Automatable, public SessionHandleRef
 {
 public:
-	Pannable (Session& s, Temporal::TimeDomain);
+	Pannable (Session& s, Temporal::TimeDomainProvider const &);
 	~Pannable ();
 
 	std::shared_ptr<AutomationControl> pan_azimuth_control;
@@ -54,7 +53,7 @@ public:
 
 	void set_automation_state (AutoState);
 	AutoState automation_state() const { return _auto_state; }
-	PBD::Signal1<void, AutoState> automation_state_changed;
+	PBD::Signal<void(AutoState)> automation_state_changed;
 
 	bool automation_playback() const {
 		return (_auto_state & Play) || ((_auto_state & (Touch | Latch)) && !touching());
@@ -76,6 +75,9 @@ public:
 
 	bool has_state() const { return _has_state; }
 
+	void start_domain_bounce (Temporal::DomainBounceInfo&);
+	void finish_domain_bounce (Temporal::DomainBounceInfo&);
+
 protected:
 	virtual XMLNode& state () const;
 
@@ -94,4 +96,3 @@ private:
 
 } // namespace
 
-#endif /* __libardour_pannable_h__ */

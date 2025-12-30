@@ -16,13 +16,12 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtkardour_stripable_colorpicker_h__
-#define __gtkardour_stripable_colorpicker_h__
+#pragma once
 
 #include <memory>
 
-#include <gtkmm/colorbutton.h>
-#include <gtkmm/colorselection.h>
+#include <ytkmm/colorbutton.h>
+#include <ytkmm/colorselection.h>
 
 #include "ardour/stripable.h"
 
@@ -32,8 +31,8 @@ public:
 	StripableColorDialog ();
 	~StripableColorDialog ();
 	void reset ();
-	void popup (std::shared_ptr<ARDOUR::Stripable> s);
-	void popup (const std::string&, uint32_t);
+	void popup (std::shared_ptr<ARDOUR::Stripable> s, Gtk::Window*);
+	void popup (const std::string&, uint32_t, Gtk::Window*);
 	sigc::signal<void, uint32_t> ColorChanged;
 
 private:
@@ -65,4 +64,3 @@ private:
 	StripableColorDialog _color_picker;
 };
 
-#endif

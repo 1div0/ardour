@@ -20,14 +20,15 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __lib_pbd_command_h__
-#define __lib_pbd_command_h__
+#pragma once
 
 #include <string>
 
 #include "pbd/libpbd_visibility.h"
 #include "pbd/signals.h"
 #include "pbd/statefuldestructible.h"
+
+namespace PBD {
 
 /** Base class for Undo/Redo commands and changesets */
 class LIBPBD_API Command : public PBD::StatefulDestructible, public PBD::ScopedConnectionList
@@ -57,4 +58,5 @@ protected:
 	std::string _name;
 };
 
-#endif // __lib_pbd_command_h_
+} /* namespace */
+

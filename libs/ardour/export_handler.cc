@@ -32,6 +32,7 @@
 #include "ardour/audiofile_tagger.h"
 #include "ardour/audio_port.h"
 #include "ardour/debug.h"
+#include "ardour/disk_reader.h"
 #include "ardour/export_graph_builder.h"
 #include "ardour/export_handler.h"
 #include "ardour/export_timespan.h"
@@ -40,6 +41,7 @@
 #include "ardour/export_format_specification.h"
 #include "ardour/export_filename.h"
 #include "ardour/soundcloud_upload.h"
+#include "ardour/surround_return.h"
 #include "ardour/system_exec.h"
 #include "pbd/openuri.h"
 #include "pbd/basename.h"
@@ -119,11 +121,69 @@ ExportHandler::ExportHandler (Session & session)
   , cue_tracknum (0)
   , cue_indexnum (0)
 {
+	pthread_mutex_init (&_timespan_mutex, 0);
+	pthread_cond_init (&_timespan_cond, 0);
+	_timespan_thread_active.store (1);
+	_timespan_thread = PBD::Thread::create (std::bind (_timespan_thread_run, this), "ExportHandler");
+	if (!_timespan_thread) {
+		_timespan_thread_active.store (0);
+		fatal << "Cannot create export handler helper thread" << endmsg;
+		abort(); /* NOTREACHED*/
+	}
 }
 
 ExportHandler::~ExportHandler ()
 {
+	if (export_status->aborted () && !current_timespan->vapor ().empty () && session.surround_master ()) {
+		Glib::Threads::Mutex::Lock l (export_status->lock());
+		session.surround_master ()->surround_return ()->finalize_export ();
+	}
 	graph_builder->cleanup (export_status->aborted () );
+
+	pthread_mutex_lock (&_timespan_mutex);
+	_timespan_thread_active.store (0);
+	pthread_cond_signal (&_timespan_cond);
+	pthread_mutex_unlock (&_timespan_mutex);
+
+	_timespan_thread->join ();
+
+	pthread_cond_destroy (&_timespan_cond);
+	pthread_mutex_destroy (&_timespan_mutex);
+}
+
+void*
+ExportHandler::_timespan_thread_run (void* me)
+{
+	ExportHandler* self = static_cast<ExportHandler*> (me);
+
+	SessionEvent::create_per_thread_pool ("ExportHandler", 512);
+	PBD::notify_event_loops_about_thread_creation (pthread_self(), "ExportHandler", 512);
+
+	pthread_mutex_lock (&self->_timespan_mutex);
+	while (self->_timespan_thread_active.load ()) {
+		pthread_cond_wait (&self->_timespan_cond, &self->_timespan_mutex);
+		if (!self->_timespan_thread_active.load ()) {
+			break;
+		} else {
+			Temporal::TempoMap::fetch ();
+			self->process_connection.disconnect ();
+			Glib::Threads::Mutex::Lock l (self->export_status->lock());
+			DiskReader::allocate_working_buffers ();
+			self->start_timespan ();
+			DiskReader::free_working_buffers ();
+		}
+	}
+	pthread_mutex_unlock (&self->_timespan_mutex);
+	return 0;
+}
+
+void
+ExportHandler::timespan_thread_wakeup ()
+{
+	if (pthread_mutex_trylock (&_timespan_mutex) == 0) {
+		pthread_cond_signal (&_timespan_cond);
+		pthread_mutex_unlock (&_timespan_mutex);
+	}
 }
 
 /** Add an export to the `to-do' list */
@@ -225,8 +285,13 @@ ExportHandler::start_timespan ()
 	/* start export */
 
 	post_processing = false;
-	session.ProcessExport.connect_same_thread (process_connection, boost::bind (&ExportHandler::process, this, _1));
+	session.ProcessExport.connect_same_thread (process_connection, std::bind (&ExportHandler::process, this, _1));
 	process_position = current_timespan->get_start();
+
+	if (!region_export && !current_timespan->vapor ().empty () && session.surround_master ()) {
+		session.surround_master ()->surround_return ()->setup_export (current_timespan->vapor (), current_timespan->get_start (), current_timespan->get_end ());
+	}
+
 	// TODO check if it's a RegionExport.. set flag to skip  process_without_events()
 	return session.start_audio_export (process_position, realtime, region_export);
 }
@@ -246,7 +311,7 @@ ExportHandler::handle_duplicate_format_extensions()
 			/* stem-export has multiple files in the same timestamp, but a different channel_config for each.
 			 * However channel_config is only set in ExportGraphBuilder::Encoder::init_writer()
 			 * so we cannot yet use   it->second.filename->get_path(it->second.format).
-			 * We have to explicily check uniqueness of "channel-config + extension" here:
+			 * We have to explicitly check uniqueness of "channel-config + extension" here:
 			 */
 			counts[pfx + it->second.channel_config->name() + it->second.format->extension()]++;
 		} else {
@@ -295,11 +360,31 @@ ExportHandler::process_timespan (samplecnt_t samples)
 	samplecnt_t samples_to_read = 0;
 	samplepos_t const end = current_timespan->get_end();
 
+	if (process_position >= end) {
+		/* export complete, post-roll to feed and flush latent plugins
+		 * (This is mainly neede for Vapor) */
+		if (process_position + samples < end + session.worst_latency_preroll ()) {
+			process_position += samples;
+			return 0;
+		}
+
+		export_status->stop = true;
+
+		/* Start post-processing/normalizing if necessary */
+		post_processing = graph_builder->need_postprocessing ();
+		if (post_processing) {
+			export_status->total_postprocessing_cycles = graph_builder->get_postprocessing_cycle_count();
+			export_status->current_postprocessing_cycle = 0;
+		} else {
+			finish_timespan ();
+		}
+		return 1; /* trigger realtime_stop() */
+	}
+
 	bool const last_cycle = (process_position + samples >= end);
 
 	if (last_cycle) {
 		samples_to_read = end - process_position;
-		export_status->stop = true;
 	} else {
 		samples_to_read = samples;
 	}
@@ -310,18 +395,6 @@ ExportHandler::process_timespan (samplecnt_t samples)
 		process_position += ret;
 		export_status->processed_samples += ret;
 		export_status->processed_samples_current_timespan += ret;
-	}
-
-	/* Start post-processing/normalizing if necessary */
-	if (last_cycle) {
-		post_processing = graph_builder->need_postprocessing ();
-		if (post_processing) {
-			export_status->total_postprocessing_cycles = graph_builder->get_postprocessing_cycle_count();
-			export_status->current_postprocessing_cycle = 0;
-		} else {
-			finish_timespan ();
-		}
-		return 1; /* trigger realtime_stop() */
 	}
 
 	return 0;
@@ -353,22 +426,13 @@ ExportHandler::command_output(std::string output, size_t size)
 	info << output << endmsg;
 }
 
-void*
-ExportHandler::start_timespan_bg (void* eh)
-{
-	char name[64];
-	snprintf (name, 64, "Export-TS-%p", (void*)DEBUG_THREAD_SELF);
-	pthread_set_name (name);
-	ExportHandler* self = static_cast<ExportHandler*> (eh);
-	self->process_connection.disconnect ();
-	Glib::Threads::Mutex::Lock l (self->export_status->lock());
-	self->start_timespan ();
-	return 0;
-}
-
 void
 ExportHandler::finish_timespan ()
 {
+	if (/*!region_export &&*/ !current_timespan->vapor ().empty () && session.surround_master ()) {
+		session.surround_master ()->surround_return ()->finalize_export ();
+	}
+
 	graph_builder->get_analysis_results (export_status->result_map);
 
 	/* work-around: split-channel will produce several files
@@ -425,17 +489,8 @@ ExportHandler::finish_timespan ()
 		if (!fmt->command().empty()) {
 			SessionMetadata const & metadata (*SessionMetadata::Metadata());
 
-#if 0 // would be nicer with C++11 initialiser...
-			std::map<char, std::string> subs {
-				{ 'f', filename },
-				{ 'd', Glib::path_get_dirname(filename)  + G_DIR_SEPARATOR },
-				{ 'b', PBD::basename_nosuffix(filename) },
-				...
-			};
-#endif
 			export_status->active_job = ExportStatus::Command;
 			PBD::ScopedConnection command_connection;
-			std::map<char, std::string> subs;
 
 			std::stringstream track_number;
 			track_number << metadata.track_number ();
@@ -444,34 +499,36 @@ ExportHandler::finish_timespan ()
 			std::stringstream year;
 			year << metadata.year ();
 
-			subs.insert (std::pair<char, std::string> ('a', metadata.artist ()));
-			subs.insert (std::pair<char, std::string> ('b', PBD::basename_nosuffix (filename)));
-			subs.insert (std::pair<char, std::string> ('c', metadata.copyright ()));
-			subs.insert (std::pair<char, std::string> ('d', Glib::path_get_dirname (filename) + G_DIR_SEPARATOR));
-			subs.insert (std::pair<char, std::string> ('f', filename));
-			subs.insert (std::pair<char, std::string> ('l', metadata.lyricist ()));
-			subs.insert (std::pair<char, std::string> ('n', session.name ()));
-			subs.insert (std::pair<char, std::string> ('s', session.path ()));
-			subs.insert (std::pair<char, std::string> ('o', metadata.conductor ()));
-			subs.insert (std::pair<char, std::string> ('t', metadata.title ()));
-			subs.insert (std::pair<char, std::string> ('z', metadata.organization ()));
-			subs.insert (std::pair<char, std::string> ('A', metadata.album ()));
-			subs.insert (std::pair<char, std::string> ('C', metadata.comment ()));
-			subs.insert (std::pair<char, std::string> ('E', metadata.engineer ()));
-			subs.insert (std::pair<char, std::string> ('G', metadata.genre ()));
-			subs.insert (std::pair<char, std::string> ('L', total_tracks.str ()));
-			subs.insert (std::pair<char, std::string> ('M', metadata.mixer ()));
-			subs.insert (std::pair<char, std::string> ('N', current_timespan->name())); // =?= config_map.begin()->first->name ()
-			subs.insert (std::pair<char, std::string> ('O', metadata.composer ()));
-			subs.insert (std::pair<char, std::string> ('P', metadata.producer ()));
-			subs.insert (std::pair<char, std::string> ('S', metadata.disc_subtitle ()));
-			subs.insert (std::pair<char, std::string> ('T', track_number.str ()));
-			subs.insert (std::pair<char, std::string> ('Y', year.str ()));
-			subs.insert (std::pair<char, std::string> ('Z', metadata.country ()));
+			std::map<char, std::string> subs {
+				{'a', metadata.artist ()},
+				{'b', PBD::basename_nosuffix (filename)},
+				{'c', metadata.copyright ()},
+				{'d', Glib::path_get_dirname (filename) + G_DIR_SEPARATOR},
+				{'f', filename},
+				{'l', metadata.lyricist ()},
+				{'n', session.name ()},
+				{'s', session.path ()},
+				{'o', metadata.conductor ()},
+				{'t', metadata.title ()},
+				{'z', metadata.organization ()},
+				{'A', metadata.album ()},
+				{'C', metadata.comment ()},
+				{'E', metadata.engineer ()},
+				{'G', metadata.genre ()},
+				{'L', total_tracks.str ()},
+				{'M', metadata.mixer ()},
+				{'N', current_timespan->name()}, // =?= config_map.begin()->first->name ()
+				{'O', metadata.composer ()},
+				{'P', metadata.producer ()},
+				{'S', metadata.disc_subtitle ()},
+				{'T', track_number.str ()},
+				{'Y', year.str ()},
+				{'Z', metadata.country ()}
+			};
 
 			ARDOUR::SystemExec *se = new ARDOUR::SystemExec(fmt->command(), subs, true);
 			info << "Post-export command line : {" << se->to_s () << "}" << endmsg;
-			se->ReadStdout.connect_same_thread(command_connection, boost::bind(&ExportHandler::command_output, this, _1, _2));
+			se->ReadStdout.connect_same_thread(command_connection, std::bind(&ExportHandler::command_output, this, _1, _2));
 			int ret = se->start (SystemExec::MergeWithStdin);
 			if (ret == 0) {
 				// successfully started
@@ -524,9 +581,7 @@ ExportHandler::finish_timespan ()
 	/* finish timespan is called in freewheeling rt-context,
 	 * we cannot start a new export from here */
 	assert (AudioEngine::instance()->freewheeling ());
-	pthread_t tid;
-	pthread_create (&tid, NULL, ExportHandler::start_timespan_bg, this);
-	pthread_detach (tid);
+	timespan_thread_wakeup ();
 }
 
 void
@@ -652,6 +707,9 @@ ExportHandler::export_cd_marker_file (ExportTimespanPtr timespan, ExportFormatSp
 		}
 
 	} catch (std::exception& e) {
+		error << string_compose (_("an error occurred while writing a TOC/CUE file: %1"), e.what()) << endmsg;
+		::g_unlink (filepath.c_str());
+	} catch (Glib::ConvertError const& e) {
 		error << string_compose (_("an error occurred while writing a TOC/CUE file: %1"), e.what()) << endmsg;
 		::g_unlink (filepath.c_str());
 	} catch (Glib::Exception& e) {
@@ -1001,7 +1059,7 @@ ExportHandler::cue_escape_cdtext (const std::string& txt)
 	std::string out;
 
 	try {
-		latin1_txt = Glib::convert (txt, "ISO-8859-1", "UTF-8");
+		latin1_txt = Glib::convert_with_fallback (txt, "ISO-8859-1", "UTF-8", "_");
 	} catch (Glib::ConvertError& err) {
 		throw Glib::ConvertError (err.code(), string_compose (_("Cannot convert %1 to Latin-1 text"), txt));
 	}

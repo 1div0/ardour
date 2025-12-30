@@ -21,8 +21,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_utils_h__
-#define __ardour_utils_h__
+#pragma once
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -31,8 +30,6 @@
 #include <iostream>
 #include <string>
 #include <cmath>
-
-#include "boost/shared_ptr.hpp"
 
 #if __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
@@ -47,10 +44,18 @@
 
 class XMLNode;
 
+namespace Temporal {
+	class Meter;
+}
+
 namespace ARDOUR {
 
 class Route;
 class Track;
+class Region;
+class Source;
+
+struct TimelineRange;
 
 LIBARDOUR_API std::string legalize_for_path (const std::string& str);
 LIBARDOUR_API std::string legalize_for_universal_path (const std::string& str);
@@ -70,6 +75,7 @@ static inline float f_max(float x, float a) {
 
 LIBARDOUR_API std::string bump_name_once(const std::string& s, char delimiter);
 LIBARDOUR_API std::string bump_name_number(const std::string& s);
+LIBARDOUR_API std::string bump_name_abc(const std::string& s);
 
 LIBARDOUR_API int cmp_nocase (const std::string& s, const std::string& s2);
 LIBARDOUR_API int cmp_nocase_utf8 (const std::string& s1, const std::string& s2);
@@ -109,14 +115,15 @@ LIBARDOUR_API const char* native_header_format_extension (ARDOUR::HeaderFormat, 
 LIBARDOUR_API bool matching_unsuffixed_filename_exists_in (const std::string& dir, const std::string& name);
 
 LIBARDOUR_API uint32_t how_many_dsp_threads ();
+LIBARDOUR_API uint32_t how_many_io_threads ();
 
 LIBARDOUR_API std::string compute_sha1_of_file (std::string path);
 
-template<typename T> std::shared_ptr<ControlList> route_list_to_control_list (std::shared_ptr<RouteList> rl, std::shared_ptr<T> (Stripable::*get_control)() const) {
-	std::shared_ptr<ControlList> cl (new ControlList);
+template<typename T> std::shared_ptr<AutomationControlList> route_list_to_control_list (std::shared_ptr<RouteList const> rl, std::shared_ptr<T> (Stripable::*get_control)() const) {
+	std::shared_ptr<AutomationControlList> cl (new AutomationControlList);
 	if (!rl) { return cl; }
-	for (RouteList::const_iterator r = rl->begin(); r != rl->end(); ++r) {
-		std::shared_ptr<AutomationControl> ac = ((*r).get()->*get_control)();
+	for (auto const& r : *rl) {
+		std::shared_ptr<AutomationControl> ac = (r.get()->*get_control)();
 		if (ac) {
 			cl->push_back (ac);
 		}
@@ -124,16 +131,31 @@ template<typename T> std::shared_ptr<ControlList> route_list_to_control_list (st
 	return cl;
 }
 
-template<typename T> std::shared_ptr<ControlList> stripable_list_to_control_list (StripableList& sl, std::shared_ptr<T> (Stripable::*get_control)() const) {
-	std::shared_ptr<ControlList> cl (new ControlList);
-	for (StripableList::const_iterator s = sl.begin(); s != sl.end(); ++s) {
-		std::shared_ptr<AutomationControl> ac = ((*s).get()->*get_control)();
+template<typename T> std::shared_ptr<AutomationControlList> stripable_list_to_control_list (StripableList& sl, std::shared_ptr<T> (Stripable::*get_control)() const) {
+	std::shared_ptr<AutomationControlList> cl (new AutomationControlList);
+	for (auto const & s : sl) {
+		std::shared_ptr<AutomationControl> ac = (s.get()->*get_control)();
 		if (ac) {
 			cl->push_back (ac);
 		}
 	}
 	return cl;
 }
+
+template<typename T> std::shared_ptr<AutomationControlList> stripable_list_to_control_list (std::shared_ptr<StripableList const> sl, std::shared_ptr<T> (Stripable::*get_control)() const) {
+	std::shared_ptr<AutomationControlList> cl (new AutomationControlList);
+	if (!sl) { return cl; }
+	for (auto const & s : *sl) {
+		std::shared_ptr<AutomationControl> ac = (s.get()->*get_control)();
+		if (ac) {
+			cl->push_back (ac);
+		}
+	}
+	return cl;
+}
+
+LIBARDOUR_API bool estimate_audio_tempo_region (std::shared_ptr<Region> region, Sample* data, samplecnt_t data_length, samplecnt_t sample_rate, double& qpm, Temporal::Meter& meter, double& beatcount);
+LIBARDOUR_API bool estimate_audio_tempo_source (TimelineRange const &, std::shared_ptr<Source>, Sample* data, samplecnt_t data_length, samplecnt_t sample_rate, double& qpm, Temporal::Meter& meter, double& beatcount);
 
 #if __APPLE__
 LIBARDOUR_API std::string CFStringRefToStdString(CFStringRef stringRef);
@@ -141,4 +163,3 @@ LIBARDOUR_API std::string CFStringRefToStdString(CFStringRef stringRef);
 
 } //namespave
 
-#endif /* __ardour_utils_h__ */

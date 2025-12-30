@@ -23,8 +23,6 @@
 
 #include <memory>
 
-#include <boost/scoped_ptr.hpp>
-
 #include <glibmm/refptr.h>
 
 #include "ardour/types.h"
@@ -77,9 +75,10 @@ public:
 	WaveView (Item*, std::shared_ptr<ARDOUR::AudioRegion>);
 	~WaveView ();
 
-	virtual void prepare_for_render (ArdourCanvas::Rect const& window_area) const;
+	void prepare_for_render (ArdourCanvas::Rect const& window_area) const;
+	bool needs_prepare_for_render () const { return true; }
 
-	virtual void render (ArdourCanvas::Rect const & area, Cairo::RefPtr<Cairo::Context>) const;
+	void render (ArdourCanvas::Rect const & area, Cairo::RefPtr<Cairo::Context>) const;
 
 	void compute_bounding_box () const;
 
@@ -139,7 +138,7 @@ public:
 	double amplitude_above_axis () const;
 
 	static void set_clip_level (double dB);
-	static PBD::Signal0<void> ClipLevelChanged;
+	static PBD::Signal<void()> ClipLevelChanged;
 
 	static void start_drawing_thread ();
 	static void stop_drawing_thread ();
@@ -152,7 +151,7 @@ private:
 
 	std::shared_ptr<ARDOUR::AudioRegion> _region;
 
-	boost::scoped_ptr<WaveViewProperties> _props;
+	const std::unique_ptr<WaveViewProperties> _props;
 
 	mutable std::shared_ptr<WaveViewImage> _image;
 
@@ -204,7 +203,7 @@ private:
 	static bool _global_show_waveform_clipping;
 	static double _global_clip_level;
 
-	static PBD::Signal0<void> VisualPropertiesChanged;
+	static PBD::Signal<void()> VisualPropertiesChanged;
 
 	void handle_visual_property_change ();
 	void handle_clip_level_change ();

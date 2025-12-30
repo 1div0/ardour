@@ -22,14 +22,14 @@
 #ifndef _gtk_ardour_region_list_base_h_
 #define _gtk_ardour_region_list_base_h_
 
-#include <boost/unordered_map.hpp>
+#include <unordered_map>
 
-#include <gtkmm/celleditable.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/treemodel.h>
-#include <gtkmm/treerowreference.h>
-#include <gtkmm/treestore.h>
+#include <ytkmm/celleditable.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/treemodel.h>
+#include <ytkmm/treerowreference.h>
+#include <ytkmm/treestore.h>
 
 #include "gtkmm2ext/utils.h"
 
@@ -92,15 +92,15 @@ protected:
 		{
 			add (name);     // 0
 			add (channels); // 1
-			add (tags);     // 2
-			add (start);    // 3
-			add (length);   // 3
-			add (end);      // 5
-			add (sync);     // 6
-			add (fadein);   // 7
-			add (fadeout);  // 8
-			add (locked);   // 9
-			add (glued);    // 10
+			add (regionfx); // 2
+			add (tags);     // 3
+			add (start);    // 4
+			add (length);   // 5
+			add (end);      // 6
+			add (sync);     // 7
+			add (fadein);   // 8
+			add (fadeout);  // 9
+			add (locked);   // 10
 			add (muted);    // 11
 			add (opaque);   // 12
 			add (path);     // 13
@@ -112,11 +112,12 @@ protected:
 			add (take_id);     // 18
 			add (natural_pos); // 19
 			add (natural_s);   // 20
-			add (captd_xruns);
+			add (captd_xruns); // 21
 		}
 
 		Gtk::TreeModelColumn<std::string>                       name;
 		Gtk::TreeModelColumn<int>                               channels;
+		Gtk::TreeModelColumn<size_t>                            regionfx;
 		Gtk::TreeModelColumn<std::string>                       tags;
 		Gtk::TreeModelColumn<Temporal::timepos_t>               position;
 		Gtk::TreeModelColumn<std::string>                       start;
@@ -126,11 +127,10 @@ protected:
 		Gtk::TreeModelColumn<std::string>                       fadein;
 		Gtk::TreeModelColumn<std::string>                       fadeout;
 		Gtk::TreeModelColumn<bool>                              locked;
-		Gtk::TreeModelColumn<bool>                              glued;
 		Gtk::TreeModelColumn<bool>                              muted;
 		Gtk::TreeModelColumn<bool>                              opaque;
 		Gtk::TreeModelColumn<std::string>                       path;
-		Gtk::TreeModelColumn<std::shared_ptr<ARDOUR::Region>> region;
+		Gtk::TreeModelColumn<std::shared_ptr<ARDOUR::Region>>   region;
 		Gtk::TreeModelColumn<Gdk::Color>                        color_;
 		Gtk::TreeModelColumn<std::string>                       captd_for;
 		Gtk::TreeModelColumn<std::string>                       take_id;
@@ -171,13 +171,14 @@ protected:
 	virtual void regions_changed (std::shared_ptr<ARDOUR::RegionList>, PBD::PropertyChange const&);
 
 	void name_editing_started (Gtk::CellEditable*, const Glib::ustring&);
+	void name_editing_canceled ();
 	void tag_editing_started (Gtk::CellEditable*, const Glib::ustring&);
+	void tag_editing_canceled ();
 
 	virtual void name_edit (const std::string&, const std::string&);
 	virtual void tag_edit (const std::string&, const std::string&);
 
 	void locked_changed (std::string const&);
-	void glued_changed (std::string const&);
 	void muted_changed (std::string const&);
 	void opaque_changed (std::string const&);
 
@@ -193,7 +194,7 @@ protected:
 	bool enter_notify (GdkEventCrossing*);
 	bool leave_notify (GdkEventCrossing*);
 
-	void format_position (Temporal::timepos_t const& pos, char* buf, size_t bufsize, bool onoff = true);
+	void format_position (Temporal::timepos_t const& pos, char* buf, size_t bufsize, bool onoff = true) const;
 
 	void add_region (std::shared_ptr<ARDOUR::Region>);
 
@@ -206,11 +207,11 @@ protected:
 	void populate_row_fade_out (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row, std::shared_ptr<ARDOUR::AudioRegion>);
 	void populate_row_locked (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row);
 	void populate_row_muted (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row);
-	void populate_row_glued (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row);
 	void populate_row_opaque (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row);
 	void populate_row_length (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row);
 	void populate_row_name (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row);
 	void populate_row_source (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row);
+	void populate_row_regionfx (std::shared_ptr<ARDOUR::Region> region, Gtk::TreeModel::Row const& row);
 
 	void clock_format_changed ();
 
@@ -238,7 +239,7 @@ protected:
 
 	bool _no_redisplay;
 
-	typedef boost::unordered_map<std::shared_ptr<ARDOUR::Region>, Gtk::TreeModel::iterator> RegionRowMap;
+	typedef std::unordered_map<std::shared_ptr<ARDOUR::Region>, Gtk::TreeModel::iterator> RegionRowMap;
 
 	RegionRowMap region_row_map;
 

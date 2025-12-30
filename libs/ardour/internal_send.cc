@@ -47,7 +47,7 @@ using namespace PBD;
 using namespace ARDOUR;
 using namespace std;
 
-PBD::Signal1<void, pframes_t> InternalSend::CycleStart;
+PBD::Signal<void(pframes_t)> InternalSend::CycleStart;
 
 InternalSend::InternalSend (Session&                      s,
                             std::shared_ptr<Pannable>   p,
@@ -68,8 +68,8 @@ InternalSend::InternalSend (Session&                      s,
 
 	init_gain ();
 
-	_send_from->DropReferences.connect_same_thread (source_connection, boost::bind (&InternalSend::send_from_going_away, this));
-	CycleStart.connect_same_thread (*this, boost::bind (&InternalSend::cycle_start, this, _1));
+	_send_from->DropReferences.connect_same_thread (source_connection, std::bind (&InternalSend::send_from_going_away, this));
+	CycleStart.connect_same_thread (*this, std::bind (&InternalSend::cycle_start, this, _1));
 }
 
 InternalSend::~InternalSend ()
@@ -105,17 +105,17 @@ InternalSend::propagate_solo ()
 			_send_to->solo_isolate_control()->mod_solo_isolated_by_upstream (-1);
 		}
 		/* propagate further downstream alike Route::input_change_handler() */
-		std::shared_ptr<RouteList> routes = _session.get_routes ();
-		for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-			if ((*i) == _send_to || (*i)->is_master() || (*i)->is_monitor() || (*i)->is_auditioner()) {
+		std::shared_ptr<RouteList const> routes = _session.get_routes ();
+		for (auto const& i : *routes) {
+			if (i == _send_to || i->is_singleton () || i->is_auditioner()) {
 				continue;
 			}
-			bool does_feed = _send_to->feeds (*i);
+			bool does_feed = _send_to->feeds (i);
 			if (does_feed && to_soloed_upstream) {
-				(*i)->solo_control()->mod_solo_by_others_upstream (-1);
+				i->solo_control()->mod_solo_by_others_upstream (-1);
 			}
 			if (does_feed && to_isolated_upstream) {
-				(*i)->solo_isolate_control()->mod_solo_isolated_by_upstream (-1);
+				i->solo_isolate_control()->mod_solo_isolated_by_upstream (-1);
 			}
 		}
 	}
@@ -123,13 +123,13 @@ InternalSend::propagate_solo ()
 		_send_from->solo_control()->mod_solo_by_others_downstream (-1);
 
 		/* propagate further upstream alike Route::output_change_handler() */
-		std::shared_ptr<RouteList> routes = _session.get_routes ();
-		for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-			if (*i == _send_from || !(*i)->can_solo()) {
+		std::shared_ptr<RouteList const> routes = _session.get_routes ();
+		for (auto const& i : *routes) {
+			if (i == _send_from || !i->can_solo()) {
 				continue;
 			}
-			if ((*i)->feeds (_send_from)) {
-				(*i)->solo_control()->mod_solo_by_others_downstream (-1);
+			if (i->feeds (_send_from)) {
+				i->solo_control()->mod_solo_by_others_downstream (-1);
 			}
 		}
 	}
@@ -175,9 +175,9 @@ InternalSend::use_target (std::shared_ptr<Route> sendto, bool update_name)
 
 	target_connections.drop_connections ();
 
-	_send_to->DropReferences.connect_same_thread (target_connections, boost::bind (&InternalSend::send_to_going_away, this));
-	_send_to->PropertyChanged.connect_same_thread (target_connections, boost::bind (&InternalSend::send_to_property_changed, this, _1));
-	_send_to->io_changed.connect_same_thread (target_connections, boost::bind (&InternalSend::target_io_changed, this));
+	_send_to->DropReferences.connect_same_thread (target_connections, std::bind (&InternalSend::send_to_going_away, this));
+	_send_to->PropertyChanged.connect_same_thread (target_connections, std::bind (&InternalSend::send_to_property_changed, this, _1));
+	_send_to->io_changed.connect_same_thread (target_connections, std::bind (&InternalSend::target_io_changed, this));
 
 	return 0;
 }
@@ -213,10 +213,25 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 {
 	automation_run (start_sample, nframes);
 
-	if (!check_active() || !_send_to) {
+	/* Do not use check_active() here, because we need to continue running
+	 * until the gain has gone to zero.
+	 */
+
+	if (!_send_to) {
 		_meter->reset ();
 		return;
 	}
+
+	/* main gain control: * mute & bypass/enable */
+	const gain_t tgain = target_gain ();
+	const bool converged = fabsf (_current_gain - tgain) < GAIN_COEFF_DELTA;
+
+	if ((tgain == GAIN_COEFF_ZERO) && converged) {
+		_meter->reset ();
+		return;
+	}
+
+	samplecnt_t latency = _thru_delay->delay ();
 
 	/* we have to copy the input, because we may alter the buffers with the amp
 	 * in-place, which a send must never do.
@@ -224,7 +239,7 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 
 	if (_panshell && !_panshell->bypassed () && role () != Listen) {
 		if (mixbufs.count ().n_audio () > 0) {
-			_panshell->run (bufs, mixbufs, start_sample, end_sample, nframes);
+			_panshell->run (bufs, mixbufs, start_sample + latency, end_sample + latency, nframes);
 		}
 
 		/* non-audio data will not have been copied by the panner, do it now
@@ -247,6 +262,7 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 				}
 			}
 		}
+
 	} else if (role () == Listen) {
 		/* We're going to the monitor bus, so discard MIDI data */
 
@@ -287,8 +303,16 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 		}
 
 	} else {
-		/* no panner or panner is bypassed */
-		assert (mixbufs.available () >= bufs.count ());
+		/* no panner or panner is bypassed
+		 * 1: if source has more channels than the destination bus
+		 *    only send as many channels as there ae on the destination
+		 *    (ignore excess channels)
+		 * 2: if desination has more channels than the source:
+		 *    silence additional channels.
+		 *
+		 * The following assert() would go off in case of (1)
+		 */
+		//assert (mixbufs.available () >= bufs.count ());
 		/* BufferSet::read_from() changes the channel-conut,
 		 * so we manually copy bufs -> mixbufs
 		 */
@@ -306,9 +330,6 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 		}
 	}
 
-	/* main gain control: * mute & bypass/enable */
-	gain_t tgain = target_gain ();
-
 	if (tgain != _current_gain) {
 		/* target gain has changed, fade in/out */
 		_current_gain = Amp::apply_gain (mixbufs, _session.nominal_sample_rate (), nframes, _current_gain, tgain);
@@ -322,10 +343,12 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 		Amp::apply_simple_gain (mixbufs, nframes, tgain);
 	}
 
+	maybe_merge_midi_mute (mixbufs, tgain == GAIN_COEFF_ZERO);
+
 	/* apply fader gain automation */
 	_amp->set_gain_automation_buffer (_session.send_gain_automation_buffer ());
-	_amp->setup_gain_automation (start_sample, end_sample, nframes);
-	_amp->run (mixbufs, start_sample, end_sample, speed, nframes, true);
+	_amp->setup_gain_automation (start_sample + latency, end_sample + latency, nframes);
+	_amp->run (mixbufs, start_sample + latency, end_sample + latency, speed, nframes, true);
 
 	_send_delay->run (mixbufs, start_sample, end_sample, speed, nframes, true);
 
@@ -340,7 +363,9 @@ InternalSend::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 
 	_thru_delay->run (bufs, start_sample, end_sample, speed, nframes, true);
 
-	/* target will pick up our output when it is ready */
+	if (converged) {
+		_active = _pending_active;
+	}
 }
 
 void
@@ -421,7 +446,7 @@ InternalSend::set_state (const XMLNode& node, int version)
 		 */
 
 		if (_session.loading()) {
-			Session::AfterConnect.connect_same_thread (connect_c, boost::bind (&InternalSend::after_connect, this));
+			Session::AfterConnect.connect_same_thread (connect_c, std::bind (&InternalSend::after_connect, this));
 		} else {
 			after_connect ();
 		}

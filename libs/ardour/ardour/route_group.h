@@ -21,8 +21,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_route_group_h__
-#define __ardour_route_group_h__
+#pragma once
 
 #include <list>
 #include <set>
@@ -47,6 +46,7 @@ namespace Properties {
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_mute;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_solo;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_recenable;
+	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_sursend_enable;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_select;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_route_active;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_color;
@@ -69,12 +69,11 @@ class Session;
  *
  * A route can at most be in one group.
  */
-class LIBARDOUR_API RouteGroup : public SessionObject
+class LIBARDOUR_API RouteGroup : public SessionObject, public std::enable_shared_from_this<RouteGroup>
 {
-public:
+  public:
 	static void make_property_quarks();
 
-	RouteGroup (Session& s, const std::string &n);
 	~RouteGroup ();
 
 	bool is_active () const { return _active.val(); }
@@ -84,6 +83,7 @@ public:
 	bool is_mute () const { return _mute.val(); }
 	bool is_solo () const { return _solo.val(); }
 	bool is_recenable () const { return _recenable.val(); }
+	bool is_sursend_enable () const { return _sursend_enable.val(); }
 	bool is_select () const { return _select.val(); }
 	bool is_route_active () const { return _route_active.val(); }
 	bool is_color () const { return _color.val(); }
@@ -105,6 +105,7 @@ public:
 	void set_mute (bool yn);
 	void set_solo (bool yn);
 	void set_recenable (bool yn);
+	void set_sursend_enable (bool yn);
 	void set_select (bool yn);
 	void set_route_active (bool yn);
 	void set_color (bool yn);
@@ -114,13 +115,9 @@ public:
 
 	int add (std::shared_ptr<Route>);
 	int remove (std::shared_ptr<Route>);
+	void clear ();
 
-	template<typename Function>
-	void foreach_route (Function f) {
-		for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-			f (i->get());
-		}
-	}
+	template<typename Function> void foreach_route (Function f) { for (auto & r : *routes) {f (r); } }
 
 	/* to use these, #include "ardour/route_group_specialized.h" */
 
@@ -130,21 +127,17 @@ public:
 
 	void audio_track_group (std::set<std::shared_ptr<AudioTrack> >& at_set);
 
-	void clear () {
-		routes->clear ();
-		changed();
-	}
-
 	bool has_subgroup() const;
+	bool can_subgroup (bool, Placement) const;
 	void make_subgroup (bool, Placement);
 	void destroy_subgroup ();
 
 	std::shared_ptr<RouteList> route_list() { return routes; }
 
 	/** Emitted when a route has been added to this group */
-	PBD::Signal2<void, RouteGroup *, std::weak_ptr<ARDOUR::Route> > RouteAdded;
+	PBD::Signal<void(std::shared_ptr<RouteGroup>, std::weak_ptr<ARDOUR::Route> )> RouteAdded;
 	/** Emitted when a route has been removed from this group */
-	PBD::Signal2<void, RouteGroup *, std::weak_ptr<ARDOUR::Route> > RouteRemoved;
+	static PBD::Signal<void(std::shared_ptr<RouteGroup>, std::weak_ptr<ARDOUR::Route> )> RouteRemoved;
 
 	XMLNode& get_state () const;
 
@@ -164,7 +157,11 @@ public:
 	 * to libardour color */
 	void migrate_rgba (uint32_t color) { _rgba = color; }
 
-private:
+  protected:
+	friend class Session;
+	RouteGroup (Session& s, const std::string &n);
+
+  private:
 	std::shared_ptr<RouteList> routes;
 	std::shared_ptr<Route> _subgroup_bus;
 	std::weak_ptr<VCA> group_master;
@@ -176,6 +173,7 @@ private:
 	PBD::Property<bool> _mute;
 	PBD::Property<bool> _solo;
 	PBD::Property<bool> _recenable;
+	PBD::Property<bool> _sursend_enable;
 	PBD::Property<bool> _select;
 	PBD::Property<bool> _route_active;
 	PBD::Property<bool> _color;
@@ -185,10 +183,13 @@ private:
 	std::shared_ptr<ControlGroup> _solo_group;
 	std::shared_ptr<ControlGroup> _mute_group;
 	std::shared_ptr<ControlGroup> _rec_enable_group;
+	std::shared_ptr<ControlGroup> _sursend_enable_group;
 	std::shared_ptr<ControlGroup> _gain_group;
 	std::shared_ptr<ControlGroup> _monitoring_group;
 
+	bool check_subgroup (bool, Placement, DataType&, uint32_t&) const;
 	void remove_when_going_away (std::weak_ptr<Route>);
+	void update_surround_sends ();
 	void unset_subgroup_bus ();
 	int set_state_2X (const XMLNode&, int);
 
@@ -201,4 +202,3 @@ private:
 
 } /* namespace */
 
-#endif /* __ardour_route_group_h__ */

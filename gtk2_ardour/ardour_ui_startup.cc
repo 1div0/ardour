@@ -48,7 +48,7 @@
 #include <glib.h>
 #include "pbd/gstdio_compat.h"
 
-#include <gtkmm/stock.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/basename.h"
 #include "pbd/file_utils.h"
@@ -78,12 +78,12 @@
 
 #include "pbd/i18n.h"
 
+using namespace Temporal;
 using namespace ARDOUR;
 using namespace PBD;
 using namespace Gtk;
 using namespace Gtkmm2ext;
 using namespace std;
-
 
 static bool
 _hide_splash (gpointer arg)
@@ -546,12 +546,14 @@ ARDOUR_UI::sfsm_response (StartupFSM::Result r)
 		queue_finish ();
 		break;
 
+	case StartupFSM::LoadedSession:
+		startup_done ();
+		break;
+
 	case StartupFSM::LoadSession:
 
 		if (load_session_from_startup_fsm () == 0) {
 			startup_done ();
-			delete startup_fsm;
-			startup_fsm = 0;
 		} else {
 			DEBUG_TRACE (DEBUG::GuiStartup, "FSM reset\n");
 			startup_fsm->reset ();
@@ -621,6 +623,11 @@ ARDOUR_UI::starting ()
 		 */
 
 		startup_fsm->start ();
+
+		if (startup_fsm->complete()) {
+			delete startup_fsm;
+			startup_fsm = 0;
+		}
 	}
 
 	return 0;
@@ -676,23 +683,29 @@ ARDOUR_UI::copy_demo_sessions ()
 int
 ARDOUR_UI::load_session_from_startup_fsm ()
 {
-	const string session_path = startup_fsm->session_path;
-	const string session_name = startup_fsm->session_name;
-	const string session_template = startup_fsm->session_template;
-	const bool   session_is_new = startup_fsm->session_is_new;
-	const BusProfile bus_profile = startup_fsm->bus_profile;
-	const bool   session_was_not_named = (!startup_fsm->session_name_edited && ARDOUR_COMMAND_LINE::session_name.empty());
+	const string     session_path          = startup_fsm->session_path;
+	const string     session_name          = startup_fsm->session_name;
+	const string     session_template      = startup_fsm->session_template;
+	const bool       session_is_new        = startup_fsm->session_is_new;
+	const bool       session_was_not_named = (!startup_fsm->session_name_edited && ARDOUR_COMMAND_LINE::session_name.empty());
+	const TimeDomain session_domain        = startup_fsm->session_domain;
+	const BusProfile bus_profile           = startup_fsm->bus_profile;
 
 	if (session_is_new) {
 
-		if (build_session (session_path, session_name, session_template, bus_profile, true, session_was_not_named)) {
+		if (build_session (session_path, session_name, session_template, bus_profile, true, session_was_not_named, session_domain)) {
 			return -1;
 		}
 		return 0;
 	}
 
-	return load_session (session_path, session_name, session_template);
+	int ret = load_session (session_path, session_name, session_template);
 
+	if (!ret) {
+		startup_fsm->set_complete ();
+	}
+
+	return ret;
 }
 
 void
@@ -722,6 +735,8 @@ ARDOUR_UI::startup_done ()
 	_status_bar_visibility.update ();
 
 	BootMessage (string_compose (_("%1 is ready for use"), PROGRAM_NAME));
+
+	startup_fsm->set_complete ();
 }
 
 void
@@ -743,7 +758,7 @@ ARDOUR_UI::check_memory_locking ()
 
 	XMLNode* memory_warning_node = Config->instant_xml (X_("no-memory-warning"));
 
-	if (AudioEngine::instance()->is_realtime() && memory_warning_node == 0) {
+	if (memory_warning_node == 0) {
 
 		struct rlimit limits;
 		int64_t ram;
@@ -845,7 +860,13 @@ ARDOUR_UI::load_from_application_api (const std::string& path)
 	if (nsm) {
 		unload_session(false, true);
 
-		if (!AudioEngine::instance()->set_backend("JACK", ARDOUR_COMMAND_LINE::backend_client_name, "")) {
+		if (!AudioEngine::instance()->set_backend(
+#if ! (defined(__APPLE__) || defined(PLATFORM_WINDOWS))
+					"JACK/Pipewire",
+#else
+					"JACK",
+#endif
+					ARDOUR_COMMAND_LINE::backend_client_name, "")) {
 			error << _("NSM: The JACK backend is mandatory and can not be loaded.") << endmsg;
 			return;
 		}
@@ -886,7 +907,7 @@ ARDOUR_UI::load_from_application_api (const std::string& path)
 		if (nsm) {
 			BusProfile bus_profile;
 			bus_profile.master_out_channels = 2;
-			build_session (path, basename_nosuffix (path), "", bus_profile, true, false);
+			build_session (path, basename_nosuffix (path), "", bus_profile, true, false, AudioTime);
 		}
 		return;
 	}

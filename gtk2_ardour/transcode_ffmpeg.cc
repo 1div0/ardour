@@ -91,8 +91,8 @@ TranscodeFfmpeg::probe ()
 	argp[5] = strdup (infile.c_str ());
 	argp[6] = 0;
 	ffcmd   = new ARDOUR::SystemExec (ffprobe_exe, argp, true);
-	ffcmd->ReadStdout.connect_same_thread (*this, boost::bind (&TranscodeFfmpeg::ffprobeparse, this, _1, _2));
-	ffcmd->Terminated.connect (*this, invalidator (*this), boost::bind (&TranscodeFfmpeg::ffexit, this), gui_context ());
+	ffcmd->ReadStdout.connect_same_thread (*this, std::bind (&TranscodeFfmpeg::ffprobeparse, this, _1, _2));
+	ffcmd->Terminated.connect (*this, invalidator (*this), std::bind (&TranscodeFfmpeg::ffexit, this), gui_context ());
 	if (ffcmd->start (SystemExec::IgnoreAndClose)) {
 		ffexit ();
 		return false;
@@ -183,14 +183,16 @@ TranscodeFfmpeg::probe ()
 						}
 						m_codec += "(" + value + ")";
 					} else if (key == X_("r_frame_rate")) {
+						m_fps_str = value;
 						PARSE_FRACTIONAL_FPS (m_fps)
 					} else if (key == X_("avg_frame_rate") && m_fps == 0) {
+						m_fps_str = value;
 						PARSE_FRACTIONAL_FPS (m_fps)
 					} else if (key == X_("time_base")) {
 						PARSE_FRACTIONAL_FPS (timebase)
 					} else if (key == X_("timecode") && m_duration == 0 && m_fps > 0) {
 						int  h, m, s;
-						char f[32];
+						char f[33];
 						if (sscanf (i->at (16).c_str (), "%d:%d:%d:%32s", &h, &m, &s, f) == 4) {
 							m_duration = (ARDOUR::samplecnt_t)floor (m_fps * (h * 3600.0 + m * 60.0 + s * 1.0 + atoi (f) / pow ((double)10, (int)strlen (f))));
 						}
@@ -338,7 +340,7 @@ TranscodeFfmpeg::encode (std::string outfile, std::string inf_a, std::string inf
 		argp[a++] = SystemExec::format_key_value_parameter (it->first.c_str (), it->second.c_str ());
 	}
 
-	if (m_fps > 0) {
+	if (m_fps > 0 && !m_fps_str.empty ()) {
 		m_lead_in  = rint (m_lead_in * m_fps) / m_fps;
 		m_lead_out = rint (m_lead_out * m_fps) / m_fps;
 	}
@@ -346,12 +348,12 @@ TranscodeFfmpeg::encode (std::string outfile, std::string inf_a, std::string inf
 	if (m_lead_in != 0 && m_lead_out != 0) {
 		std::ostringstream osstream;
 		argp[a++] = strdup ("-vf");
-		osstream << "color=c=black:s=" << m_width << "x" << m_height << ":r=" << m_fps << ":d=" << m_lead_in;
+		osstream << "color=c=black:s=" << m_width << "x" << m_height << ":r=" << m_fps_str << ":d=" << m_lead_in;
 		if (!m_sar.empty ()) {
 			osstream << ":sar=" << m_sar;
 		}
 		osstream << " [pre]; ";
-		osstream << "color=c=black:s=" << m_width << "x" << m_height << ":r=" << m_fps << ":d=" << m_lead_out;
+		osstream << "color=c=black:s=" << m_width << "x" << m_height << ":r=" << m_fps_str << ":d=" << m_lead_out;
 		if (!m_sar.empty ()) {
 			osstream << ":sar=" << m_sar;
 		}
@@ -361,7 +363,7 @@ TranscodeFfmpeg::encode (std::string outfile, std::string inf_a, std::string inf
 	} else if (m_lead_in != 0) {
 		std::ostringstream osstream;
 		argp[a++] = strdup ("-vf");
-		osstream << "color=c=black:s=" << m_width << "x" << m_height << ":r=" << m_fps << ":d=" << m_lead_in;
+		osstream << "color=c=black:s=" << m_width << "x" << m_height << ":r=" << m_fps_str << ":d=" << m_lead_in;
 		if (!m_sar.empty ()) {
 			osstream << ":sar=" << m_sar;
 		}
@@ -371,7 +373,7 @@ TranscodeFfmpeg::encode (std::string outfile, std::string inf_a, std::string inf
 	} else if (m_lead_out != 0) {
 		std::ostringstream osstream;
 		argp[a++] = strdup ("-vf");
-		osstream << "color=c=black:s=" << m_width << "x" << m_height << ":r=" << m_fps << ":d=" << m_lead_out;
+		osstream << "color=c=black:s=" << m_width << "x" << m_height << ":r=" << m_fps_str << ":d=" << m_lead_out;
 		if (!m_sar.empty ()) {
 			osstream << ":sar=" << m_sar;
 		}
@@ -404,8 +406,8 @@ TranscodeFfmpeg::encode (std::string outfile, std::string inf_a, std::string inf
 	}
 
 	ffcmd = new ARDOUR::SystemExec (ffmpeg_exe, argp, true);
-	ffcmd->ReadStdout.connect_same_thread (*this, boost::bind (&TranscodeFfmpeg::ffmpegparse_v, this, _1, _2));
-	ffcmd->Terminated.connect (*this, invalidator (*this), boost::bind (&TranscodeFfmpeg::ffexit, this), gui_context ());
+	ffcmd->ReadStdout.connect_same_thread (*this, std::bind (&TranscodeFfmpeg::ffmpegparse_v, this, _1, _2));
+	ffcmd->Terminated.connect (*this, invalidator (*this), std::bind (&TranscodeFfmpeg::ffexit, this), gui_context ());
 
 	if (ffcmd->start (SystemExec::MergeWithStdin)) {
 		ffexit ();
@@ -459,8 +461,8 @@ TranscodeFfmpeg::extract_audio (std::string outfile, ARDOUR::samplecnt_t /*sampl
 	}
 
 	ffcmd = new ARDOUR::SystemExec (ffmpeg_exe, argp, true);
-	ffcmd->ReadStdout.connect_same_thread (*this, boost::bind (&TranscodeFfmpeg::ffmpegparse_a, this, _1, _2));
-	ffcmd->Terminated.connect (*this, invalidator (*this), boost::bind (&TranscodeFfmpeg::ffexit, this), gui_context ());
+	ffcmd->ReadStdout.connect_same_thread (*this, std::bind (&TranscodeFfmpeg::ffmpegparse_a, this, _1, _2));
+	ffcmd->Terminated.connect (*this, invalidator (*this), std::bind (&TranscodeFfmpeg::ffexit, this), gui_context ());
 
 	if (ffcmd->start (SystemExec::MergeWithStdin)) {
 		ffexit ();
@@ -531,8 +533,8 @@ TranscodeFfmpeg::transcode (std::string outfile, const int outw, const int outh,
 	}
 
 	ffcmd = new ARDOUR::SystemExec (ffmpeg_exe, argp, true);
-	ffcmd->ReadStdout.connect_same_thread (*this, boost::bind (&TranscodeFfmpeg::ffmpegparse_v, this, _1, _2));
-	ffcmd->Terminated.connect (*this, invalidator (*this), boost::bind (&TranscodeFfmpeg::ffexit, this), gui_context ());
+	ffcmd->ReadStdout.connect_same_thread (*this, std::bind (&TranscodeFfmpeg::ffmpegparse_v, this, _1, _2));
+	ffcmd->Terminated.connect (*this, invalidator (*this), std::bind (&TranscodeFfmpeg::ffexit, this), gui_context ());
 	if (ffcmd->start (SystemExec::MergeWithStdin)) {
 		ffexit ();
 		return false;

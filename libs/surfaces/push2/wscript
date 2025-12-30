@@ -2,12 +2,8 @@
 from waflib.extras import autowaf as autowaf
 import os
 
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     autowaf.check_pkg(conf, 'pangomm-1.4', uselib_store='PANGOMM', atleast_version='1.4', mandatory=True)
@@ -40,9 +36,6 @@ def build(bld):
     obj.includes     = ['.', '..', './push2']
     obj.name         = 'libardour_push2'
     obj.target       = 'ardour_push2'
-    obj.uselib       = 'CAIROMM PANGOMM USB GTKMM SIGCPP XML OSX'
-    obj.use          = 'libardour libardour_cp libardour_midisurface libgtkmm2ext libpbd libevoral libcanvas libtemporal'
+    obj.uselib       = 'CAIROMM PANGOMM USB SIGCPP XML OSX GLIBMM GIOMM'
+    obj.use          = 'libardour libardour_cp libardour_midisurface libgtkmm2ext libpbd libevoral libcanvas libtemporal libytkmm'
     obj.install_path = os.path.join(bld.env['LIBDIR'], 'surfaces')
-
-def shutdown():
-    autowaf.shutdown()

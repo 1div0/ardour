@@ -65,7 +65,7 @@ AutomationControl::AutomationControl(ARDOUR::Session&                          s
 	}
 	std::shared_ptr<AutomationList> al = alist();
 	if (al) {
-		al->StateChanged.connect_same_thread (_state_changed_connection, boost::bind (&Session::set_dirty, &_session));
+		al->StateChanged.connect_same_thread (_state_changed_connection, std::bind (&Session::set_dirty, &_session));
 	}
 }
 
@@ -153,13 +153,13 @@ AutomationControl::set_value (double val, PBD::Controllable::GroupControlDisposi
 	}
 }
 
-ControlList
+AutomationControlList
 AutomationControl::grouped_controls () const
 {
 	if (_group && _group->use_me (PBD::Controllable::UseGroup)) {
 		return _group->controls ();
 	} else {
-		return ControlList ();
+		return AutomationControlList ();
 	}
 }
 
@@ -368,6 +368,28 @@ std::string
 AutomationControl::get_user_string () const
 {
 	return ARDOUR::value_as_string (_desc, get_value());
+}
+
+bool
+AutomationControl::push_group (std::shared_ptr<ControlGroup> cg)
+{
+	if (_pushed_group) {
+		return false;
+	}
+
+	_pushed_group = _group;
+	_group = cg;
+
+	return true;
+}
+
+bool
+AutomationControl::pop_group ()
+{
+	_group = _pushed_group;
+	_pushed_group.reset ();
+
+	return true;
 }
 
 void

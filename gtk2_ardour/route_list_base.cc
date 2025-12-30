@@ -52,6 +52,7 @@
 #include "keyboard.h"
 #include "public_editor.h"
 #include "route_sorter.h"
+#include "rta_manager.h"
 #include "utils.h"
 
 #include "pbd/i18n.h"
@@ -83,6 +84,7 @@ RouteListBase::RouteListBase ()
 	setup_col (append_toggle (_columns.visible, _columns.noop_true, sigc::mem_fun (*this, &RouteListBase::on_tv_visible_changed)), S_("Visible|V"), _("Track/Bus visible ?"));
 	setup_col (append_toggle (_columns.trigger, _columns.is_track, sigc::mem_fun (*this, &RouteListBase::on_tv_trigger_changed)),  S_("Cues|C"), _("Visible on Cues window ?"));
 	setup_col (append_toggle (_columns.active, _columns.activatable, sigc::mem_fun (*this, &RouteListBase::on_tv_active_changed)), S_("Active|A"),  _("Track/Bus active ?"));
+	setup_col (append_toggle (_columns.rta_enabled, _columns.active, sigc::mem_fun (*this, &EditorRoutes::on_tv_rta_enable_toggled)), S_("RTA|RA"),  _("Realtime Analyzer active?"));
 
 	append_col_input_active ();
 	append_col_rec_enable ();
@@ -277,11 +279,11 @@ RouteListBase::set_session (Session* s)
 	initial_display ();
 
 	if (_session) {
-		_session->vca_manager ().VCAAdded.connect (_session_connections, invalidator (_scroller), boost::bind (&RouteListBase::add_masters, this, _1), gui_context ());
-		_session->RouteAdded.connect (_session_connections, invalidator (_scroller), boost::bind (&RouteListBase::add_routes, this, _1), gui_context ());
-		_session->SoloChanged.connect (_session_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
-		_session->RecordStateChanged.connect (_session_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
-		PresentationInfo::Change.connect (_session_connections, invalidator (_scroller), boost::bind (&RouteListBase::presentation_info_changed, this, _1), gui_context ());
+		_session->vca_manager ().VCAAdded.connect (_session_connections, invalidator (_scroller), std::bind (&RouteListBase::add_masters, this, _1), gui_context ());
+		_session->RouteAdded.connect (_session_connections, invalidator (_scroller), std::bind (&RouteListBase::add_routes, this, _1), gui_context ());
+		_session->SoloChanged.connect (_session_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+		_session->RecordStateChanged.connect (_session_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+		PresentationInfo::Change.connect (_session_connections, invalidator (_scroller), std::bind (&RouteListBase::presentation_info_changed, this, _1), gui_context ());
 	}
 }
 
@@ -374,6 +376,24 @@ RouteListBase::on_tv_solo_safe_toggled (std::string const& path_string)
 }
 
 void
+RouteListBase::on_tv_rta_enable_toggled (std::string const& path_string)
+{
+	Gtk::TreeModel::Row        row       = *_model->get_iter (Gtk::TreeModel::Path (path_string));
+	std::shared_ptr<Stripable> stripable = row[_columns.stripable];
+	std::shared_ptr<Route>     route     = std::dynamic_pointer_cast<Route> (stripable);
+
+	if (route) {
+		bool attached = RTAManager::instance ()->attached (route);
+		if (attached) {
+			RTAManager::instance ()->remove (route);
+		} else {
+			RTAManager::instance ()->attach (route);
+			ARDOUR_UI::instance()->show_realtime_analyzer ();
+		}
+	}
+}
+
+void
 RouteListBase::build_menu ()
 {
 	using namespace Menu_Helpers;
@@ -452,7 +472,7 @@ RouteListBase::on_tv_visible_changed (std::string const& path)
 			stripable->presentation_info ().set_hidden (hidden);
 
 			std::shared_ptr<Route> route = std::dynamic_pointer_cast<Route> (stripable);
-			RouteGroup*              rg    = route ? route->route_group () : 0;
+			std::shared_ptr<RouteGroup> rg (route ? route->route_group () : nullptr);
 			if (rg && rg->is_active () && rg->is_hidden ()) {
 				std::shared_ptr<RouteList> rl (rg->route_list ());
 				for (RouteList::const_iterator i = rl->begin (); i != rl->end (); ++i) {
@@ -579,13 +599,19 @@ RouteListBase::add_stripables (StripableList& slist)
 			if (route->is_monitor ()) {
 				continue;
 			}
+			if (route->is_surround_master ()) {
+				continue;
+			}
+			if (route->is_foldbackbus ()) {
+				continue;
+			}
 
 			row = *(_model->insert (insert_iter));
 
 			midi_trk = std::dynamic_pointer_cast<MidiTrack> (stripable);
 
 			row[_columns.is_track]    = (std::dynamic_pointer_cast<Track> (stripable) != 0);
-			row[_columns.activatable] = !stripable->is_master ();
+			row[_columns.activatable] = !stripable->is_singleton ();
 
 			if (midi_trk) {
 				row[_columns.is_input_active] = midi_trk->input_active ();
@@ -619,39 +645,40 @@ RouteListBase::add_stripables (StripableList& slist)
 		 * UI (e.g. track-height is not of any relevant to OSC)
 		 */
 
-		stripable->PropertyChanged.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::route_property_changed, this, _1, ws), gui_context ());
-		stripable->presentation_info ().PropertyChanged.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::route_property_changed, this, _1, ws), gui_context ());
+		stripable->PropertyChanged.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::route_property_changed, this, _1, ws), gui_context ());
+		stripable->presentation_info ().PropertyChanged.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::route_property_changed, this, _1, ws), gui_context ());
 
 		if (std::dynamic_pointer_cast<Track> (stripable)) {
 			std::shared_ptr<Track> t = std::dynamic_pointer_cast<Track> (stripable);
-			t->rec_enable_control ()->Changed.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
-			t->rec_safe_control ()->Changed.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			t->rec_enable_control ()->Changed.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			t->rec_safe_control ()->Changed.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
 		}
 
 		if (midi_trk) {
-			midi_trk->StepEditStatusChange.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
-			midi_trk->InputActiveChanged.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::update_input_active_display, this), gui_context ());
+			midi_trk->StepEditStatusChange.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			midi_trk->InputActiveChanged.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::update_input_active_display, this), gui_context ());
 		}
 
 		std::shared_ptr<AutomationControl> ac;
 
 		if ((ac = stripable->mute_control ()) != 0) {
-			ac->Changed.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			ac->Changed.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
 		}
 		if ((ac = stripable->solo_control ()) != 0) {
-			ac->Changed.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			ac->Changed.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
 		}
 		if ((ac = stripable->solo_isolate_control ()) != 0) {
-			ac->Changed.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			ac->Changed.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
 		}
 		if ((ac = stripable->solo_safe_control ()) != 0) {
-			ac->Changed.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			ac->Changed.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
 		}
 
 		if (route) {
-			route->active_changed.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			route->active_changed.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::queue_idle_update, this), gui_context ());
+			route->gui_changed.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::handle_gui_changes, this, _1), gui_context());
 		}
-		stripable->DropReferences.connect (_stripable_connections, invalidator (_scroller), boost::bind (&RouteListBase::remove_strip, this, ws), gui_context ());
+		stripable->DropReferences.connect (_stripable_connections, invalidator (_scroller), std::bind (&RouteListBase::remove_strip, this, ws), gui_context ());
 	}
 
 	queue_idle_update ();
@@ -1148,9 +1175,11 @@ RouteListBase::idle_update_mute_rec_solo_etc ()
 		(*i)[_columns.solo_isolate_state]      = RouteUI::solo_isolate_active_state (stripable) ? 1 : 0;
 		(*i)[_columns.solo_safe_state]         = RouteUI::solo_safe_active_state (stripable) ? 1 : 0;
 		if (route) {
-			(*i)[_columns.active] = route->active ();
+			(*i)[_columns.active]      = route->active ();
+			(*i)[_columns.rta_enabled] = RTAManager::instance ()->attached (route);
 		} else {
-			(*i)[_columns.active] = true;
+			(*i)[_columns.active]      = true;
+			(*i)[_columns.rta_enabled] = false;
 		}
 
 		std::shared_ptr<Track> trk (std::dynamic_pointer_cast<Track> (route));
@@ -1159,7 +1188,7 @@ RouteListBase::idle_update_mute_rec_solo_etc ()
 			std::shared_ptr<MidiTrack> mt = std::dynamic_pointer_cast<MidiTrack> (route);
 
 			if (trk->rec_enable_control ()->get_value ()) {
-				if (_session->record_status () == Session::Recording) {
+				if (_session->record_status () == Recording) {
 					(*i)[_columns.rec_state] = 1;
 				} else {
 					(*i)[_columns.rec_state] = 2;
@@ -1176,6 +1205,14 @@ RouteListBase::idle_update_mute_rec_solo_etc ()
 	}
 
 	return false; // do not call again (until needed)
+}
+
+void
+RouteListBase::handle_gui_changes (std::string const& what)
+{
+	if (what == "rta") {
+		queue_idle_update ();
+	}
 }
 
 void

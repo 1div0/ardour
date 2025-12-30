@@ -20,8 +20,7 @@
 #ifndef __ardour_mackie_control_protocol_subview_h__
 #define __ardour_mackie_control_protocol_subview_h__
 
-#include <boost/smart_ptr.hpp>
-
+#include "pbd/signals.h"
 #include "ardour/types.h"
 
 namespace ARDOUR {
@@ -30,11 +29,9 @@ namespace ARDOUR {
 	class PluginInsert;
 }
 
-namespace ArdourSurface {
+namespace ArdourSurface { namespace MACKIE_NAMESPACE {
 
 class MackieControlProtocol;
-
-namespace Mackie {
 
 class Pot;
 class Strip;
@@ -64,6 +61,7 @@ class Subview {
 	virtual Mode subview_mode () const = 0;
 	virtual void update_global_buttons() = 0;
 	virtual bool permit_flipping_faders_and_pots() { return false; }
+	virtual void init_params(){}
 	virtual void setup_vpot(
 		Strip* strip,
 		Pot* vpot,
@@ -125,11 +123,17 @@ class EQSubview : public Subview {
 	virtual Mode subview_mode () const { return Subview::EQ; }
 	static bool subview_mode_would_be_ok (std::shared_ptr<ARDOUR::Stripable> r, std::string& reason_why_not);
 	virtual void update_global_buttons();
+	virtual void init_params();
 	virtual void setup_vpot(
 		Strip* strip,
 		Pot* vpot,
 		std::string pending_display[2]);
 	void notify_change (std::weak_ptr<ARDOUR::AutomationControl>, uint32_t global_strip_position, bool force);
+	virtual bool handle_cursor_left_press();
+	virtual bool handle_cursor_right_press();
+  protected:
+	uint32_t _current_bank;
+	std::vector<std::pair<std::shared_ptr<ARDOUR::AutomationControl>, std::string>> available;
 };
 
 class DynamicsSubview : public Subview {
@@ -140,11 +144,17 @@ class DynamicsSubview : public Subview {
 	virtual Subview::Mode subview_mode () const { return Subview::Dynamics; }
 	static bool subview_mode_would_be_ok (std::shared_ptr<ARDOUR::Stripable> r, std::string& reason_why_not);
 	virtual void update_global_buttons();
+	virtual void init_params();
 	virtual void setup_vpot(
 		Strip* strip,
 		Pot* vpot,
 		std::string pending_display[2]);
 	void notify_change (std::weak_ptr<ARDOUR::AutomationControl>, uint32_t global_strip_position, bool force, bool propagate_mode_change);
+	virtual bool handle_cursor_left_press();
+	virtual bool handle_cursor_right_press();
+  protected:
+	uint32_t _current_bank;
+	std::vector<std::pair<std::shared_ptr<ARDOUR::AutomationControl>, std::string>> available;
 };
 
 class SendsSubview : public Subview {
@@ -161,6 +171,7 @@ class SendsSubview : public Subview {
 		Pot* vpot,
 		std::string pending_display[2]);
 	void notify_send_level_change (uint32_t global_strip_position, bool force);
+	void notify_send_enable_change (uint32_t global_strip_position, bool force);
 
 	virtual void handle_vselect_event(uint32_t global_strip_position);
 	virtual bool handle_cursor_right_press();

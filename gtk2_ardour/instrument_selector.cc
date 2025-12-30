@@ -19,7 +19,9 @@
 #include "pbd/convert.h"
 #include "pbd/enumwriter.h"
 
+#include "ardour/profile.h"
 #include "ardour/plugin_manager.h"
+
 #include "gtkmm2ext/gui_thread.h"
 
 #include "instrument_selector.h"
@@ -29,6 +31,8 @@
 using namespace Gtk;
 using namespace ARDOUR;
 
+sigc::signal<void> InstrumentSelector::DropPluginInfoPtr;
+
 InstrumentSelector::InstrumentSelector (InstrumentListDisposition disp)
 	: _reasonable_synth_id (0)
 	, _gmsynth_id (UINT32_MAX)
@@ -36,12 +40,29 @@ InstrumentSelector::InstrumentSelector (InstrumentListDisposition disp)
 {
 	refill ();
 
-	PluginManager::instance ().PluginListChanged.connect (_update_connection, invalidator (*this), boost::bind (&InstrumentSelector::refill, this), gui_context());
+	PluginManager::instance ().PluginListChanged.connect (_update_connection, invalidator (*this), std::bind (&InstrumentSelector::refill, this), gui_context());
+	DropPluginInfoPtr.connect (sigc::mem_fun (*this, &InstrumentSelector::drop_plugin_ptr));
+}
+
+void
+InstrumentSelector::drop_plugin_ptr()
+{
+	unset_model ();
+	clear ();
+	if (_instrument_list) {
+		_instrument_list->clear ();
+	}
 }
 
 void
 InstrumentSelector::refill()
 {
+	/* XXX conditional can be removed once livetrax has its own simple add
+	   tracks dialog.
+	*/
+	if (Profile->get_livetrax()) {
+		return;
+	}
 	TreeModel::iterator iter = get_active();
 	std::string selected;
 	if (iter) {
@@ -87,6 +108,9 @@ invalid_instrument (PluginInfoPtr p) {
 		return true;
 	}
 	if (manager.get_status(p) == PluginManager::Concealed) {
+		return true;
+	}
+	if (p->is_internal ()) {
 		return true;
 	}
 	return !p->is_instrument();

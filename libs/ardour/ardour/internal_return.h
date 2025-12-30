@@ -19,8 +19,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_internal_return_h__
-#define __ardour_internal_return_h__
+#pragma once
 
 #include <list>
 
@@ -34,7 +33,7 @@ class InternalSend;
 class LIBARDOUR_API InternalReturn : public Processor
 {
 public:
-	InternalReturn (Session&, Temporal::TimeDomain, std::string const& name = "Return");
+	InternalReturn (Session&, Temporal::TimeDomainProvider const &, std::string const& name = "Return");
 
 	void run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, double speed, pframes_t nframes, bool);
 	bool configure_io (ChanCount, ChanCount);
@@ -57,4 +56,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif /* __ardour_internal_return_h__ */

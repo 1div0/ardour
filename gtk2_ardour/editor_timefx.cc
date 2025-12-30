@@ -51,10 +51,8 @@
 #include "region_selection.h"
 #include "time_fx_dialog.h"
 
-#ifdef USE_RUBBERBAND
 #include <rubberband/RubberBandStretcher.h>
 using namespace RubberBand;
-#endif
 
 #include "pbd/i18n.h"
 
@@ -66,7 +64,7 @@ using namespace Gtkmm2ext;
 
 /** @return -1 in case of error, 1 if operation was cancelled by the user, 0 if everything went ok */
 int
-Editor::time_stretch (RegionSelection& regions, Temporal::ratio_t const & ratio)
+Editor::time_stretch (RegionSelection& regions, Temporal::ratio_t const & ratio, bool fixed_end)
 {
 	RegionList audio;
 	RegionList midi;
@@ -81,13 +79,13 @@ Editor::time_stretch (RegionSelection& regions, Temporal::ratio_t const & ratio)
 		}
 	}
 
-	int aret = time_fx (audio, ratio, false);
+	int aret = time_fx (audio, ratio, false, fixed_end);
 	if (aret < 0) {
 		abort_reversible_command ();
 		return aret;
 	}
 
-	set<std::shared_ptr<Playlist> > midi_playlists_affected;
+	PlaylistSet midi_playlists_affected;
 
 	for (RegionList::iterator i = midi.begin(); i != midi.end(); ++i) {
 		std::shared_ptr<Playlist> playlist = (*i)->playlist();
@@ -111,12 +109,18 @@ Editor::time_stretch (RegionSelection& regions, Temporal::ratio_t const & ratio)
 		MidiStretch stretch (*_session, request);
 		stretch.run (*i);
 
-		playlist->replace_region (regions.front()->region(), stretch.results[0],
-		                          regions.front()->region()->position());
+		timepos_t newpos;
+
+		if (fixed_end)
+			newpos = regions.front()->region()->end().earlier(stretch.results[0]->length());
+		else
+			newpos = regions.front()->region()->position();
+
+		playlist->replace_region (regions.front()->region(), stretch.results[0], newpos);
 		midi_playlists_affected.insert (playlist);
 	}
 
-	for (set<std::shared_ptr<Playlist> >::iterator p = midi_playlists_affected.begin(); p != midi_playlists_affected.end(); ++p) {
+	for (PlaylistSet::iterator p = midi_playlists_affected.begin(); p != midi_playlists_affected.end(); ++p) {
 		PBD::StatefulDiffCommand* cmd = new StatefulDiffCommand (*p);
 		_session->add_command (cmd);
 		if (!cmd->empty ()) {
@@ -144,7 +148,7 @@ Editor::pitch_shift (RegionSelection& regions, float fraction)
 
 	begin_reversible_command (_("pitch shift"));
 
-	int ret = time_fx (rl, fraction, true);
+	int ret = time_fx (rl, fraction, true, false);
 
 	if (ret > 0) {
 		commit_reversible_command ();
@@ -159,7 +163,7 @@ Editor::pitch_shift (RegionSelection& regions, float fraction)
  *  @param pitching true to pitch shift, false to time stretch.
  *  @return -1 in case of error, otherwise number of regions processed */
 int
-Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
+Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching, bool fixed_end)
 {
 	delete current_timefx;
 
@@ -172,7 +176,7 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 	const timecnt_t newlen = regions.front()->length().scale (ratio);
 	const timepos_t pos = regions.front()->position ();
 
-	current_timefx = new TimeFXDialog (*this, pitching, oldlen, newlen, ratio, pos);
+	current_timefx = new TimeFXDialog (*this, pitching, oldlen, newlen, ratio, pos, fixed_end);
 	current_timefx->regions = regions;
 
 	switch (current_timefx->run ()) {
@@ -194,7 +198,6 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 		return 0;
 	}
 
-#ifdef USE_RUBBERBAND
 	/* parse options */
 
 	RubberBandStretcher::Options options = 0;
@@ -218,14 +221,14 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 
 	txt = current_timefx->stretch_opts_selector.get_active_text ();
 
-	for (size_t i = 0; i < rb_opt_strings.size(); i++) {
-		if (txt == rb_opt_strings[i]) {
-			rb_current_opt = i;
+	for (size_t i = 0; i < timefx_opt_strings.size(); i++) {
+		if (txt == timefx_opt_strings[i]) {
+			timefx_mode = i;
 			break;
 		}
 	}
 
-	int rb_mode = rb_current_opt;
+	int mode = timefx_mode;
 
 	if (pitching /*&& rb_current_opt == 6*/) {
 		/* The timefx dialog does not show the "stretch_opts_selector"
@@ -246,10 +249,10 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 		 *   -c 5   default processing options
 		 *   -c 6   equivalent to --no-lamination --window-short (may be good for drums)
 		 */
-		rb_mode = 4;
+		mode = 4;
 	}
 
-	switch (rb_mode) {
+	switch (mode) {
 		case 0:
 			transients = NoTransients; peaklock = false; longwin = true; shortwin = false;
 			break;
@@ -273,9 +276,12 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 			shortwin = true;
 			// peaklock = false;
 			break;
-	#ifdef HAVE_SOUNDTOUCH
 		case 7:
-			current_timefx->request.use_soundtouch = true;
+			current_timefx->request.algorithm = TimeFXRequest::StaffPad;
+			break;
+	#ifdef HAVE_SOUNDTOUCH
+		case 8:
+			current_timefx->request.algorithm = TimeFXRequest::SoundTouch;
 			break;
 	#endif
 		default:
@@ -310,10 +316,12 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 #endif
 
 	current_timefx->request.opts = (int) options;
-#else
+
+#ifdef HAVE_SOUNDTOUCH
 	current_timefx->request.quick_seek = current_timefx->quick_button.get_active();
 	current_timefx->request.antialias = !current_timefx->antialias_button.get_active();
 #endif
+
 	current_timefx->request.done = false;
 	current_timefx->request.cancel = false;
 
@@ -355,7 +363,7 @@ Editor::time_fx (RegionList& regions, Temporal::ratio_t ratio, bool pitching)
 }
 
 void
-Editor::do_timefx ()
+Editor::do_timefx (bool fixed_end)
 {
 	typedef std::map<std::shared_ptr<Region>, std::shared_ptr<Region> > ResultMap;
 	ResultMap results;
@@ -380,19 +388,19 @@ Editor::do_timefx ()
 		if (current_timefx->pitching) {
 			fx = new Pitch (*_session, current_timefx->request);
 		} else {
-#ifdef USE_RUBBERBAND
-		#ifdef HAVE_SOUNDTOUCH
-			if (current_timefx->request.use_soundtouch) {
-				fx = new STStretch (*_session, current_timefx->request);
-			} else {
-				fx = new RBStretch (*_session, current_timefx->request);
-			}
-		#else
-			fx = new RBStretch (*_session, current_timefx->request);
-		#endif
-#else
-			fx = new STStretch (*_session, current_timefx->request);
+			switch (current_timefx->request.algorithm) {
+				case TimeFXRequest::StaffPad:
+					fx = new SPStretch (*_session, current_timefx->request);
+					break;
+#ifdef HAVE_SOUNDTOUCH
+				case TimeFXRequest::SoundTouch:
+					fx = new STStretch (*_session, current_timefx->request);
+					break;
 #endif
+				default:
+					fx = new RBStretch (*_session, current_timefx->request);
+					break;
+			}
 		}
 
 		current_timefx->descend (1.0 / N);
@@ -426,7 +434,11 @@ Editor::do_timefx ()
 			std::shared_ptr<Playlist> playlist = region->playlist();
 
 			playlist->clear_changes ();
-			playlist->replace_region (region, new_region, region->position());
+			if (fixed_end)
+				playlist->replace_region (region, new_region, region->end ().earlier(new_region->length ()));
+			else
+				playlist->replace_region (region, new_region, region->position());
+
 			PBD::StatefulDiffCommand* cmd = new StatefulDiffCommand (playlist);
 			_session->add_command (cmd);
 			if (!cmd->empty ()) {
@@ -449,7 +461,7 @@ Editor::timefx_thread (void *arg)
 
 	pthread_setcanceltype (PTHREAD_CANCEL_ASYNCHRONOUS, 0);
 
-	tsd->editor.do_timefx ();
+	tsd->editor.do_timefx (tsd->fixed_end);
 
 	/* GACK! HACK! sleep for a bit so that our request buffer for the GUI
 	   event loop doesn't die before any changes we made are processed

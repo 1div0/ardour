@@ -20,8 +20,8 @@
 #include "pbd/compose.h"
 #include <algorithm>
 
-#include <gtkmm/menu.h>
-#include <gtkmm/menuitem.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/menuitem.h>
 
 #include "gtkmm2ext/actions.h"
 #include "gtkmm2ext/gui_thread.h"
@@ -30,12 +30,13 @@
 
 #include "widgets/tooltips.h"
 
+#include "ardour/audioregion.h"
 #include "ardour/location.h"
 #include "ardour/profile.h"
 #include "ardour/session.h"
 
 #include "audio_clock.h"
-#include "automation_line.h"
+#include "editor_automation_line.h"
 #include "control_point.h"
 #include "editor.h"
 #include "region_view.h"
@@ -110,6 +111,8 @@ AudioTriggerPropertiesBox::AudioTriggerPropertiesBox ()
 	eTempoBox->set_edge_color (0x000000ff); // black
 	eTempoBox->add (*bpm_table);
 
+	eTempoBox->show_all();
+
 	/* -------------- Clip start&length (redundant with the trimmer gui handles?)  ----------*/
 	row = 0;
 
@@ -142,9 +145,9 @@ AudioTriggerPropertiesBox::AudioTriggerPropertiesBox ()
 	_stretch_selector.set_text ("??");
 	_stretch_selector.set_name ("generic button");
 	_stretch_selector.set_sizing_text (TriggerUI::longest_stretch_mode);
-	_stretch_selector.AddMenuElem (MenuElem (TriggerUI::stretch_mode_to_string(Trigger::Crisp),  sigc::bind (sigc::mem_fun(*this, &AudioTriggerPropertiesBox::set_stretch_mode), Trigger::Crisp)));
-	_stretch_selector.AddMenuElem (MenuElem (TriggerUI::stretch_mode_to_string(Trigger::Mixed),  sigc::bind (sigc::mem_fun(*this, &AudioTriggerPropertiesBox::set_stretch_mode), Trigger::Mixed)));
-	_stretch_selector.AddMenuElem (MenuElem (TriggerUI::stretch_mode_to_string(Trigger::Smooth), sigc::bind (sigc::mem_fun(*this, &AudioTriggerPropertiesBox::set_stretch_mode), Trigger::Smooth)));
+	_stretch_selector.add_menu_elem (MenuElem (TriggerUI::stretch_mode_to_string(Trigger::Crisp),  sigc::bind (sigc::mem_fun(*this, &AudioTriggerPropertiesBox::set_stretch_mode), Trigger::Crisp)));
+	_stretch_selector.add_menu_elem (MenuElem (TriggerUI::stretch_mode_to_string(Trigger::Mixed),  sigc::bind (sigc::mem_fun(*this, &AudioTriggerPropertiesBox::set_stretch_mode), Trigger::Mixed)));
+	_stretch_selector.add_menu_elem (MenuElem (TriggerUI::stretch_mode_to_string(Trigger::Smooth), sigc::bind (sigc::mem_fun(*this, &AudioTriggerPropertiesBox::set_stretch_mode), Trigger::Smooth)));
 
 	_stretch_toggle.signal_clicked.connect (sigc::mem_fun (*this, &AudioTriggerPropertiesBox::toggle_stretch));
 
@@ -197,6 +200,10 @@ AudioTriggerPropertiesBox::set_session (Session* s)
 {
 	SessionHandlePtr::set_session (s);
 
+	if (!s) {
+		return;
+	}
+
 	_length_clock.set_session (s);
 	_start_clock.set_session (s);
 }
@@ -224,8 +231,14 @@ AudioTriggerPropertiesBox::on_trigger_changed (const PBD::PropertyChange& pc)
 		_start_clock.set_mode (mode);
 		_length_clock.set_mode (mode);
 
-		_start_clock.set (at->start_offset ());
-		_length_clock.set (at->current_length ()); // set_duration() ?
+		std::shared_ptr<AudioRegion> ar (std::dynamic_pointer_cast<AudioRegion> (at->the_region()));
+		if (ar) {
+			_start_clock.set (ar->start());
+			_length_clock.set (timepos_t (ar->length()));
+		} else {
+			_start_clock.set (timepos_t (0));
+			_length_clock.set (timepos_t (0));
+		}
 	}
 
 	if ( pc.contains (Properties::tempo_meter) || pc.contains (Properties::follow_length)) {
@@ -299,11 +312,11 @@ AudioTriggerPropertiesBox::beats_changed ()
 void
 AudioTriggerPropertiesBox::start_clock_changed ()
 {
-	trigger()->set_start(_start_clock.last_when());
+	/* XXX do something, probably to the region */
 }
 
 void
 AudioTriggerPropertiesBox::length_clock_changed ()
 {
-	trigger()->set_length(_length_clock.current_duration());  //?
+	/* XXX do something, probably to the region */
 }

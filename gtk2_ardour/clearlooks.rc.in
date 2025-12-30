@@ -58,14 +58,16 @@ style "default" = "medium_text"
   GtkScrollbar        :: arrow-scaling                    = 0.4               # [             0.5 ] ( 0.1  ) The arrow size proportion relative to the scroll button size.
   GtkScrollbar        :: fixed-slider-length              = 0                 # [               0 ] ( bool ) Don't change slider size, just lock it to the minimum length.
   GtkScrollbar        :: min-slider-length                = 50                # [              21 ] ( >= 0 ) Minimum length of scrollbar slider.
-  GtkScrollbar        :: slider-width                     = 15                # [              14 ] ( >= 0 ) Width of scrollbar or scale thumb.
+  GtkScrollbar        :: slider-width                     = 10                # [              14 ] ( >= 0 ) Width of scrollbar or scale thumb.
   GtkScrollbar        :: stepper-spacing                  = 0                 # [               0 ] ( >= 0 ) The spacing between the stepper buttons and thumb. Note that setting this value to anything > 0 will automatically set the trough-under-steppers style property to TRUE as well. Also, stepper-spacing won't have any effect if there are no steppers.
   GtkScrollbar        :: trough-border                    = 0                 # [               1 ] ( >= 0 ) Spacing between thumb/steppers and outer trough bevel.
+  GtkScrollbar        :: focus-line-width                 = 0
+  GtkScrollbar        :: focus-padding                    = 0
   GtkScrollbar        :: trough-side-details              = 0                 # [               0 ] ( bool ) When TRUE, the parts of the trough on the two sides of the slider are drawn with different details.
   GtkScrollbar        :: trough-under-steppers            = 1                 # [               1 ] ( bool ) Whether to draw the trough across the full length of the range or to exclude the steppers and their spacing. Note that setting the "stepper-spacing" style property to any value > 0 will automatically enable trough-under-steppers too.
 
-  GtkScrollbar        :: has-backward-stepper             = 1                 # [               1 ] ( bool ) Display the standard backward arrow button.
-  GtkScrollbar        :: has-forward-stepper              = 1                 # [               1 ] ( bool ) Display the standard forward arrow button.
+  GtkScrollbar        :: has-backward-stepper             = 0                 # [               1 ] ( bool ) Display the standard backward arrow button.
+  GtkScrollbar        :: has-forward-stepper              = 0                 # [               1 ] ( bool ) Display the standard forward arrow button.
   GtkScrollbar        :: has-secondary-backward-stepper   = 0                 # [               0 ] ( bool ) Display a second backward arrow button on the opposite end of the scrollbar.
   GtkScrollbar        :: has-secondary-forward-stepper    = 0                 # [               0 ] ( bool ) Display a second forward arrow button on the opposite end of the scrollbar.
 
@@ -250,16 +252,22 @@ style "treeview_display" = "small_bold_text"
 
 style "track_header_inactive"  = "large_text"
 {
-        bg[NORMAL] =      @track_header_inactive
+	bg[NORMAL] =      @track_header_inactive
 	bg[ACTIVE] =      @track_header_inactive
 	bg[INSENSITIVE] = @track_header_inactive
 	bg[SELECTED] =    @track_header_inactive
 	bg[PRELIGHT] =    @track_header_inactive
 }
 
+style "track_header_inactive_selected" = "track_header_inactive"
+{
+	bg[NORMAL] = mix(0.7,@track_header_inactive,@track_header_selected)
+	bg[SELECTED] = mix(0.7,@track_header_inactive,@track_header_selected)
+}
+
 style "track_header_selected" = "track_header"
 {
-        bg[NORMAL] = @track_header_selected
+	bg[NORMAL] = @track_header_selected
 	bg[ACTIVE] = @track_header_selected
 	bg[INSENSITIVE] = @track_header_selected
 	bg[SELECTED] = @track_header_selected
@@ -282,7 +290,7 @@ style "inspector_processor_list" = "processor_list"
 
 style "time_info_box"
 {
-        bg[NORMAL] = { 0.00, 0.00, 0.00 }
+        bg[NORMAL] = @darkest
 }
 
 style "status_bar_box"
@@ -290,7 +298,12 @@ style "status_bar_box"
         bg[NORMAL] = @background
 }
 
-style "very_small_text"
+style "smaller_text"
+{
+	font_name = "@FONTFAMILY@ @FONT_VERYSMALL@"
+}
+
+style "smaller_text"
 {
 	font_name = "@FONTFAMILY@ @FONT_SMALLER@"
 }
@@ -386,7 +399,7 @@ style "verbose_canvas_cursor" = "big_bold_text"
 {
 }
 
-style "marker_text" = "small text"
+style "marker_text" = "small_text"
 {
 }
 
@@ -400,7 +413,7 @@ style "midi_tracer_textview" = "medium_monospace_text"
 
 }
 
-style "time_axis_view_item_name" = "very small text"
+style "time_axis_view_item_name" = "smaller_text"
 {
 }
 
@@ -409,7 +422,7 @@ style "midi_tracer_textview" = "medium_monospace_text"
 
 }
 
-style "time_axis_view_item_name" = "very small text"
+style "time_axis_view_item_name" = "smaller_text"
 {
 }
 style "contrasting_popup" = "medium_monospace_text"
@@ -506,15 +519,15 @@ style "meterbridge_label" = "small_text"
 {
 }
 
-style "midi_device" = "very_small_text"
+style "midi_device" = "smaller_text"
 {
 }
 
-style "solo_isolate" = "very_small_text"
+style "solo_isolate" = "smaller_text"
 {
 }
 
-style "solo_safe" = "very_small_text"
+style "solo_safe" = "smaller_text"
 {
 }
 
@@ -547,7 +560,7 @@ style "midi_channel_selector_button"
 	fg[ACTIVE] = @light_text_on_dark
 }
 
-style "shuttle_control" = "very_small_text"
+style "shuttle_control" = "smaller_text"
 {
 	fg[NORMAL] = @control_text2
 	fg[ACTIVE] = @control_text2
@@ -564,8 +577,9 @@ style "shuttle_control" = "very_small_text"
 
 style "ardour_adjusters" = "default_generic"
 {
-	bg[NORMAL] = @background
-	bg[PRELIGHT] = lighter(@background)
+	# this is the color of the slider
+	bg[NORMAL] = @scrollbar_slider
+	# this is the color of the trough
 	bg[ACTIVE] = @darkest
 }
 
@@ -606,7 +620,7 @@ style "font_scale_slider" = "default"
   bg[NORMAL] = shade(1.4, @background)
 }
 
-style "very_small_bright_when_active" = "very_small_text"
+style "very_small_bright_when_active" = "smaller_text"
 {
 	fg[NORMAL] = @foreground
 	bg[NORMAL] = @background
@@ -761,14 +775,14 @@ style "small_red_on_black_entry"  = "small_bold_text"
 	bg[ACTIVE] = @bases
 }
 
-style "audio_bus_base" = "very_small_text"
+style "audio_bus_base" = "smaller_text"
 {
 	fg[NORMAL] = @foreground
 	bg[NORMAL] = @audio_bus
 	bg[ACTIVE] = @background
 }
 
-style "foldback_bus_base" = "very_small_text"
+style "foldback_bus_base" = "smaller_text"
 {
 	fg[NORMAL] = @foreground
 	bg[NORMAL] = @foldback_bg
@@ -897,7 +911,7 @@ style "track_name_editor" = "medium_text"
 
 style "track_separator"
 {
-	bg[NORMAL] = lighter(@background)
+	bg[NORMAL] = darker(@background)
 }
 
 # Plugin Editors
@@ -933,7 +947,7 @@ style "plugin_slider"
 	text[PRELIGHT] = @texts
 }
 
-style "processor_control_button"  = "very_small_text"
+style "processor_control_button"  = "smaller_text"
 {
 }
 
@@ -961,11 +975,17 @@ style "inspector_track_list_display" = "track_list_display"
 
 }
 
-style "processor_list" = "very_small_text"
+style "processor_list" = "smaller_text"
 {
 	bg[NORMAL] = @bases
 	bg[ACTIVE] = shade (1.8, @fg_selected)
 	fg[ACTIVE] = @bases
+}
+style "processor_scroller"
+{
+	bg[ACTIVE] = @bases
+	ythickness = 1
+	xthickness = 0
 }
 
 # MixerPanZone:
@@ -996,7 +1016,7 @@ style "selected_strip_frame"
 	bg[NORMAL] = darker(@bright_indicator)
 }
 
-style "flashing_alert" = "very_small_text"
+style "flashing_alert" = "smaller_text"
 {
 	GtkButton::child-displacement-x = 0
 	GtkButton::child-displacement-y = 0
@@ -1051,6 +1071,9 @@ style "tooltip" = "medium_text"
 {
 	fg[NORMAL] = @fg_tooltip
 	bg[NORMAL] = @bg_tooltip
+	bg[SELECTED] = @bg_tooltip
+	xthickness = 4
+	ythickness = 4
 }
 
 style "default_toggle_button"
@@ -1084,9 +1107,10 @@ style "settings_notebook" = "big_text"
 
 style "pane"
 {
-      fg[NORMAL] = lighter(@background)
-      fg[SELECTED] = @foreground
-      fg[ACTIVE] = @somewhat_bright_indicator
+	fg[NORMAL] = lighter(@background)
+	fg[SELECTED] = @foreground
+	fg[ACTIVE] = @somewhat_bright_indicator
+	bg[ACTIVE] = shade(1.2, @background)
 }
 
 style "vca_label_bar" = "medium_bold_text"
@@ -1110,6 +1134,7 @@ widget "*MarkerText" style:highest "marker_text"
 widget "*ArdourContextMenu*" style:highest "default_menu"
 
 widget "*mixer strip button" style:highest "very_small_button"
+widget "*editor ruler button" style:highest "very_small_button"
 
 widget "*AddRouteDialogSpinner" style:highest "ardour_adjusters"
 widget "*OptionsNotebook" style:highest "preferences"
@@ -1193,8 +1218,10 @@ widget "*CrossfadeEditCurveButton*" style:highest "bright_when_active"
 widget "*CrossfadeEditFrame" style:highest "base_frame"
 widget "*AudioTrackControlsBaseInactiveUnselected" style:highest "track_header_inactive"
 widget "*BusControlsBaseInactiveUnselected" style:highest "track_header_inactive"
-widget "*AudioTrackControlsBaseInactiveSelected" style:highest "track_header_inactive"
-widget "*BusControlsBaseInactiveSelected" style:highest "track_header_inactive"
+widget "*MidiTrackControlsBaseInactiveUnselected" style:highest "track_header_inactive"
+widget "*AudioTrackControlsBaseInactiveSelected" style:highest "track_header_inactive_selected"
+widget "*BusControlsBaseInactiveSelected" style:highest "track_header_inactive_selected"
+widget "*MidiTrackControlsBaseInactiveSelected" style:highest "track_header_inactive_selected"
 widget "*AudioTrackControlsBaseSelected" style:highest "track_header_selected"
 widget "*MidiTrackControlsBaseSelected" style:highest "track_header_selected"
 widget "*BusControlsBaseSelected" style:highest "track_header_selected"
@@ -1254,6 +1281,7 @@ widget "*LocationEditRemoveButton*" style:highest "location_row_button"
 widget "*ChannelCountSelector" style:highest "medium_bold_entry"
 widget "*RegionListWholeFile" style:highest "treeview_parent_node"
 widget "*ProcessorList*" style:highest "processor_list"
+widget "*ProcessorScroller*" style:highest "processor_scroller"
 widget "*PortMatrixLabel*" style:highest "small_text"
 widget "*MainMenuBar" style:highest "status_bar_box"
 widget "*midi device" style:highest "midi_device"
@@ -1279,6 +1307,6 @@ widget "*Pane.Divider" style:highest "pane"
 widget "*VCALabelBar*" style:highest "vca_label_bar"
 widget "*TextOnBackground" style:highest "text_on_bg"
 widget "*LargeTextEntry" style:highest "large_text"
-widget "*LargeTextEntry*" style:highest "large_text"
+widget "*BigTextEntry*" style:highest "big_text"
 
 widget "*ShadedEntry" style:highest "shaded_entry"

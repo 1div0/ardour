@@ -183,9 +183,10 @@ class DummyMidiPort : public DummyPort {
 		DummyMidiData::MIDISequence const * _midi_seq_dat;
 }; // class DummyMidiPort
 
-class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
+class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl
+{
 	public:
-	         DummyAudioBackend (AudioEngine& e, AudioBackendInfo& info);
+		DummyAudioBackend (AudioEngine& e, AudioBackendInfo& info);
 		~DummyAudioBackend ();
 
 		bool is_running () const { return _running; }
@@ -203,8 +204,6 @@ class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		std::vector<DeviceStatus> enumerate_devices () const;
 		std::vector<float> available_sample_rates (const std::string& device) const;
 		std::vector<uint32_t> available_buffer_sizes (const std::string& device) const;
-		uint32_t available_input_channel_count (const std::string& device) const;
-		uint32_t available_output_channel_count (const std::string& device) const;
 
 		bool can_change_sample_rate_when_running () const;
 		bool can_change_buffer_size_when_running () const;
@@ -214,8 +213,6 @@ class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		int set_sample_rate (float);
 		int set_buffer_size (uint32_t);
 		int set_interleaved (bool yn);
-		int set_input_channels (uint32_t);
-		int set_output_channels (uint32_t);
 		int set_systemic_input_latency (uint32_t);
 		int set_systemic_output_latency (uint32_t);
 		int set_systemic_midi_input_latency (std::string const, uint32_t) { return 0; }
@@ -228,8 +225,6 @@ class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		float        sample_rate () const;
 		uint32_t     buffer_size () const;
 		bool         interleaved () const;
-		uint32_t     input_channels () const;
-		uint32_t     output_channels () const;
 		uint32_t     systemic_input_latency () const;
 		uint32_t     systemic_output_latency () const;
 		uint32_t     systemic_midi_input_latency (std::string const) const { return 0; }
@@ -271,7 +266,7 @@ class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		samplepos_t sample_time_at_cycle_start ();
 		pframes_t samples_since_cycle_start ();
 
-		int create_process_thread (boost::function<void()> func);
+		int create_process_thread (std::function<void()> func);
 		int join_process_threads ();
 		bool in_process_thread ();
 		uint32_t process_thread_count ();
@@ -310,6 +305,10 @@ class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 	bool        connected_to (PortEngine::PortHandle ph, const std::string& other, bool process_callback_safe) { return PortEngineSharedImpl::connected_to (ph, other, process_callback_safe); }
 	bool        physically_connected (PortEngine::PortHandle ph, bool process_callback_safe) { return PortEngineSharedImpl::physically_connected (ph, process_callback_safe); }
 	int         get_connections (PortEngine::PortHandle ph, std::vector<std::string>& results, bool process_callback_safe) { return PortEngineSharedImpl::get_connections (ph, results, process_callback_safe); }
+
+	XMLNode* get_state () const;
+	int      set_state (XMLNode const&, int);
+	bool     match_state (XMLNode const&, int version);
 
 
 		/* MIDI */
@@ -350,7 +349,8 @@ class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		struct DriverSpeed {
 			std::string name;
 			float speedup;
-			DriverSpeed (const std::string& n, float s) : name (n), speedup (s) {}
+			bool realtime;
+			DriverSpeed (const std::string& n, float s, bool r = false) : name (n), speedup (s), realtime (r) {}
 		};
 
 		std::string _instance_name;
@@ -361,6 +361,7 @@ class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		bool  _running;
 		bool  _freewheel;
 		bool  _freewheeling;
+		bool  _realtime;
 		float _speedup;
 
 		std::string _device;
@@ -391,10 +392,10 @@ class DummyAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 
 		struct ThreadData {
 			DummyAudioBackend* engine;
-			boost::function<void ()> f;
+			std::function<void ()> f;
 			size_t stacksize;
 
-			ThreadData (DummyAudioBackend* e, boost::function<void ()> fp, size_t stacksz)
+			ThreadData (DummyAudioBackend* e, std::function<void ()> fp, size_t stacksz)
 				: engine (e) , f (fp) , stacksize (stacksz) {}
 		};
 

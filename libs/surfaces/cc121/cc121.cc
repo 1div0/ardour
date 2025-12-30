@@ -57,6 +57,7 @@
 #include "ardour/session.h"
 #include "ardour/session_configuration.h"
 #include "ardour/track.h"
+#include "ardour/well_known_enum.h"
 
 #include "cc121.h"
 
@@ -68,7 +69,7 @@ using namespace std;
 
 #include "pbd/i18n.h"
 
-#include "pbd/abstract_ui.cc" // instantiate template
+#include "pbd/abstract_ui.inc.cc" // instantiate template
 
 CC121::CC121 (Session& s)
 	: ControlProtocol (s, _("Steinberg CC121"))
@@ -116,7 +117,7 @@ CC121::CC121 (Session& s)
 
 
 	/* Catch port connections and disconnections */
-	ARDOUR::AudioEngine::instance()->PortConnectedOrDisconnected.connect (port_connection, MISSING_INVALIDATOR, boost::bind (&CC121::connection_handler, this, _1, _2, _3, _4, _5), this);
+	ARDOUR::AudioEngine::instance()->PortConnectedOrDisconnected.connect (port_connection, MISSING_INVALIDATOR, std::bind (&CC121::connection_handler, this, _1, _2, _3, _4, _5), this);
 	buttons.insert (std::make_pair (EButton, Button (*this, _("EButton"), EButton)));
 	buttons.insert (std::make_pair (OpenVST, Button (*this, _("OpenVST"), OpenVST)));
 	buttons.insert (std::make_pair (InputMonitor, Button (*this, _("InputMonitor"), InputMonitor)));
@@ -152,30 +153,30 @@ CC121::CC121 (Session& s)
 	buttons.insert (std::make_pair (Footswitch, Button (*this, _("Footswitch"), Footswitch)));
 	buttons.insert (std::make_pair (FaderTouch, Button (*this, _("Fader (touch)"), FaderTouch)));
 
-	get_button (Left).set_action ( boost::bind (&CC121::left, this), true);
-	get_button (Right).set_action ( boost::bind (&CC121::right, this), true);
+	get_button (Left).set_action ( std::bind (&CC121::left, this), true);
+	get_button (Right).set_action ( std::bind (&CC121::right, this), true);
 
-	get_button (FP_Read).set_action (boost::bind (&CC121::read, this), true);
-	get_button (FP_Write).set_action (boost::bind (&CC121::write, this), true);
-	get_button (EButton).set_action (boost::bind (&CC121::touch, this), true);
-	get_button (OpenVST).set_action (boost::bind (&CC121::off, this), true);
+	get_button (FP_Read).set_action (std::bind (&CC121::read, this), true);
+	get_button (FP_Write).set_action (std::bind (&CC121::write, this), true);
+	get_button (EButton).set_action (std::bind (&CC121::touch, this), true);
+	get_button (OpenVST).set_action (std::bind (&CC121::off, this), true);
 
-	get_button (Play).set_action (boost::bind (&BasicUI::transport_play, this, true), true);
-	get_button (ToStart).set_action (boost::bind (&BasicUI::prev_marker, this), true);
-	get_button (ToEnd).set_action (boost::bind (&BasicUI::next_marker, this), true);
-	get_button (RecEnable).set_action (boost::bind (&BasicUI::rec_enable_toggle, this), true);
-	get_button (Stop).set_action (boost::bind (&BasicUI::transport_stop, this), true);
-	get_button (Ffwd).set_action (boost::bind (&BasicUI::ffwd, this), true);
+	get_button (Play).set_action (std::bind (&BasicUI::transport_play, this, true), true);
+	get_button (ToStart).set_action (std::bind (&BasicUI::prev_marker, this), true);
+	get_button (ToEnd).set_action (std::bind (&BasicUI::next_marker, this), true);
+	get_button (RecEnable).set_action (std::bind (&BasicUI::rec_enable_toggle, this), true);
+	get_button (Stop).set_action (std::bind (&BasicUI::transport_stop, this), true);
+	get_button (Ffwd).set_action (std::bind (&BasicUI::ffwd, this), true);
 
-	get_button (Rewind).set_action (boost::bind (&BasicUI::rewind, this), true);
-	get_button (Loop).set_action (boost::bind (&BasicUI::loop_toggle, this), true);
+	get_button (Rewind).set_action (std::bind (&BasicUI::rewind, this), true);
+	get_button (Loop).set_action (std::bind (&BasicUI::loop_toggle, this), true);
 
-	get_button (Jog).set_action (boost::bind (&CC121::jog, this), true);
-	get_button (Mute).set_action (boost::bind (&CC121::mute, this), true);
-	get_button (Solo).set_action (boost::bind (&CC121::solo, this), true);
-	get_button (Rec).set_action (boost::bind (&CC121::rec_enable, this), true);
+	get_button (Jog).set_action (std::bind (&CC121::jog, this), true);
+	get_button (Mute).set_action (std::bind (&CC121::mute, this), true);
+	get_button (Solo).set_action (std::bind (&CC121::solo, this), true);
+	get_button (Rec).set_action (std::bind (&CC121::rec_enable, this), true);
 
-	get_button (InputMonitor).set_action (boost::bind (&CC121::input_monitor, this), true);
+	get_button (InputMonitor).set_action (std::bind (&CC121::input_monitor, this), true);
 }
 
 CC121::~CC121 ()
@@ -202,28 +203,17 @@ CC121::~CC121 ()
 	BaseUI::quit ();
 }
 
-void*
-CC121::request_factory (uint32_t num_requests)
-{
-	/* AbstractUI<T>::request_buffer_factory() is a template method only
-	   instantiated in this source module. To provide something visible for
-	   use in the interface/descriptor, we have this static method that is
-	   template-free.
-	*/
-	return request_buffer_factory (num_requests);
-}
-
 void
 CC121::start_midi_handling ()
 {
 	/* handle buttons press */
-        _input_port->parser()->channel_note_on[0].connect_same_thread (midi_connections, boost::bind (&CC121::button_press_handler, this, _1, _2));
+        _input_port->parser()->channel_note_on[0].connect_same_thread (midi_connections, std::bind (&CC121::button_press_handler, this, _1, _2));
 	/* handle buttons release*/
-        _input_port->parser()->channel_note_off[0].connect_same_thread (midi_connections, boost::bind (&CC121::button_release_handler, this, _1, _2));
+        _input_port->parser()->channel_note_off[0].connect_same_thread (midi_connections, std::bind (&CC121::button_release_handler, this, _1, _2));
 	/* handle fader */
-        _input_port->parser()->pitchbend.connect_same_thread (midi_connections, boost::bind (&CC121::fader_handler, this, _1, _2));
+        _input_port->parser()->pitchbend.connect_same_thread (midi_connections, std::bind (&CC121::fader_handler, this, _1, _2));
 	/* handle encoder */
-	_input_port->parser()->controller.connect_same_thread (midi_connections, boost::bind (&CC121::encoder_handler, this, _1, _2));
+	_input_port->parser()->controller.connect_same_thread (midi_connections, std::bind (&CC121::encoder_handler, this, _1, _2));
 
 	/* This connection means that whenever data is ready from the input
 	 * port, the relevant thread will invoke our ::midi_input_handler()
@@ -268,8 +258,6 @@ CC121::stop ()
 void
 CC121::thread_init ()
 {
-	pthread_set_name (event_loop_name().c_str());
-
 	PBD::notify_event_loops_about_thread_creation (pthread_self(), event_loop_name(), 2048);
 	ARDOUR::SessionEvent::create_per_thread_pool (event_loop_name(), 128);
 
@@ -408,35 +396,35 @@ CC121::encoder_handler (MIDI::Parser &, MIDI::EventTwoBytes* tb)
 	  break;
 	case 0x20:
 	  /* EQ 1 Q */
-	  if (r) { set_controllable (r->eq_q_controllable(0), adj); }
+	  if (r) { set_controllable (r->mapped_control (EQ_BandQ, 0), adj); }
 	  break;
 	case 0x21:
 	  /* EQ 2 Q */
-	  if (r) { set_controllable (r->eq_q_controllable(1), adj); }
+	  if (r) { set_controllable (r->mapped_control (EQ_BandQ, 1), adj); }
 	  break;
 	case 0x22:
 	  /* EQ 3 Q */
-	  if (r) { set_controllable (r->eq_q_controllable(2), adj); }
+	  if (r) { set_controllable (r->mapped_control (EQ_BandQ, 2), adj); }
 	  break;
 	case 0x23:
 	  /* EQ 4 Q */
-	  if (r) { set_controllable (r->eq_q_controllable(3), adj); }
+	  if (r) { set_controllable (r->mapped_control (EQ_BandQ, 3), adj); }
 	  break;
 	case 0x30:
 	  /* EQ 1 Frequency */
-	  if (r) { set_controllable (r->eq_freq_controllable(0), adj); }
+	  if (r) { set_controllable (r->mapped_control (EQ_BandFreq, 0), adj); }
 	  break;
 	case 0x31:
 	  /* EQ 2 Frequency */
-	  if (r) { set_controllable (r->eq_freq_controllable(1), adj); }
+	  if (r) { set_controllable (r->mapped_control (EQ_BandFreq, 1), adj); }
 	  break;
 	case 0x32:
 	  /* EQ 3 Frequency */
-	  if (r) { set_controllable (r->eq_freq_controllable(2), adj); }
+	  if (r) { set_controllable (r->mapped_control (EQ_BandFreq, 2), adj); }
 	  break;
 	case 0x33:
 	  /* EQ 4 Frequency */
-	  if (r) { set_controllable (r->eq_freq_controllable(3), adj); }
+	  if (r) { set_controllable (r->mapped_control (EQ_BandFreq, 3), adj); }
 	  break;
 	case 0x3C:
 	  /* AI */
@@ -459,19 +447,19 @@ CC121::encoder_handler (MIDI::Parser &, MIDI::EventTwoBytes* tb)
 	  break;
 	case 0x40:
 	  /* EQ 1 Gain */
-	  if (r) { set_controllable (r->eq_gain_controllable(0), adj); }
+	  if (r) { set_controllable (r->mapped_control(EQ_BandGain, 0), adj); }
 	  break;
 	case 0x41:
 	  /* EQ 2 Gain */
-	  if (r) { set_controllable (r->eq_gain_controllable(1), adj); }
+	  if (r) { set_controllable (r->mapped_control(EQ_BandGain, 1), adj); }
 	  break;
 	case 0x42:
 	  /* EQ 3 Gain */
-	  if (r) { set_controllable (r->eq_gain_controllable(2), adj); }
+	  if (r) { set_controllable (r->mapped_control(EQ_BandGain, 2), adj); }
 	  break;
 	case 0x43:
 	  /* EQ 4 Gain */
-	  if (r) { set_controllable (r->eq_gain_controllable(3), adj); }
+	  if (r) { set_controllable (r->mapped_control(EQ_BandGain, 3), adj); }
 	  break;
 	case 0x50:
 	  /* Value */
@@ -643,13 +631,13 @@ CC121::map_recenable_state ()
 	bool onoff;
 
 	switch (session->record_status()) {
-	case Session::Disabled:
+	case Disabled:
 		onoff = false;
 		break;
-	case Session::Enabled:
+	case Enabled:
 		onoff = blink_state;
 		break;
-	case Session::Recording:
+	case Recording:
 		if (session->have_rec_enabled_track ()) {
 			onoff = true;
 		} else {
@@ -691,8 +679,8 @@ CC121::map_transport_state ()
 void
 CC121::connect_session_signals()
 {
-	session->RecordStateChanged.connect(session_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_recenable_state, this), this);
-	session->TransportStateChange.connect(session_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_transport_state, this), this);
+	session->RecordStateChanged.connect(session_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_recenable_state, this), this);
+	session->TransportStateChange.connect(session_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_transport_state, this), this);
 }
 
 bool
@@ -954,7 +942,7 @@ CC121::Button::get_action (bool press, CC121::ButtonState bs)
 }
 
 void
-CC121::Button::set_action (boost::function<void()> f, bool when_pressed, CC121::ButtonState bs)
+CC121::Button::set_action (std::function<void()> f, bool when_pressed, CC121::ButtonState bs)
 {
 	ToDo todo;
 	todo.type = InternalFunction;
@@ -1071,26 +1059,26 @@ CC121::set_current_stripable (std::shared_ptr<Stripable> r)
 	_current_stripable = r;
 
 	if (_current_stripable) {
-		_current_stripable->DropReferences.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::drop_current_stripable, this), this);
+		_current_stripable->DropReferences.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::drop_current_stripable, this), this);
 
-		_current_stripable->mute_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_mute, this), this);
-		_current_stripable->solo_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_solo, this), this);
+		_current_stripable->mute_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_mute, this), this);
+		_current_stripable->solo_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_solo, this), this);
 
 		std::shared_ptr<Track> t = std::dynamic_pointer_cast<Track> (_current_stripable);
 		if (t) {
-			t->rec_enable_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_recenable, this), this);
-			t->monitoring_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_monitoring, this), this);
+			t->rec_enable_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_recenable, this), this);
+			t->monitoring_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_monitoring, this), this);
 		}
 
 		std::shared_ptr<AutomationControl> control = _current_stripable->gain_control ();
 		if (control) {
-			control->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_gain, this), this);
-			control->alist()->automation_state_changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_auto, this), this);
+			control->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_gain, this), this);
+			control->alist()->automation_state_changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_auto, this), this);
 		}
 
 		std::shared_ptr<MonitorProcessor> mp = _current_stripable->monitor_control();
 		if (mp) {
-			mp->cut_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_cut, this), this);
+			mp->cut_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_cut, this), this);
 		}
 	}
 

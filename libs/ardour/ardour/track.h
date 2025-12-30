@@ -19,9 +19,9 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_track_h__
-#define __ardour_track_h__
+#pragma once
 
+#include <optional>
 #include <memory>
 
 #include "pbd/enum_convert.h"
@@ -66,6 +66,8 @@ public:
 
 	bool set_processor_state (XMLNode const& node, int version, XMLProperty const* prop, ProcessorList& new_order, bool& must_configure);
 
+	XMLNode& playlist_state () const;
+
 	bool declick_in_progress () const;
 
 	bool can_record();
@@ -94,21 +96,24 @@ public:
 	/** bounce track from session start to session end to new region
 	 *
 	 * @param itt asynchronous progress report and cancel
+	 * @param name name (or name prefix) to use for bounced region
 	 * @return a new audio region (or nil in case of error)
 	 */
-	virtual std::shared_ptr<Region> bounce (InterThreadInfo& itt, std::string const& name) = 0;
+	virtual std::shared_ptr<Region> bounce (InterThreadInfo& itt, std::string const& name);
 
 	/** Bounce the given range to a new audio region.
 	 * @param start start time (in samples)
 	 * @param end end time (in samples)
 	 * @param itt asynchronous progress report and cancel
 	 * @param endpoint the processor to tap the signal off (or nil for the top)
+	 * @param name name-prefix to use found the bounced range
 	 * @param include_endpoint include the given processor in the bounced audio.
+	 * @param prefix_track_name prefix track name to exported name
 	 * @return a new audio region (or nil in case of error)
 	 */
 	virtual std::shared_ptr<Region> bounce_range (samplepos_t start, samplepos_t end, InterThreadInfo& itt,
-	                                                std::shared_ptr<Processor> endpoint, bool include_endpoint,
-	                                                std::string const& name) = 0;
+	                                              std::shared_ptr<Processor> endpoint, bool include_endpoint,
+	                                              std::string const& name = "", bool prefix_track_name = false);
 
 	virtual int export_stuff (BufferSet& bufs, samplepos_t start_sample, samplecnt_t nframes,
 	                          std::shared_ptr<Processor> endpoint, bool include_endpoint, bool for_export, bool for_freeze,
@@ -139,8 +144,9 @@ public:
 	void request_input_monitoring (bool);
 	void ensure_input_monitoring (bool);
 	std::list<std::shared_ptr<Source> > & last_capture_sources ();
+	void reset_last_capture_sources ();
 	std::string steal_write_source_name ();
-	void reset_write_sources (bool, bool force = false);
+	void reset_write_sources (bool mark_write_complete);
 	float playback_buffer_load () const;
 	float capture_buffer_load () const;
 	int do_refill ();
@@ -176,20 +182,24 @@ public:
 	void adjust_playback_buffering ();
 	void adjust_capture_buffering ();
 
-	PBD::Signal0<void> FreezeChange;
-	PBD::Signal0<void> PlaylistChanged;
-	PBD::Signal0<void> PlaylistAdded;
-	PBD::Signal0<void> SpeedChanged;
-	PBD::Signal0<void> AlignmentStyleChanged;
-	PBD::Signal0<void> ChanCountChanged;
+	void time_domain_changed ();
+
+	PBD::Signal<void()> FreezeChange;
+	PBD::Signal<void()> PlaylistChanged;
+	PBD::Signal<void()> PlaylistAdded;
+	PBD::Signal<void()> SpeedChanged;
+	PBD::Signal<void()> AlignmentStyleChanged;
+	PBD::Signal<void()> ChanCountChanged;
 
 protected:
 	XMLNode& state (bool save_template) const;
 
-	std::shared_ptr<Playlist>   _playlists[DataType::num_types];
+	void update_input_meter ();
 
-	MeterPoint    _saved_meter_point;
-	TrackMode     _mode;
+	std::shared_ptr<Playlist>   _playlists[DataType::num_types];
+	std::optional<MeterPoint> _saved_meter_point;
+	bool                        _record_prepared;
+	TrackMode                   _mode;
 
 	//private: (FIXME)
 	struct FreezeRecordProcessorInfo {
@@ -248,4 +258,3 @@ namespace PBD {
 	DEFINE_ENUM_CONVERT(ARDOUR::Track::FreezeState);
 }
 
-#endif /* __ardour_track_h__ */

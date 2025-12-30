@@ -15,9 +15,6 @@ CPPUNIT_TEST_SUITE_REGISTRATION (RCUTest);
 void
 RCUTest::setUp ()
 {
-	if (!Glib::thread_supported ()) {
-		Glib::thread_init ();
-	}
 }
 
 static void*
@@ -84,7 +81,7 @@ RCUTest::read_thread ()
 #endif
 
 	for (int i = 0; i < 15000; ++i) {
-		std::shared_ptr<Values> reader  = _values.reader ();
+		std::shared_ptr<Values const> reader  = _values.reader ();
 		for (Values::const_iterator i = reader->begin (); i != reader->end(); ++i) {
 			CPPUNIT_ASSERT (i->first == i->second->val);
 		}

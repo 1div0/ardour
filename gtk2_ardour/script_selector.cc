@@ -16,9 +16,9 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/frame.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "gtkmm2ext/utils.h"
 
@@ -29,8 +29,8 @@ using namespace std;
 using namespace Gtk;
 using namespace ARDOUR;
 
-ScriptSelector::ScriptSelector (std::string title, LuaScriptInfo::ScriptType type)
-	: ArdourDialog (title)
+ScriptSelector::ScriptSelector (Gtk::Window& parent, std::string title, LuaScriptInfo::ScriptType type)
+	: ArdourDialog (parent, title, true)
 	, _type_label ("<b>Type:</b>", Gtk::ALIGN_END, Gtk::ALIGN_CENTER)
 	, _type ("", Gtk::ALIGN_START, Gtk::ALIGN_CENTER)
 	, _author_label ("<b>Author:</b>", Gtk::ALIGN_END, Gtk::ALIGN_CENTER)
@@ -258,7 +258,7 @@ ScriptParameterDialog::ScriptParameterDialog (std::string title,
 }
 
 bool
-ScriptParameterDialog::need_interation () const
+ScriptParameterDialog::need_interaction () const
 {
 	if (!parameters_ok ()) {
 		return true;

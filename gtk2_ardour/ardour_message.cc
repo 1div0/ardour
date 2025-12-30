@@ -18,6 +18,7 @@
 
 #include "ardour_message.h"
 #include "splash.h"
+#include "ui_config.h"
 
 using namespace Gtk;
 
@@ -29,7 +30,7 @@ ArdourMessageDialog::ArdourMessageDialog (const Glib::ustring& message,
 	: Gtk::MessageDialog (message, use_markup, type, buttons, modal)
 	, _splash_pushed (false)
 {
-	set_position (WIN_POS_MOUSE);
+	set_position (UIConfiguration::instance().get_default_window_position());
 }
 
 ArdourMessageDialog::ArdourMessageDialog (Gtk::Window& parent,
@@ -42,7 +43,22 @@ ArdourMessageDialog::ArdourMessageDialog (Gtk::Window& parent,
 	, _splash_pushed (false)
 {
 	set_transient_for (parent);
-	set_position (WIN_POS_MOUSE);
+	set_position (UIConfiguration::instance().get_default_window_position());
+}
+
+ArdourMessageDialog::ArdourMessageDialog (Gtk::Window* parent,
+	                                        const Glib::ustring& message,
+	                                        bool use_markup,
+	                                        Gtk::MessageType type,
+	                                        Gtk::ButtonsType buttons,
+	                                        bool modal)
+	: Gtk::MessageDialog (message, use_markup, type, buttons, modal)
+	, _splash_pushed (false)
+{
+	if (parent) {
+		set_transient_for (*parent);
+	}
+	set_position (UIConfiguration::instance().get_default_window_position());
 }
 
 ArdourMessageDialog::~ArdourMessageDialog ()

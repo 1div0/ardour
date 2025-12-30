@@ -30,9 +30,7 @@
 #include <string>
 #include <list>
 
-#include <boost/smart_ptr/scoped_ptr.hpp>
-
-#include <gtkmm/separator.h>
+#include <ytkmm/separator.h>
 
 #include "pbd/error.h"
 #include "pbd/convert.h"
@@ -88,7 +86,7 @@ uint32_t TimeAxisView::button_height = 0;
 uint32_t TimeAxisView::extra_height = 0;
 int const TimeAxisView::_max_order = 512;
 unsigned int TimeAxisView::name_width_px = 100;
-PBD::Signal1<void,TimeAxisView*> TimeAxisView::CatchDeletion;
+PBD::Signal<void(TimeAxisView*)> TimeAxisView::CatchDeletion;
 Glib::RefPtr<Gtk::SizeGroup> TimeAxisView::controls_meters_size_group = Glib::RefPtr<Gtk::SizeGroup>();
 Glib::RefPtr<Gtk::SizeGroup> TimeAxisView::midi_scroomer_size_group = Glib::RefPtr<Gtk::SizeGroup>();
 
@@ -160,10 +158,11 @@ TimeAxisView::TimeAxisView (ARDOUR::Session* sess, PublicEditor& ed, TimeAxisVie
 
 	inactive_label.set_name (X_("TrackNameEditor"));
 	inactive_label.set_alignment (0.0, 0.5);
+	inactive_label.set_width_chars (12);
 	set_tooltip (inactive_label, _("This track is inactive. (right-click to activate)"));
 
 	{
-		boost::scoped_ptr<Gtk::Entry> an_entry (new FocusEntry);
+		const std::unique_ptr<Gtk::Entry> an_entry (new FocusEntry);
 		an_entry->set_name (X_("TrackNameEditor"));
 		Gtk::Requisition req = an_entry->size_request ();
 
@@ -269,10 +268,11 @@ TimeAxisView::~TimeAxisView()
 	delete _canvas_display;
 	_canvas_display = 0;
 
+	delete _size_menu;
+	_size_menu = 0;
+
 	delete display_menu;
 	display_menu = 0;
-
-	delete _size_menu;
 }
 
 void
@@ -316,7 +316,7 @@ TimeAxisView::hide ()
 * @return height of this TimeAxisView.
 */
 guint32
-TimeAxisView::show_at (double y, int& nth, VBox *parent)
+TimeAxisView::show_at (int y, int& nth, VBox *parent)
 {
 	if (control_parent) {
 		control_parent->reorder_child (TOP_LEVEL_WIDGET, nth);
@@ -410,21 +410,49 @@ TimeAxisView::controls_ebox_scroll (GdkEventScroll* ev)
 bool
 TimeAxisView::controls_ebox_button_press (GdkEventButton* event)
 {
+	bool inside_name_label = false;
+
+	if (name_label.is_ancestor (controls_ebox)) {
+		int nlx;
+		int nly;
+		controls_ebox.translate_coordinates (name_label, event->x, event->y, nlx, nly);
+		Gtk::Allocation a = name_label.get_allocation ();
+
+		if (nlx > 0 && nlx < a.get_width() && nly > 0 && nly < a.get_height()) {
+			inside_name_label = true;
+		}
+	}
+
+	/* double-click inside the name area */
+
 	if ((event->button == 1 && event->type == GDK_2BUTTON_PRESS) || Keyboard::is_edit_event (event)) {
-		/* see if it is inside the name label */
-		if (name_label.is_ancestor (controls_ebox)) {
-			int nlx;
-			int nly;
-			controls_ebox.translate_coordinates (name_label, event->x, event->y, nlx, nly);
-			Gtk::Allocation a = name_label.get_allocation ();
-			if (nlx > 0 && nlx < a.get_width() && nly > 0 && nly < a.get_height()) {
+
+		/* Remember, for a dbl-click, X Window/GDK sends:
+
+		   button press
+		   button release
+		   button press
+		   2button press
+		   (and later, button release)
+
+		   since we would have "started" a track drag
+		   on the button press that precded the 2button press,
+		   we need to cancel it here.
+		*/
+
+		_editor.end_track_drag ();
+
+		if (inside_name_label) {
+
+			if ((event->type == GDK_2BUTTON_PRESS) || Keyboard::is_edit_event (event)) {
 				begin_name_edit ();
 				_ebox_release_can_act = false;
 				return true;
 			}
 		}
-
 	}
+
+	/* double-click outside the name area */
 
 	if (event->button == 1 && event->type == GDK_2BUTTON_PRESS) {
 		if (_effective_height < preset_height (HeightLargest)) {
@@ -438,6 +466,8 @@ TimeAxisView::controls_ebox_button_press (GdkEventButton* event)
 
 	if (maybe_set_cursor (event->y) > 0) {
 		_resize_drag_start = event->y_root;
+	} else if (event->button == 1 && event->type == GDK_BUTTON_PRESS) {
+		_editor.start_track_drag (*this, event->y, controls_ebox, !inside_name_label);
 	}
 
 	return true;
@@ -452,6 +482,12 @@ TimeAxisView::idle_resize (int32_t h)
 bool
 TimeAxisView::controls_ebox_motion (GdkEventMotion* ev)
 {
+	if (_editor.track_dragging()) {
+		_editor.mid_track_drag (ev, controls_ebox);
+		gdk_event_request_motions (ev);
+		return true;
+	}
+
 	if (_resize_drag_start >= 0) {
 
 		/* (ab)use the DragManager to do autoscrolling - basically we
@@ -467,13 +503,15 @@ TimeAxisView::controls_ebox_motion (GdkEventMotion* ev)
 		_editor.add_to_idle_resize (this, delta);
 		_resize_drag_start = ev->y_root;
 		_did_resize = true;
+		gdk_event_request_motions (ev);
+		return true;
 	} else {
 		/* not dragging but ... */
 		maybe_set_cursor (ev->y);
 	}
 
-	gdk_event_request_motions(ev);
-	return true;
+	gdk_event_request_motions (ev);
+	return false;
 }
 
 bool
@@ -517,23 +555,27 @@ TimeAxisView::maybe_set_cursor (int y)
 bool
 TimeAxisView::controls_ebox_button_release (GdkEventButton* ev)
 {
-	if (_resize_drag_start >= 0) {
-		if (_have_preresize_cursor) {
-			gdk_window_set_cursor (controls_ebox.get_window()->gobj(), _preresize_cursor);
-			_preresize_cursor = 0;
-			_have_preresize_cursor = false;
-		}
-		_editor.stop_canvas_autoscroll ();
-		_resize_drag_start = -1;
-		if (_did_resize) {
-			_did_resize = false;
-			// don't change selection
-			return true;
-		}
+	if (_editor.track_dragging()) {
+		_editor.end_track_drag ();
+	} else {
+		if (_resize_drag_start >= 0) {
+			if (_have_preresize_cursor) {
+				gdk_window_set_cursor (controls_ebox.get_window()->gobj(), _preresize_cursor);
+				_preresize_cursor = 0;
+				_have_preresize_cursor = false;
+			}
+			_editor.stop_canvas_autoscroll ();
+			_resize_drag_start = -1;
+			if (_did_resize) {
+				_did_resize = false;
+				// don't change selection
+				return true;
+			}
 	}
 
-	if (!_ebox_release_can_act) {
-		return true;
+		if (!_ebox_release_can_act) {
+			return true;
+		}
 	}
 
 	switch (ev->button) {
@@ -544,7 +586,7 @@ TimeAxisView::controls_ebox_button_release (GdkEventButton* ev)
 		break;
 
 	case 3:
-		popup_display_menu (ev->time);
+		popup_display_menu (1, ev->time);
 		break;
 	}
 
@@ -554,7 +596,7 @@ TimeAxisView::controls_ebox_button_release (GdkEventButton* ev)
 void
 TimeAxisView::selection_click (GdkEventButton* ev)
 {
-	Selection::Operation op = ArdourKeyboard::selection_type (ev->state);
+	SelectionOperation op = ArdourKeyboard::selection_type (ev->state);
 	_editor.set_selected_track (*this, op, false);
 }
 
@@ -592,7 +634,7 @@ void
 TimeAxisView::set_height_enum (Height h, bool apply_to_selection)
 {
 	if (apply_to_selection) {
-		_editor.get_selection().tracks.foreach_time_axis (boost::bind (&TimeAxisView::set_height_enum, _1, h, false));
+		_editor.get_selection().tracks.foreach_time_axis (std::bind (&TimeAxisView::set_height_enum, _1, h, false));
 	} else {
 		set_height (preset_height (h));
 	}
@@ -762,19 +804,19 @@ TimeAxisView::conditionally_add_to_selection ()
 	Selection& s (_editor.get_selection ());
 
 	if (!s.selected (this)) {
-		_editor.set_selected_track (*this, Selection::Set);
+		_editor.set_selected_track (*this, SelectionSet);
 	}
 }
 
 void
-TimeAxisView::popup_display_menu (guint32 when)
+TimeAxisView::popup_display_menu (int button, guint32 when)
 {
 	conditionally_add_to_selection ();
 
 	build_display_menu ();
 
 	if (!display_menu->items().empty()) {
-		display_menu->popup (1, when);
+		display_menu->popup (button, when);
 	}
 }
 
@@ -788,13 +830,11 @@ TimeAxisView::set_selected (bool yn)
 	AxisView::set_selected (yn);
 
 	if (_selected) {
-		time_axis_frame.set_shadow_type (Gtk::SHADOW_IN);
-		time_axis_frame.set_name ("MixerStripSelectedFrame");
+		time_axis_frame.set_name (controls_base_selected_name);
 		controls_ebox.set_name (controls_base_selected_name);
 		controls_vbox.set_name (controls_base_selected_name);
 		time_axis_vbox.set_name (controls_base_selected_name);
 	} else {
-		time_axis_frame.set_shadow_type (Gtk::SHADOW_NONE);
 		time_axis_frame.set_name (controls_base_unselected_name);
 		controls_ebox.set_name (controls_base_unselected_name);
 		controls_vbox.set_name (controls_base_unselected_name);
@@ -895,7 +935,7 @@ TimeAxisView::show_selection (TimeSelection& ts)
 		rect = get_selection_rect ((*i).id);
 
 		x1 = _editor.time_to_pixel (start);
-		x2 = _editor.time_to_pixel (end.decrement());
+		x2 = _editor.time_to_pixel (end);
 		y2 = current_height() - 1;
 
 		if (dynamic_cast<AudioTimeAxisView*>(this)) {
@@ -1076,7 +1116,7 @@ TimeAxisView::remove_child (std::shared_ptr<TimeAxisView> child)
  *  @param result Filled in with selectable things.
  */
 void
-TimeAxisView::get_selectables (timepos_t const & start, timepos_t const & end, double top, double bot, list<Selectable*>& results, bool within)
+TimeAxisView::_get_selectables (timepos_t const & start, timepos_t const & end, double top, double bot, list<Selectable*>& results, bool within)
 {
 	for (Children::iterator i = children.begin(); i != children.end(); ++i) {
 		if (!(*i)->hidden()) {
@@ -1395,7 +1435,7 @@ TimeAxisView::reset_visual_state ()
 TrackViewList
 TrackViewList::filter_to_unique_playlists ()
 {
-	std::set<std::shared_ptr<ARDOUR::Playlist> > playlists;
+	PlaylistSet playlists;
 	TrackViewList ts;
 
 	for (iterator i = begin(); i != end(); ++i) {

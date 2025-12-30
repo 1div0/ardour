@@ -39,14 +39,14 @@ using namespace std;
 using namespace PBD;
 using namespace ARDOUR;
 
-Pannable::Pannable (Session& s, Temporal::TimeDomain td)
-	: Automatable (s, td)
+Pannable::Pannable (Session& s, Temporal::TimeDomainProvider const & tdp)
+	: Automatable (s, tdp)
 	, SessionHandleRef (s)
-	, pan_azimuth_control (new PanControllable (s, "", this, PanAzimuthAutomation, td))
-	, pan_elevation_control (new PanControllable (s, "", this, PanElevationAutomation, td))
-	, pan_width_control (new PanControllable (s, "", this, PanWidthAutomation, td))
-	, pan_frontback_control (new PanControllable (s, "", this, PanFrontBackAutomation, td))
-	, pan_lfe_control (new PanControllable (s, "", this, PanLFEAutomation, td))
+	, pan_azimuth_control (new PanControllable (s, "", this, PanAzimuthAutomation, tdp))
+	, pan_elevation_control (new PanControllable (s, "", this, PanElevationAutomation, tdp))
+	, pan_width_control (new PanControllable (s, "", this, PanWidthAutomation, tdp))
+	, pan_frontback_control (new PanControllable (s, "", this, PanFrontBackAutomation, tdp))
+	, pan_lfe_control (new PanControllable (s, "", this, PanLFEAutomation, tdp))
 	, _auto_state (Off)
 	, _has_state (false)
 	, _responding_to_control_auto_state_change (0)
@@ -63,17 +63,24 @@ Pannable::Pannable (Session& s, Temporal::TimeDomain td)
 
 	/* all controls change state together */
 
-	pan_azimuth_control->alist()->automation_state_changed.connect_same_thread (*this, boost::bind (&Pannable::control_auto_state_changed, this, _1));
-	pan_elevation_control->alist()->automation_state_changed.connect_same_thread (*this, boost::bind (&Pannable::control_auto_state_changed, this, _1));
-	pan_width_control->alist()->automation_state_changed.connect_same_thread (*this, boost::bind (&Pannable::control_auto_state_changed, this, _1));
-	pan_frontback_control->alist()->automation_state_changed.connect_same_thread (*this, boost::bind (&Pannable::control_auto_state_changed, this, _1));
-	pan_lfe_control->alist()->automation_state_changed.connect_same_thread (*this, boost::bind (&Pannable::control_auto_state_changed, this, _1));
+	pan_azimuth_control->alist()->automation_state_changed.connect_same_thread (*this, std::bind (&Pannable::control_auto_state_changed, this, _1));
+	pan_elevation_control->alist()->automation_state_changed.connect_same_thread (*this, std::bind (&Pannable::control_auto_state_changed, this, _1));
+	pan_width_control->alist()->automation_state_changed.connect_same_thread (*this, std::bind (&Pannable::control_auto_state_changed, this, _1));
+	pan_frontback_control->alist()->automation_state_changed.connect_same_thread (*this, std::bind (&Pannable::control_auto_state_changed, this, _1));
+	pan_lfe_control->alist()->automation_state_changed.connect_same_thread (*this, std::bind (&Pannable::control_auto_state_changed, this, _1));
 
-	pan_azimuth_control->Changed.connect_same_thread (*this, boost::bind (&Pannable::value_changed, this));
-	pan_elevation_control->Changed.connect_same_thread (*this, boost::bind (&Pannable::value_changed, this));
-	pan_width_control->Changed.connect_same_thread (*this, boost::bind (&Pannable::value_changed, this));
-	pan_frontback_control->Changed.connect_same_thread (*this, boost::bind (&Pannable::value_changed, this));
-	pan_lfe_control->Changed.connect_same_thread (*this, boost::bind (&Pannable::value_changed, this));
+	pan_azimuth_control->Changed.connect_same_thread (*this, std::bind (&Pannable::value_changed, this));
+	pan_elevation_control->Changed.connect_same_thread (*this, std::bind (&Pannable::value_changed, this));
+	pan_width_control->Changed.connect_same_thread (*this, std::bind (&Pannable::value_changed, this));
+	pan_frontback_control->Changed.connect_same_thread (*this, std::bind (&Pannable::value_changed, this));
+	pan_lfe_control->Changed.connect_same_thread (*this, std::bind (&Pannable::value_changed, this));
+
+	pan_azimuth_control->add_visually_linked_control (pan_width_control);
+	pan_azimuth_control->add_visually_linked_control (pan_elevation_control);
+	pan_width_control->add_visually_linked_control (pan_azimuth_control);
+	pan_width_control->add_visually_linked_control (pan_elevation_control);
+	pan_elevation_control->add_visually_linked_control (pan_azimuth_control);
+	pan_elevation_control->add_visually_linked_control (pan_width_control);
 }
 
 Pannable::~Pannable ()
@@ -266,3 +273,14 @@ Pannable::set_state (const XMLNode& root, int version)
 
 	return 0;
 }
+
+void
+Pannable::start_domain_bounce (Temporal::DomainBounceInfo&)
+{
+}
+
+void
+Pannable::finish_domain_bounce (Temporal::DomainBounceInfo&)
+{
+}
+

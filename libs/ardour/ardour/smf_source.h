@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_smf_source_h__
-#define __ardour_smf_source_h__
+#pragma once
 
 #include <cstdio>
 #include <time.h>
@@ -53,16 +52,18 @@ public:
 		return safe_midi_file_extension(path);
 	}
 
-	void append_event_beats (const WriterLock& lock, const Evoral::Event<Temporal::Beats>& ev);
+	void _append_event_beats (const WriterLock& lock, const Evoral::Event<Temporal::Beats>& ev, bool allow_meta);
 	void append_event_samples (const WriterLock& lock, const Evoral::Event<samplepos_t>& ev, samplepos_t source_start);
 
 	void update_length (timepos_t const & dur);
 
 	void mark_streaming_midi_write_started (const WriterLock& lock, NoteMode mode);
-	void mark_streaming_write_completed (const WriterLock& lock);
+
+	void mark_streaming_write_completed (const WriterLock& lock, Temporal::timecnt_t const & duration);
 	void mark_midi_streaming_write_completed (const WriterLock& lock,
 	                                          Evoral::Sequence<Temporal::Beats>::StuckNoteOption,
-	                                          Temporal::Beats when = Temporal::Beats());
+	                                          Temporal::timecnt_t const & duration);
+	void end_track (const WriterLock&);
 
 	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
@@ -78,6 +79,10 @@ public:
 
 	/** Query the smf file for its channel info */
 	SMF::UsedChannels used_midi_channels();
+
+	void render (const ReaderLock& lock, Evoral::EventSink<Temporal::Beats>& dst);
+
+	Temporal::Beats duration() const;
 
   protected:
 	void close ();
@@ -116,4 +121,3 @@ public:
 
 }; /* namespace ARDOUR */
 
-#endif /* __ardour_smf_source_h__ */

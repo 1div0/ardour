@@ -21,18 +21,17 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_midi_time_axis_h__
-#define __ardour_midi_time_axis_h__
+#pragma once
 
 #include <list>
 
-#include <gtkmm/table.h>
-#include <gtkmm/button.h>
-#include <gtkmm/box.h>
-#include <gtkmm/menu.h>
-#include <gtkmm/menuitem.h>
-#include <gtkmm/radiomenuitem.h>
-#include <gtkmm/checkmenuitem.h>
+#include <ytkmm/table.h>
+#include <ytkmm/button.h>
+#include <ytkmm/box.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/menuitem.h>
+#include <ytkmm/radiomenuitem.h>
+#include <ytkmm/checkmenuitem.h>
 
 #include "ardour/types.h"
 #include "ardour/region.h"
@@ -59,6 +58,7 @@ namespace ARDOUR {
 	class Processor;
 	class Location;
 	class MidiPlaylist;
+	class InstrumentInfo;
 }
 
 namespace Evoral {
@@ -67,7 +67,6 @@ namespace Evoral {
 
 class PublicEditor;
 class MidiStreamView;
-class MidiScroomer;
 class PianoRollHeader;
 class StepEntry;
 class StepEditor;
@@ -98,7 +97,7 @@ public:
 
 	bool paste (Temporal::timepos_t const &, const Selection&, PasteContext& ctx);
 
-	ARDOUR::NoteMode  note_mode() const { return _note_mode; }
+	// ARDOUR::NoteMode  note_mode() const { return _note_mode; }
 	ARDOUR::ColorMode color_mode() const { return _color_mode; }
 
 	Gtk::CheckMenuItem* automation_child_menu_item (Evoral::Parameter);
@@ -114,12 +113,16 @@ public:
 	void get_per_region_note_selection (std::list<std::pair<PBD::ID, std::set<std::shared_ptr<Evoral::Note<Temporal::Beats> > > > >&);
 	void use_midnam_info ();
 
+	void set_visibility_note_range (MidiStreamView::VisibleNoteRange range, bool apply_to_selection = false);
+
 protected:
 	void start_step_editing ();
 	void stop_step_editing ();
 	void processors_changed (ARDOUR::RouteProcessorChange);
 
 private:
+	void _midnam_channel_changed();
+
 	sigc::signal<void, std::string, std::string>  _midi_patch_settings_changed;
 
 	void setup_midnam_patches ();
@@ -137,23 +140,19 @@ private:
 
 	void set_note_mode (ARDOUR::NoteMode mode, bool apply_to_selection = false);
 	void set_color_mode (ARDOUR::ColorMode, bool force = false, bool redisplay = true, bool apply_to_selection = false);
-	void set_note_range (MidiStreamView::VisibleNoteRange range, bool apply_to_selection = false);
 	void route_active_changed ();
 	void note_range_changed ();
-	void contents_height_changed ();
+	void parameter_changed (std::string const &);
 
 	void update_scroomer_visbility (uint32_t, LayerDisplay);
 
 	void update_control_names ();
-	void update_midi_controls_visibility (uint32_t);
 
 	bool                          _ignore_signals;
 	bool                          _asked_all_automation;
 	std::string                   _effective_model;
 	std::string                   _effective_mode;
-	MidiScroomer*                 _range_scroomer;
 	PianoRollHeader*              _piano_roll_header;
-	ARDOUR::NoteMode              _note_mode;
 	Gtk::RadioMenuItem*           _note_mode_item;
 	Gtk::RadioMenuItem*           _percussion_mode_item;
 	ARDOUR::ColorMode             _color_mode;
@@ -162,8 +161,11 @@ private:
 	Gtk::RadioMenuItem*           _track_color_mode_item;
 	Gtk::VBox                     _midi_controls_box;
 	MidiChannelSelectorWindow*    _channel_selector;
+
 	ArdourWidgets::ArdourDropdown _midnam_model_selector;
 	ArdourWidgets::ArdourDropdown _midnam_custom_device_mode_selector;
+	ArdourWidgets::ArdourDropdown _midnam_channel_selector;
+	ArdourWindow*                  midnam_selector;
 
 	Gtk::CheckMenuItem*          _step_edit_item;
 	Gtk::Menu*                    default_channel_menu;
@@ -179,6 +181,7 @@ private:
 	void build_controller_menu ();
 	void toggle_restore_pgm_on_load ();
 	void toggle_channel_selector ();
+	void toggle_midnam_selector ();
 	void channel_selector_hidden ();
 	void set_channel_mode (ARDOUR::ChannelMode, uint16_t);
 
@@ -200,6 +203,12 @@ private:
 	ParameterMenuMap _controller_menu_map;
 
 	StepEditor* _step_editor;
-};
 
-#endif /* __ardour_midi_time_axis_h__ */
+	std::shared_ptr<AutomationTimeAxisView> velocity_track;
+	Gtk::CheckMenuItem* velocity_menu_item;
+	void create_velocity_automation_child (Evoral::Parameter const &, bool show);
+
+	void update_patch_selector ();
+	void mouse_mode_changed ();
+	PBD::ScopedConnection mouse_mode_connection;
+};

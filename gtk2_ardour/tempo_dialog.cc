@@ -26,7 +26,7 @@
 
 #include <cstdio> // for snprintf, grrr
 
-#include <gtkmm/stock.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/error.h"
 #include "midi++/parser.h"
@@ -50,7 +50,7 @@ using namespace PBD;
 using namespace Temporal;
 
 TempoDialog::TempoDialog (TempoMap::SharedPtr const & map, timepos_t const & pos, const string&)
-	: ArdourDialog (_("New Tempo"))
+	: ArdourDialog (_("New Tempo"), true)
 	, _map (map)
 	, _section (0)
 	, bpm_adjustment (60.0, 1.0, 999.9, 0.1, 1.0)
@@ -71,7 +71,7 @@ TempoDialog::TempoDialog (TempoMap::SharedPtr const & map, timepos_t const & pos
 }
 
 TempoDialog::TempoDialog (TempoMap::SharedPtr const & map, TempoPoint& point, const string&)
-	: ArdourDialog (_("Edit Tempo"))
+	: ArdourDialog (_("Edit Tempo"), true)
 	, _map (map)
 	, _section (&point)
 	, bpm_adjustment (60.0, 1.0, 999.9, 0.1, 1.0)
@@ -111,8 +111,8 @@ TempoDialog::init (const Temporal::BBT_Time& when, double bpm, double end_bpm, d
 
 	note_types.insert (make_pair (_("whole"), 1));
 	strings.push_back (_("whole"));
-	note_types.insert (make_pair (_("second"), 2));
-	strings.push_back (_("second"));
+	note_types.insert (make_pair (_("half"), 2));
+	strings.push_back (_("half"));
 	note_types.insert (make_pair (_("third"), 3));
 	strings.push_back (_("third"));
 	note_types.insert (make_pair (_("quarter"), 4));
@@ -213,7 +213,9 @@ TempoDialog::init (const Temporal::BBT_Time& when, double bpm, double end_bpm, d
 	snprintf (buf, sizeof (buf), "%" PRIu32, when.beats);
 	when_beat_entry.set_text (buf);
 
-	if (!initial) {
+	/* no position edit fields for initial tempo or BBT markers */
+
+	if (!initial && !(_section && dynamic_cast<MusicTimePoint*> (_section)))  {
 		when_bar_entry.set_width_chars(4);
 		when_beat_entry.set_width_chars (4);
 		when_bar_entry.set_alignment (1.0);
@@ -243,7 +245,7 @@ TempoDialog::init (const Temporal::BBT_Time& when, double bpm, double end_bpm, d
 	get_vbox ()->set_border_width (12);
 	get_vbox ()->set_spacing (6);
 
-	get_vbox ()->pack_end (*table, false, false);
+	get_vbox ()->pack_start (*table, false, false);
 	table->show_all ();
 
 	table = manage (new Table (2, 2));
@@ -279,38 +281,46 @@ TempoDialog::init (const Temporal::BBT_Time& when, double bpm, double end_bpm, d
 	tap_tempo_button.signal_button_press_event().connect (sigc::mem_fun (*this, &TempoDialog::tap_tempo_button_press), false);
 	tap_tempo_button.signal_key_press_event().connect (sigc::mem_fun (*this, &TempoDialog::tap_tempo_key_press), false);
 	tap_tempo_button.signal_focus_out_event().connect (sigc::mem_fun (*this, &TempoDialog::tap_tempo_focus_out));
-	_midi_port_combo.signal_changed().connect (sigc::mem_fun (*this, &TempoDialog::port_changed));
+
+	_port_changed_connection = _midi_port_combo.signal_changed().connect (sigc::mem_fun (*this, &TempoDialog::port_changed));
 
 	/* Setup MIDI Tap */
 	_midi_port_list = ListStore::create (_midi_port_cols);
 	_midi_port_combo.set_model (_midi_port_list);
 	_midi_port_combo.pack_start (_midi_port_cols.pretty_name);
 
-	AudioEngine::instance ()->PortRegisteredOrUnregistered.connect (_manager_connection, invalidator (*this), boost::bind (&TempoDialog::ports_changed, this), gui_context ());
+	AudioEngine::instance ()->PortRegisteredOrUnregistered.connect (_manager_connection, invalidator (*this), std::bind (&TempoDialog::ports_changed, this), gui_context ());
 	std::shared_ptr<Port> port = AudioEngine::instance ()->register_input_port (DataType::MIDI, "Tap Tempo", false, PortFlags (IsInput | Hidden | IsTerminal));
 	_midi_tap_port               = std::dynamic_pointer_cast<MidiPort> (port);
 	assert (_midi_tap_port);
 	_midi_tap_parser = std::shared_ptr<MIDI::Parser> (new MIDI::Parser);
-	_midi_tap_parser->any.connect_same_thread (_parser_connection, boost::bind (&TempoDialog::midi_event, this, _2, _3, _4));
-	_midi_tap_port->set_trace (_midi_tap_parser.get ());
-	_midi_tap_signal.connect (_xthread_connection, invalidator (*this), boost::bind (&TempoDialog::tap_tempo, this, _1), gui_context ());
+	_midi_tap_parser->any.connect_same_thread (_parser_connection, std::bind (&TempoDialog::midi_event, this, _2, _3, _4));
+	_midi_tap_port->set_trace (_midi_tap_parser);
+	_midi_tap_signal.connect (_xthread_connection, invalidator (*this), std::bind (&TempoDialog::tap_tempo, this, _1), gui_context ());
 
 	/* init state */
 	tempo_type_change ();
 	tapped = false;
-#if 0
-	bpm_spinner.select_region (0, -1);
-	bpm_spinner.grab_focus ();
-#else
-	tap_tempo_button.set_can_focus ();
-	tap_tempo_button.grab_focus ();
-#endif
 }
 
 TempoDialog::~TempoDialog ()
 {
 	_parser_connection.disconnect ();
 	AudioEngine::instance ()->unregister_port (_midi_tap_port);
+}
+
+void
+TempoDialog::on_show ()
+{
+	ArdourDialog::on_show ();
+
+	if (!UIConfiguration::instance().get_prefer_tap_tempo()) {
+		bpm_spinner.select_region (0, -1);
+		bpm_spinner.grab_focus ();
+	} else {
+		tap_tempo_button.set_can_focus ();
+		tap_tempo_button.grab_focus ();
+	}
 }
 
 void
@@ -344,6 +354,8 @@ TempoDialog::ports_changed ()
 	if (r) {
 		cpn = (*r)[_midi_port_cols.port_name];
 	}
+
+	_port_changed_connection.block ();
 
 	_midi_port_list->clear ();
 
@@ -380,6 +392,7 @@ TempoDialog::ports_changed ()
 		row[_midi_port_cols.port_name]   = pn;
 	}
 
+	_port_changed_connection.unblock ();
 	_midi_port_combo.set_active (act);
 }
 
@@ -398,7 +411,7 @@ TempoDialog::port_changed ()
 	}
 	tap_tempo_button.set_sensitive (!rv);
 	bpm_spinner.set_sensitive (!rv);
-	if (!rv) {
+	if (!rv && UIConfiguration::instance().get_prefer_tap_tempo()) {
 		tap_tempo_button.grab_focus ();
 	}
 }
@@ -611,17 +624,17 @@ MeterDialog::MeterDialog (TempoMap::SharedPtr const & map, timepos_t const & pos
 	Temporal::BBT_Argument when (map->round_to_bar (map->bbt_at (pos)));
 	Meter const & meter (map->meter_at (when));
 
-	init (when, meter.divisions_per_bar(), meter.note_value(), false, pos.time_domain());
+	init (when, meter.divisions_per_bar(), meter.note_value(), false, false, pos.time_domain());
 }
 
 MeterDialog::MeterDialog (Temporal::MeterPoint& section, const string&)
 	: ArdourDialog (_("Edit Time Signature"))
 {
-	init (section.bbt(), section.divisions_per_bar(), section.note_value(), section.map().is_initial(section), Temporal::BeatTime);
+	init (section.bbt(), section.divisions_per_bar(), section.note_value(), section.map().is_initial(section), dynamic_cast<MusicTimePoint*> (&section), Temporal::BeatTime);
 }
 
 void
-MeterDialog::init (const Temporal::BBT_Time& when, double bpb, double divisor, bool initial, TimeDomain style)
+MeterDialog::init (const Temporal::BBT_Time& when, double bpb, double divisor, bool initial, bool music_time_point, TimeDomain style)
 {
 	char buf[64];
 	vector<string> strings;
@@ -697,7 +710,9 @@ MeterDialog::init (const Temporal::BBT_Time& when, double bpb, double divisor, b
 	when_bar_entry.set_text (buf);
 	when_bar_entry.set_alignment (1.0);
 
-	if (!initial) {
+	/* no position edit fields for initial tempo or BBT markers */
+
+	if (!initial && !music_time_point) {
 		Label* when_label = manage (new Label(_("Time Signature begins at bar:"), ALIGN_START, ALIGN_CENTER));
 
 		table->attach (*when_label, 0, 1, 2, 3, FILL | EXPAND, FILL | EXPAND);

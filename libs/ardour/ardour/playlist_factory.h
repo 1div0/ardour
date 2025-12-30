@@ -18,8 +18,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_playlist_factory_h__
-#define __ardour_playlist_factory_h__
+#pragma once
 
 #include "ardour/playlist.h"
 
@@ -32,9 +31,9 @@ class Session;
 class LIBARDOUR_API PlaylistFactory {
 
   public:
-	static PBD::Signal2<void,std::shared_ptr<Playlist>, bool> PlaylistCreated;
+	static PBD::Signal<void(std::shared_ptr<Playlist>)> PlaylistCreated;
 
-	static std::shared_ptr<Playlist> create (Session&, const XMLNode&, bool hidden = false, bool unused = false);
+	static std::shared_ptr<Playlist> create (Session&, const XMLNode&, bool hidden = false);
 	static std::shared_ptr<Playlist> create (DataType type, Session&, std::string name, bool hidden = false);
 	static std::shared_ptr<Playlist> create (std::shared_ptr<const Playlist>, std::string name, bool hidden = false);
 	static std::shared_ptr<Playlist> create (std::shared_ptr<const Playlist>, timepos_t const & start, timepos_t const & cnt, std::string name, bool hidden = false);
@@ -42,4 +41,3 @@ class LIBARDOUR_API PlaylistFactory {
 
 }
 
-#endif /* __ardour_playlist_factory_h__  */

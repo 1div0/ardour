@@ -17,9 +17,9 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/box.h>
-#include <gtkmm/label.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/box.h>
+#include <ytkmm/label.h>
+#include <ytkmm/stock.h>
 
 #include "transform_dialog.h"
 
@@ -76,8 +76,8 @@ TransformDialog::Model::Model()
 	}
 }
 
-TransformDialog::TransformDialog()
-	: ArdourDialog(_("Transform"), false, false)
+TransformDialog::TransformDialog(Gtk::Window& parent)
+	: ArdourDialog(parent, _("Transform"), false, false)
 {
 	_property_combo.set_model(_model.property_list);
 	_property_combo.pack_start(_model.property_cols.label);

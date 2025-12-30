@@ -20,8 +20,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __ardour_automation_event_h__
-#define __ardour_automation_event_h__
+#pragma once
 
 #include <atomic>
 #include <cstdint>
@@ -44,7 +43,6 @@
 namespace ARDOUR {
 
 class AutomationList;
-class BeatsSamplesConverter;
 
 /** A SharedStatefulProperty for AutomationLists */
 class LIBARDOUR_API AutomationListProperty : public PBD::SharedStatefulProperty<AutomationList>
@@ -73,8 +71,8 @@ private:
 class LIBARDOUR_API AutomationList : public Evoral::ControlList, public PBD::StatefulDestructible
 {
 public:
-	AutomationList (const Evoral::Parameter& id, const Evoral::ParameterDescriptor& desc, Temporal::TimeDomain);
-	AutomationList (const Evoral::Parameter& id, Temporal::TimeDomain);
+	AutomationList (const Evoral::Parameter& id, const Evoral::ParameterDescriptor& desc, Temporal::TimeDomainProvider const &);
+	AutomationList (const Evoral::Parameter& id, Temporal::TimeDomainProvider const &);
 	AutomationList (const XMLNode&, Evoral::Parameter id);
 	AutomationList (const AutomationList&);
 	AutomationList (const AutomationList&, timepos_t const & start, timepos_t const & end);
@@ -82,7 +80,7 @@ public:
 
 	virtual std::shared_ptr<ControlList> create(const Evoral::Parameter&           id,
 	                                              const Evoral::ParameterDescriptor& desc,
-	                                              Temporal::TimeDomain);
+	                                              Temporal::TimeDomainProvider const &);
 
 	AutomationList& operator= (const AutomationList&);
 
@@ -90,7 +88,7 @@ public:
 
 	void set_automation_state (AutoState);
 	AutoState automation_state() const;
-	PBD::Signal1<void, AutoState> automation_state_changed;
+	PBD::Signal<void(AutoState)> automation_state_changed;
 
 	bool automation_playback() const {
 		return (_state & Play) || ((_state & (Touch | Latch)) && !touching());
@@ -99,9 +97,9 @@ public:
 		return ((_state & Write) || ((_state & (Touch | Latch)) && touching()));
 	}
 
-	PBD::Signal0<void> StateChanged;
+	PBD::Signal<void()> StateChanged;
 
-	static PBD::Signal1<void,AutomationList*> AutomationListCreated;
+	static PBD::Signal<void(AutomationList*)> AutomationListCreated;
 
 	void start_write_pass (timepos_t const & when);
 	void write_pass_finished (timepos_t const & when, double thinning_factor=0.0);
@@ -116,7 +114,7 @@ public:
 	XMLNode& get_state () const;
 	int set_state (const XMLNode &, int version);
 
-	Command* memento_command (XMLNode* before, XMLNode* after);
+	PBD::Command* memento_command (XMLNode* before, XMLNode* after);
 
 	bool operator!= (const AutomationList &) const;
 
@@ -147,4 +145,3 @@ private:
 
 } // namespace
 
-#endif /* __ardour_automation_event_h__ */

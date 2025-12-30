@@ -27,7 +27,6 @@
 #include <string>
 #include <vector>
 
-
 #include "pbd/natsort.h"
 #include "pbd/rcu.h"
 
@@ -203,6 +202,8 @@ protected:
 		pthread_mutex_unlock (&_port_callback_mutex);
 	}
 
+	void process_connection_queue_locked (PortManager& mgr);
+
 	void port_connect_add_remove_callback () {
 		_port_change_flag.store (1);
 	}
@@ -229,13 +230,13 @@ protected:
 	SerializedRCUManager<PortRegistry> _portregistry;
 
 	bool valid_port (BackendPortHandle port) const {
-		std::shared_ptr<PortRegistry> p = _portregistry.reader ();
+		std::shared_ptr<PortRegistry const> p = _portregistry.reader ();
 		return p->find (port) != p->end ();
 	}
 
 	BackendPortPtr find_port (const std::string& port_name) const {
-		std::shared_ptr<PortMap> p  = _portmap.reader ();
-		PortMap::const_iterator    it = p->find (port_name);
+		std::shared_ptr<PortMap const> p  = _portmap.reader ();
+		PortMap::const_iterator        it = p->find (port_name);
 		if (it == p->end ()) {
 			return BackendPortPtr();
 		}
@@ -243,6 +244,9 @@ protected:
 	}
 
 	virtual BackendPort* port_factory (std::string const& name, ARDOUR::DataType dt, ARDOUR::PortFlags flags) = 0;
+
+	XMLNode* get_state () const;
+	int      set_state (XMLNode const&, int version);
 
 #ifndef NDEBUG
 	void list_ports () const;
