@@ -136,7 +136,6 @@ class MidiExportDialog;
 class MixerStrip;
 class MouseCursors;
 class NoteBase;
-class Pianoroll;
 class PluginSelector;
 class ProgressReporter;
 class QuantizeDialog;
@@ -469,7 +468,7 @@ public:
 	void mouse_add_bbt_marker_event (Temporal::timepos_t where);
 	void add_bbt_marker_at_playhead_cursor ();
 
-	void edit_bbt (Temporal::MusicTimePoint&);
+	void edit_bbt (BBTMarker&);
 
 	bool should_ripple () const;
 	bool should_ripple_all () const;  /* RippleAll will ripple all similar regions and the timeline markers */
@@ -527,7 +526,6 @@ private:
 
 	Gtk::HBox                    _bottom_hbox;
 	SelectionPropertiesBox*      _properties_box;
-	Pianoroll*                   _pianoroll;
 
 	typedef std::pair<TimeAxisView*,XMLNode*> TAVState;
 
@@ -1902,11 +1900,19 @@ private:
 	        guint                                 info,
 	        guint                                 time);
 
+	void drop_region (
+	        const Glib::RefPtr<Gdk::DragContext>& context,
+	        gint                                  x,
+	        gint                                  y,
+	        const PBD::ID&                        rid,
+	        guint                                 info,
+	        guint                                 time);
+
 	void drop_regions (
 	        const Glib::RefPtr<Gdk::DragContext>& context,
 	        gint                                  x,
 	        gint                                  y,
-	        const Gtk::SelectionData&             data,
+	        std::vector<PBD::ID> const&           rids,
 	        guint                                 info,
 	        guint                                 time);
 

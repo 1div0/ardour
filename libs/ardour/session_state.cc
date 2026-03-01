@@ -405,10 +405,12 @@ Session::post_engine_init ()
 	/* Can't do this until the trigger input MIDI port is set up */
 	TriggerBox::static_init (*this);
 
-	/* Now, finally, we can [ask the butler to] fill the playback buffers */
-
-	BootMessage (_("Filling playback buffers"));
-	request_locate (transport_sample(), true);
+	/* When loading, Session::session_loaded () will do this */
+	if (!loading ()) {
+		/* Now, finally, we can [ask the butler to] fill the playback buffers */
+		BootMessage (_("Filling playback buffers"));
+		request_locate (transport_sample(), true);
+	}
 
 	reset_xrun_count ();
 	return 0;
@@ -1283,7 +1285,7 @@ Session::parse_route_state (const string& path, bool& match_pbd_id)
 }
 
 int
-Session::import_route_state (const string& path, std::map<PBD::ID, PBD::ID> const& idmap, RouteGroupImportMode rgim)
+Session::import_route_state (const string& path, std::map<PBD::ID, PBD::ID> const& idmap, RouteGroupImportMode rgim, Progress* progress)
 {
 	/* idmap:  <local route ID : extern/XML route ID>
 	 * a given route may only be set to the state of one extern ID,
@@ -1296,6 +1298,13 @@ Session::import_route_state (const string& path, std::map<PBD::ID, PBD::ID> cons
 	}
 	if (tree.root()->name() != X_("RouteState") && tree.root()->name() != X_("Session")) { // XXX
 		return -2;
+	}
+
+	size_t completed      = 0;
+	size_t required_tasks = idmap.size () + 2;
+
+	if (progress) {
+		progress->set_progress (completed++ / (float)required_tasks);
 	}
 
 	int version = 0;
@@ -1345,6 +1354,14 @@ Session::import_route_state (const string& path, std::map<PBD::ID, PBD::ID> cons
 	if (xroutes) {
 		/* foreach route .. */
 		for (auto const rxml : xroutes->children()) {
+
+			if (progress) {
+				progress->set_progress (completed++ / (float)required_tasks);
+				if (progress->cancelled ()) {
+					break;
+				}
+			}
+
 			/* track-state includes version per route */
 			if (!rxml->get_property ("version", version) || version == 0) {
 				continue;
@@ -1393,6 +1410,7 @@ Session::import_route_state (const string& path, std::map<PBD::ID, PBD::ID> cons
 					XMLNode copy (*rxml);
 					copy.remove_nodes_and_delete ("PresentationInfo"); // "Master"
 					copy.add_child_nocopy (pi.get_state());
+					copy.set_property (X_("definitely-add-number"), false);
 
 					RouteList rl = new_route_from_template (1, PresentationInfo::max_order, copy, "", NewPlaylist);
 					assert (rl.size () < 2);
@@ -1411,8 +1429,11 @@ Session::import_route_state (const string& path, std::map<PBD::ID, PBD::ID> cons
 							rg = route_group_by_name (route_groupname[src]);
 							break;
 						case CreateRouteGroup:
-							rg = new_route_group (route_groupname[src]);
-							add_route_group (rg);
+							rg = route_group_by_name (route_groupname[src]);
+							if (!rg) {
+								rg = new_route_group (route_groupname[src]);
+								add_route_group (rg);
+							}
 							break;
 					}
 					if (rg) {
@@ -1421,6 +1442,10 @@ Session::import_route_state (const string& path, std::map<PBD::ID, PBD::ID> cons
 				}
 			}
 		}
+	}
+
+	if (progress) {
+		progress->set_progress (completed++ / (float) required_tasks);
 	}
 
 	if (!new_track_order.empty ()) {
@@ -1441,6 +1466,10 @@ Session::import_route_state (const string& path, std::map<PBD::ID, PBD::ID> cons
 			r->set_presentation_order (n_routes + added++);
 		}
 		ensure_stripable_sort_order ();
+	}
+
+	if (progress) {
+		progress->set_progress (1.0);
 	}
 
 	return 0;
@@ -3923,6 +3952,19 @@ Session::cleanup_peakfiles ()
 		}
 	}
 	return 0;
+}
+
+void
+Session::close_all_sources ()
+{
+	/* this is mainly useful on Windows, sources are re-opened when needed */
+	Glib::Threads::Mutex::Lock lm (source_lock);
+	for (auto const& s : sources) {
+		std::shared_ptr<FileSource> fs = std::dynamic_pointer_cast<FileSource> (s.second);
+		if (fs) {
+			fs->close ();
+		}
+	}
 }
 
 int

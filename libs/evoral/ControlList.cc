@@ -739,7 +739,13 @@ ControlList::editor_add_ordered (OrderedPoints const & points, bool with_guard)
 
 		timecnt_t distance = earliest.distance (latest);
 
-		(void) erase_range_internal (earliest, latest, _events);
+		if (erase_range_internal (earliest, latest, _events)) {
+			/* invalidate lookup cache
+			 * This is required since add_guard_point () may use the
+			 * cache to determine the value.
+			 */
+			mark_dirty ();
+		}
 
 		if (with_guard) {
 			unlocked_invalidate_insert_iterator ();
@@ -1949,6 +1955,10 @@ ControlList::cut_copy_clear (timepos_t const& start_time, timepos_t const& end_t
 	iterator     s, e;
 	timepos_t    start = start_time;
 	timepos_t    end   = end_time;
+
+	start.set_time_domain (time_domain());
+	end.set_time_domain (time_domain());
+
 	ControlEvent cp (start, 0.0);
 
 	{

@@ -313,6 +313,7 @@ Session::Session (AudioEngine &eng,
 	, _route_deletion_in_progress (false)
 	, _route_reorder_in_progress (false)
 	, _track_number_decimals(1)
+	, _solo_change_in_progress (false)
 	, default_fade_steepness (0)
 	, default_fade_msecs (0)
 	, _total_free_4k_blocks (0)
@@ -510,6 +511,8 @@ Session::Session (AudioEngine &eng,
 	}
 
 	bool was_dirty = dirty();
+
+	AudioEngine::instance()->MidiPortInfoChanged.connect_same_thread (*this, std::bind (&Session::setup_bundles, this));
 
 	PresentationInfo::Change.connect_same_thread (*this, std::bind (&Session::notify_presentation_info_change, this, _1));
 
@@ -2284,6 +2287,10 @@ Session::maybe_enable_record (bool rt_context)
 		return;
 	}
 
+	if (rec_enabled_triggerbox()) {
+		return;
+	}
+
 	_record_status.store (Enabled);
 
 	// TODO make configurable, perhaps capture-buffer-seconds dependnet?
@@ -3004,17 +3011,17 @@ Session::ensure_route_presentation_info_gap (PresentationInfo::order_t first_new
 /** Caller must not hold process lock
  *  @param name_template string to use for the start of the name, or "" to use "Audio".
  */
-list< std::shared_ptr<AudioTrack> >
-Session::new_audio_track (int input_channels, int output_channels, std::shared_ptr<RouteGroup> route_group,
-                          uint32_t how_many, string name_template, PresentationInfo::order_t order,
-                          TrackMode mode, bool input_auto_connect,
-                          bool trigger_visibility)
+bool
+Session::new_audio_routes_tracks_bulk (RouteList& routes, AudioTrackList& tracks,
+                                       int input_channels, int output_channels, std::shared_ptr<RouteGroup> route_group,
+                                       uint32_t how_many, string name_template, PresentationInfo::order_t order,
+                                       TrackMode mode, bool input_auto_connect,
+                                       bool trigger_visibility)
 {
 	string track_name;
 	uint32_t track_id = 0;
 	string port;
-	RouteList new_routes;
-	list<std::shared_ptr<AudioTrack> > ret;
+	bool ret = true;
 
 	const string name_pattern = default_track_name_pattern (DataType::AUDIO);
 	bool const use_number = (how_many != 1) || name_template.empty () || (name_template == name_pattern);
@@ -3067,8 +3074,8 @@ Session::new_audio_track (int input_channels, int output_channels, std::shared_p
 
 			track->presentation_info ().set_trigger_track (trigger_visibility);
 
-			new_routes.push_back (track);
-			ret.push_back (track);
+			routes.push_back (track);
+			tracks.push_back (track);
 		}
 
 		catch (failed_constructor &err) {
@@ -3085,12 +3092,42 @@ Session::new_audio_track (int input_channels, int output_channels, std::shared_p
 		--how_many;
 	}
 
+	return ret;
+
 	failed:
-	if (!new_routes.empty()) {
-		add_routes (new_routes, input_auto_connect, true, order);
+	return false;
+}
+
+/** Caller must not hold process lock
+ *  @param name_template string to use for the start of the name, or "" to use "Audio".
+ */
+AudioTrackList
+Session::new_audio_track (int input_channels, int output_channels, std::shared_ptr<RouteGroup> route_group,
+                          uint32_t how_many, string name_template, PresentationInfo::order_t order,
+                          TrackMode mode, bool input_auto_connect,
+                          bool trigger_visibility)
+{
+	RouteList      routes;
+	AudioTrackList tracks;
+
+	new_audio_routes_tracks_bulk (routes,
+				      tracks,
+				      input_channels,
+				      output_channels,
+				      route_group,
+				      how_many,
+				      name_template,
+				      order,
+				      mode,
+				      input_auto_connect,
+				      trigger_visibility
+				     );
+
+	if (!routes.empty ()) {
+		add_routes (routes, input_auto_connect, true, order);
 	}
 
-	return ret;
+	return tracks;
 }
 
 /** Caller must not hold process lock.
@@ -3241,7 +3278,11 @@ Session::new_route_from_template (uint32_t how_many, PresentationInfo::order_t i
 				string const route_name  = node_copy.property(X_("name"))->value ();
 
 				/* generate a new name by adding a number to the end of the template name */
-				if (!find_route_name (route_name, ++number, name, true)) {
+				bool definitely_add_number = true;
+				/* ... unless when importing route state */
+				node_copy.get_property (X_("definitely-add-number"), definitely_add_number);
+
+				if (!find_route_name (route_name, ++number, name, definitely_add_number)) {
 					fatal << _("Session: Failed to generate unique name and ID for track from template.") << endmsg;
 					abort(); /*NOTREACHED*/
 				}
@@ -3836,24 +3877,29 @@ Session::remove_routes (std::shared_ptr<RouteList> routes_to_remove)
 			(*iter)->input()->disconnect (0);
 			(*iter)->output()->disconnect (0);
 
-			/* if the route had internal sends sending to it, remove them */
+			if (!deletion_in_progress ()) {
+				Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock (), Glib::Threads::NOT_LOCK);
+				ProcessorChangeBlocker pcb (this, false);
 
-			if (!deletion_in_progress () && (*iter)->internal_return()) {
+				if ((*iter)->internal_return() || (_monitor_out && (*iter)->can_monitor ())) {
+					lx.acquire ();
+				}
 
-				std::shared_ptr<RouteList const> r = routes.reader ();
-				for (auto const& i : *r) {
-					std::shared_ptr<Send> s = i->internal_send_for (*iter);
-					if (s) {
-						i->remove_processor (s);
+				/* if the route had internal sends sending to it, remove them */
+				if ((*iter)->internal_return()) {
+					std::shared_ptr<RouteList const> r = routes.reader ();
+					for (auto const& i : *r) {
+						std::shared_ptr<Send> s = i->internal_send_for (*iter);
+						if (s) {
+							i->remove_processor (s, nullptr, false);
+						}
 					}
 				}
-			}
 
-			/* if the monitoring section had a pointer to this route, remove it */
-			if (!deletion_in_progress () && _monitor_out && (*iter)->can_monitor ()) {
-				Glib::Threads::Mutex::Lock lm (AudioEngine::instance()->process_lock ());
-				ProcessorChangeBlocker pcb (this, false);
-				(*iter)->remove_monitor_send ();
+				/* if the monitoring section had a pointer to this route, remove it */
+				if (_monitor_out && (*iter)->can_monitor ()) {
+					(*iter)->remove_monitor_send ();
+				}
 			}
 
 			std::shared_ptr<MidiTrack> mt = std::dynamic_pointer_cast<MidiTrack> (*iter);
@@ -4026,6 +4072,17 @@ Session::route_solo_isolated_changed (std::weak_ptr<Route> wpr)
 void
 Session::route_solo_changed (bool self_solo_changed, Controllable::GroupControlDisposition group_override,  std::weak_ptr<Route> wpr)
 {
+	if (_solo_change_in_progress) {
+		/* when VCA master changes multiple solos, first collect all Changed signals,
+		 * so that SoloControl::transitioned_into_solo is set before processing
+		 * up/downstream propagation.
+		 * Slaved Solos behave like they are in a group, but `group_already_accounted_for`
+		 * is not set for VCAs, leading to https://tracker.ardour.org/view.php?id=10192
+		 */
+		_solo_change_queue.push_back (SoloChange (self_solo_changed, group_override, wpr));
+		return;
+	}
+
 	DEBUG_TRACE (DEBUG::Solo, string_compose ("route solo change, self = %1, update\n", self_solo_changed));
 
 	std::shared_ptr<Route> route (wpr.lock());
@@ -6707,6 +6764,20 @@ Session::nstripables (bool with_monitor) const
 }
 
 bool
+Session::empty() const
+{
+	StripableList sl;
+	get_stripables (sl);
+	for (auto const& s: sl) {
+		if (s->is_singleton ()) {
+			continue;
+		}
+		return false;
+	}
+	return true;
+}
+
+bool
 Session::plot_process_graph (std::string const& file_name) const {
 	return _graph_chain ? _graph_chain->plot (file_name) : false;
 }
@@ -8242,3 +8313,21 @@ Session::armed_triggerbox () const
 
 	return armed_tb;
 }
+
+std::shared_ptr<TriggerBox>
+Session::rec_enabled_triggerbox () const
+{
+	std::shared_ptr<TriggerBox> re_tb;
+	std::shared_ptr<RouteList const> rl = routes.reader();
+
+	for (auto const & r : *rl) {
+		std::shared_ptr<TriggerBox> tb = r->triggerbox();
+		if (tb && tb->rec_enabled()) {
+			re_tb = tb;
+			break;
+		}
+	}
+
+	return re_tb;
+}
+

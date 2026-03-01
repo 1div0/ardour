@@ -67,6 +67,7 @@
 #include "actions.h"
 #include "meter_patterns.h"
 #include "meterbridge.h"
+#include "keyeditor.h"
 #include "luawindow.h"
 #include "mixer_ui.h"
 #include "recorder_ui.h"
@@ -277,6 +278,8 @@ ARDOUR_UI::install_actions ()
 
 	act = ActionManager::register_action (main_actions, X_("FlushWastebasket"), _("Flush Wastebasket"),  sigc::mem_fun (*(ARDOUR_UI::instance()), &ARDOUR_UI::flush_trash));
 
+	act = ActionManager::register_action (main_actions, X_("PrintKeyBindings"), _("Print Keyboard Shortcuts"),  sigc::ptr_fun (&KeyEditor::print));
+
 	ActionManager::write_sensitive_actions.push_back (act);
 	ActionManager::session_sensitive_actions.push_back (act);
 
@@ -332,10 +335,9 @@ ARDOUR_UI::install_actions ()
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
 
-	act = ActionManager::register_action (transport_actions, X_("SpacebarAction"), _("Start/Stop"), sigc::bind (sigc::mem_fun (*this, &ARDOUR_UI::spacebar_action), false, false));
-	ActionManager::session_sensitive_actions.push_back (act);
 	act = ActionManager::register_action (transport_actions, X_("ToggleRoll"), _("Start/Stop"), sigc::bind (sigc::mem_fun (*this, &ARDOUR_UI::toggle_roll), false, false));
 	ActionManager::session_sensitive_actions.push_back (act);
+	ActionManager::transport_sensitive_actions.push_back (act);
 	act = ActionManager::register_action (transport_actions, X_("alternate-ToggleRoll"), _("Start/Stop"), sigc::bind (sigc::mem_fun (*this, &ARDOUR_UI::toggle_roll), false, false));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
@@ -411,40 +413,42 @@ ARDOUR_UI::install_actions ()
 	ActionManager::transport_sensitive_actions.push_back (act);
 
 	//these actions handle the numpad events, ProTools style
-	act = ActionManager::register_action (transport_actions, X_("numpad-decimal"), _("Numpad Decimal"), mem_fun(*this, &ARDOUR_UI::transport_numpad_decimal));
+	// Note that the action labels must be kept in sync with the switch
+	// statement in ARDOUR_UI::transport_numpad_event()
+	act = ActionManager::register_action (transport_actions, X_("numpad-decimal"), _("Begin/End Numpad Marker Jump"), mem_fun(*this, &ARDOUR_UI::transport_numpad_decimal));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("alternate-numpad-decimal"), _("Numpad Decimal"), mem_fun(*this, &ARDOUR_UI::transport_numpad_decimal));
+	act = ActionManager::register_action (transport_actions, X_("alternate-numpad-decimal"), _("Begin/End Numpad Marker Jump"), mem_fun(*this, &ARDOUR_UI::transport_numpad_decimal));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-0"), _("Numpad 0"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 0));
+	act = ActionManager::register_action (transport_actions, X_("numpad-0"), _("Toggle Roll"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 0));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-1"), _("Numpad 1"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 1));
+	act = ActionManager::register_action (transport_actions, X_("numpad-1"), _("Rewind"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 1));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-2"), _("Numpad 2"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 2));
+	act = ActionManager::register_action (transport_actions, X_("numpad-2"), _("Fast Forward"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 2));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-3"), _("Numpad 3"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 3));
+	act = ActionManager::register_action (transport_actions, X_("numpad-3"), _("Record Enable"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 3));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-4"), _("Numpad 4"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 4));
+	act = ActionManager::register_action (transport_actions, X_("numpad-4"), _("Toggle Auto Loop"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 4));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-5"), _("Numpad 5"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 5));
+	act = ActionManager::register_action (transport_actions, X_("numpad-5"), _("Stop Recording & Loop"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 5));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-6"), _("Numpad 6"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 6));
+	act = ActionManager::register_action (transport_actions, X_("numpad-6"), _("Toggle Punch"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 6));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-7"), _("Numpad 7"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 7));
+	act = ActionManager::register_action (transport_actions, X_("numpad-7"), _("Toggle Metronome"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 7));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-8"), _("Numpad 8"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 8));
+	act = ActionManager::register_action (transport_actions, X_("numpad-8"), _("Toggle Auto Return"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 8));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
-	act = ActionManager::register_action (transport_actions, X_("numpad-9"), _("Numpad 9"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 9));
+	act = ActionManager::register_action (transport_actions, X_("numpad-9"), _("Toggle Follow Edits"), bind (mem_fun(*this, &ARDOUR_UI::transport_numpad_event), 9));
 	ActionManager::session_sensitive_actions.push_back (act);
 	ActionManager::transport_sensitive_actions.push_back (act);
 

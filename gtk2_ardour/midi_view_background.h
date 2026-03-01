@@ -86,8 +86,6 @@ class MidiViewBackground : public virtual ViewBackground
 	ARDOUR::ColorMode color_mode() const { return _color_mode; }
 	void set_color_mode (ARDOUR::ColorMode);
 
-	Gtkmm2ext::Color region_color() const { return _region_color; }
-
 	void set_note_visibility_range_style (VisibleNoteRange r);
 	VisibleNoteRange visibility_range_style() const { return _visibility_note_range; }
 
@@ -124,7 +122,7 @@ class MidiViewBackground : public virtual ViewBackground
 	virtual int y_position () const { return 0; }
 
 	virtual uint8_t get_preferred_midi_channel () const = 0;
-	virtual void set_note_highlight (bool) = 0;
+	virtual void set_note_highlight (uint8_t) = 0;
 	virtual void record_layer_check (std::shared_ptr<ARDOUR::Region>, samplepos_t) = 0;
 
 	virtual void set_size (int w, int h) {}
@@ -152,7 +150,6 @@ class MidiViewBackground : public virtual ViewBackground
 	uint8_t                   _data_note_max; ///< in data
 	ArdourCanvas::RectSet*    _note_lines;
 	ARDOUR::NoteMode          _note_mode;
-	Gtkmm2ext::Color          _region_color;
 	ARDOUR::ColorMode         _color_mode;
 	VisibleNoteRange          _visibility_note_range;
 	bool                       note_range_set;

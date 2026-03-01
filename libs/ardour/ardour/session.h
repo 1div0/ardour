@@ -359,6 +359,7 @@ public:
 	uint32_t ntracks () const;
 	uint32_t naudiotracks () const;
 	uint32_t nbusses () const;
+	bool     empty () const;
 
 	bool plot_process_graph (std::string const& file_name) const;
 
@@ -694,7 +695,7 @@ public:
 	};
 
 	bool export_route_state (std::shared_ptr<RouteList> rl, const std::string& path, bool with_sources);
-	int  import_route_state (const std::string& path, std::map<PBD::ID, PBD::ID> const&, RouteGroupImportMode rgim = CreateRouteGroup);
+	int  import_route_state (const std::string& path, std::map<PBD::ID, PBD::ID> const&, RouteGroupImportMode rgim = CreateRouteGroup, PBD::Progress* p = 0);
 
 	std::map<PBD::ID, RouteImportInfo> parse_route_state (const std::string& path, bool& match_pbd_id);
 
@@ -767,7 +768,23 @@ public:
 
 	/* fundamental operations. duh. */
 
-	std::list<std::shared_ptr<AudioTrack> > new_audio_track (
+	AudioTrackList new_audio_track (
+		int input_channels,
+		int output_channels,
+		std::shared_ptr<RouteGroup> route_group,
+		uint32_t how_many,
+		std::string name_template,
+		PresentationInfo::order_t order,
+		TrackMode mode = Normal,
+		bool input_auto_connect = true,
+		bool trigger_visibility = false
+		);
+
+	/* Call this repeatedly with different track name templates and finally call add_routes.
+	 * useful for speeding up imports of various kinds that involve lots of tracks */
+	bool new_audio_routes_tracks_bulk (
+		RouteList& routes,
+		AudioTrackList& tracks,
 		int input_channels,
 		int output_channels,
 		std::shared_ptr<RouteGroup> route_group,
@@ -795,6 +812,8 @@ public:
 
 	void remove_routes (std::shared_ptr<RouteList>);
 	void remove_route (std::shared_ptr<Route>);
+
+	void add_routes (RouteList&, bool input_auto_connect, bool output_auto_connect, PresentationInfo::order_t);
 
 	void resort_routes ();
 
@@ -909,6 +928,8 @@ public:
 	int  cleanup_peakfiles ();
 	int  cleanup_sources (CleanupReport&);
 	int  cleanup_trash_sources (CleanupReport&);
+
+	void close_all_sources ();
 
 	int destroy_sources (std::list<std::shared_ptr<Source> > const&);
 
@@ -1348,7 +1369,7 @@ public:
 	void import_pt_rest (PTFFormat& ptf);
 	bool import_sndfile_as_region (std::string path, SrcQuality quality, timepos_t& pos, SourceList& sources, ImportStatus& status, uint32_t current, uint32_t total);
 
-	struct ptflookup {
+	typedef struct ptflookup {
 		uint16_t index1;
 		uint16_t index2;
 		PBD::ID  id;
@@ -1356,9 +1377,8 @@ public:
 		bool operator ==(const struct ptflookup& other) {
 			return (this->index1 == other.index1);
 		}
-	};
-	std::vector<struct ptflookup> ptfwavpair;
-	SourceList pt_imported_sources;
+	} PtfLookup;
+	std::vector<PtfLookup> ptfregpair;
 
 	enum TimingTypes {
 		OverallProcess = 0,
@@ -1382,6 +1402,7 @@ public:
 	bool unbang_trigger_at(int32_t route_index, int32_t row_index);
 	void clear_cue (int row_index);
 	std::shared_ptr<TriggerBox> armed_triggerbox () const;
+	std::shared_ptr<TriggerBox> rec_enabled_triggerbox () const;
 
 	void start_domain_bounce (Temporal::DomainBounceInfo&);
 	void finish_domain_bounce (Temporal::DomainBounceInfo&);
@@ -1952,7 +1973,6 @@ private:
 
 	SerializedRCUManager<RouteList>  routes;
 
-	void add_routes (RouteList&, bool input_auto_connect, bool output_auto_connect, PresentationInfo::order_t);
 	void add_routes_inner (RouteList&, bool input_auto_connect, bool output_auto_connect, PresentationInfo::order_t);
 	bool _adding_routes_in_progress;
 	bool _reconnecting_routes_in_progress;
@@ -1993,6 +2013,24 @@ private:
 
 	void listen_position_changed ();
 	void solo_control_mode_changed ();
+
+	bool _solo_change_in_progress;
+
+	struct SoloChange {
+		SoloChange (bool s, PBD::Controllable::GroupControlDisposition g, std::weak_ptr<Route> r)
+			: self_solo_changed (s)
+			, gcd (g)
+			, route (r)
+		{}
+		bool                                       self_solo_changed;
+		PBD::Controllable::GroupControlDisposition gcd;
+		std::weak_ptr<Route>                       route;
+	};
+#ifdef _MSC_VER
+	std::vector<SoloChange> _solo_change_queue;
+#else
+	std::vector<SoloChange, PBD::StackAllocator<SoloChange, 8>> _solo_change_queue;
+#endif
 
 	/* REGION MANAGEMENT */
 
@@ -2343,6 +2381,7 @@ private:
 	void setup_click ();
 	void setup_click_state (const XMLNode*);
 	void setup_bundles ();
+	void setup_bundles_rcu ();
 
 	void port_registry_changed ();
 	void probe_ctrl_surfaces ();

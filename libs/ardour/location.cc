@@ -136,7 +136,7 @@ Location::operator== (const Location& other)
 {
 	if (_name != other._name ||
 	    _start != other._start ||
-	    _end != other._end ||
+	    (_end != other._end && (_flags & IsSection) == 0) ||
 	    _flags != other._flags) {
 		return false;
 	}
@@ -511,6 +511,14 @@ Location::move_to (Temporal::timepos_t const & pos)
 	assert (_end >= 0);
 
 	return 0;
+}
+
+void
+Location::update_section_end (timepos_t const& e)
+{
+	assert (is_section ());
+	_end = e;
+	_end.set_time_domain (_start.time_domain ());
 }
 
 void
@@ -1662,7 +1670,7 @@ Locations::next_section (Location* l, timepos_t& start, timepos_t& end) const
 Location*
 Locations::next_section_iter (Location* l, timepos_t& start, timepos_t& end, vector<LocationPair>& locs) const
 {
-	if (!l) {
+	if (!l || locs.empty ()) {
 		/* build cache */
 		locs.clear ();
 		sorted_section_locations (locs);
@@ -1677,6 +1685,7 @@ Locations::next_section_iter (Location* l, timepos_t& start, timepos_t& end, vec
 		l = locs[0].second;
 		start = locs[0].first;
 		end = locs[1].first;
+		l->update_section_end (end);
 		return l;
 	}
 
@@ -1686,6 +1695,7 @@ Locations::next_section_iter (Location* l, timepos_t& start, timepos_t& end, vec
 	for (auto const& i: locs) {
 		if (rv && found) {
 			end = i.first;
+			rv->update_section_end (end);
 			return rv;
 		}
 		else if (found) {

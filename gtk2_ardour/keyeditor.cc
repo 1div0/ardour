@@ -128,7 +128,7 @@ KeyEditor::KeyEditor ()
 	print_button.add (print_label);
 	print_label.set_markup (string_compose ("  <span size=\"large\" weight=\"bold\">%1</span>  ", _("Print Bindings (to your web browser)")));
 
-	print_button.signal_clicked().connect (sigc::mem_fun (*this, &KeyEditor::print));
+	print_button.signal_clicked().connect (sigc::ptr_fun (&KeyEditor::print));
 
 	reset_box.pack_start (reset_button, true, false);
 	reset_box.pack_start (print_button, true, false);
@@ -246,6 +246,7 @@ KeyEditor::Tab::Tab (KeyEditor& ke, string const & str, Bindings* b)
 	view.set_model (sorted_filter);
 	view.append_column (_("Action"), columns.name);
 	view.append_column (_("Shortcut"), columns.binding);
+	view.append_column (_("Path"), columns.path);
 	view.set_headers_visible (true);
 	view.set_headers_clickable (true);
 	view.get_selection()->set_mode (SELECTION_SINGLE);
@@ -261,6 +262,8 @@ KeyEditor::Tab::Tab (KeyEditor& ke, string const & str, Bindings* b)
 
 	view.get_column(0)->set_sort_column (columns.name);
 	view.get_column(1)->set_sort_column (columns.binding);
+	view.get_column(2)->set_visible (false);
+	view.set_tooltip_column(2);
 	data_model->set_sort_column (owner.sort_column,  owner.sort_type);
 	data_model->signal_sort_column_changed().connect (sigc::mem_fun (*this, &Tab::sort_column_changed));
 
@@ -585,10 +588,10 @@ KeyEditor::search_string_updated (const std::string& filter)
 }
 
 void
-KeyEditor::print () const
+KeyEditor::print ()
 {
 	stringstream sstr;
-	Bindings::save_all_bindings_as_html (sstr);
+	Bindings::save_all_bindings_as_html (sstr, false);
 
 	if (sstr.str().empty()) {
 		return;
