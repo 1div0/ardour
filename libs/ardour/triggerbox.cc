@@ -3660,7 +3660,7 @@ PBD::ScopedConnectionList TriggerBox::static_connections;
 PBD::ScopedConnection TriggerBox::midi_input_connection;
 std::shared_ptr<MidiPort> TriggerBox::current_input;
 PBD::Signal<void(PBD::PropertyChange,int)> TriggerBox::TriggerBoxPropertyChange;
-Glib::Threads::Mutex TriggerBox::_bindings_mutex;
+PBD::Mutex TriggerBox::_bindings_mutex;
 
 typedef std::map <std::shared_ptr<Region>, std::shared_ptr<Trigger::UIState>> RegionStateMap;
 RegionStateMap enqueued_state_map;
@@ -4015,6 +4015,11 @@ TriggerBox::rec_enabled() const
 void
 TriggerBox::set_record_enabled (bool yn)
 {
+	AudioTrack const * trk = static_cast<AudioTrack*> (_owner);
+	if (yn && trk && trk->rec_enable_control()->get_value ()) {
+		return;
+	}
+
 	_record_state = yn ? Enabled : Disabled;
 
 	if (_record_state == Disabled) {
@@ -4470,7 +4475,7 @@ TriggerBox::trigger_by_id (PBD::ID check)
 void
 TriggerBox::deep_sources (std::set<std::shared_ptr<Source> >& sources)
 {
-	Glib::Threads::RWLock::ReaderLock lm (trigger_lock);
+	PBD::RWLock::ReaderLock lm (trigger_lock);
 
 	for (uint64_t n = 0; n < all_triggers.size(); ++n) {
 		std::shared_ptr<Region> r (trigger(n)->the_region ());
@@ -4483,7 +4488,7 @@ TriggerBox::deep_sources (std::set<std::shared_ptr<Source> >& sources)
 void
 TriggerBox::used_regions (std::set<std::shared_ptr<Region> >& regions)
 {
-	Glib::Threads::RWLock::ReaderLock lm (trigger_lock);
+	PBD::RWLock::ReaderLock lm (trigger_lock);
 
 	for (uint64_t n = 0; n < all_triggers.size(); ++n) {
 		std::shared_ptr<Region> r (trigger(n)->the_region ());
@@ -4717,14 +4722,14 @@ TriggerBox::unbang_trigger_at (Triggers::size_type row)
 void
 TriggerBox::drop_triggers ()
 {
-	Glib::Threads::RWLock::WriterLock lm (trigger_lock);
+	PBD::RWLock::WriterLock lm (trigger_lock);
 	all_triggers.clear ();
 }
 
 TriggerPtr
 TriggerBox::trigger (Triggers::size_type n)
 {
-	Glib::Threads::RWLock::ReaderLock lm (trigger_lock);
+	PBD::RWLock::ReaderLock lm (trigger_lock);
 
 	if (n >= all_triggers.size()) {
 		return 0;
@@ -4765,7 +4770,7 @@ TriggerBox::configure_io (ChanCount in, ChanCount out)
 void
 TriggerBox::add_trigger (TriggerPtr trigger)
 {
-	Glib::Threads::RWLock::WriterLock lm (trigger_lock);
+	PBD::RWLock::WriterLock lm (trigger_lock);
 	all_triggers.push_back (trigger);
 }
 
@@ -4784,7 +4789,7 @@ TriggerBox::set_first_midi_note (int n)
 bool
 TriggerBox::lookup_custom_midi_binding (std::vector<uint8_t> const & msg, int& x, int& y)
 {
-	Glib::Threads::Mutex::Lock lm (_bindings_mutex, Glib::Threads::TRY_LOCK);
+	PBD::Mutex::Lock lm (_bindings_mutex, PBD::Mutex::TryLock);
 
 	if (!lm.locked()) {
 		return false;
@@ -4877,7 +4882,7 @@ TriggerBox::get_custom_midi_binding_state ()
 {
 	XMLTree tree;
 	XMLNode* root = new XMLNode (X_("TriggerBindings"));
-	Glib::Threads::Mutex::Lock lm (_bindings_mutex);
+	PBD::Mutex::Lock lm (_bindings_mutex);
 
 	for (auto const & b : _custom_midi_map) {
 
@@ -4954,7 +4959,7 @@ TriggerBox::add_custom_midi_binding (std::vector<uint8_t> const & msg, int x, in
 {
 	/* Called from realtime/MIDI thread, so cannot block */
 
-	Glib::Threads::Mutex::Lock lm (_bindings_mutex, Glib::Threads::TRY_LOCK);
+	PBD::Mutex::Lock lm (_bindings_mutex, PBD::Mutex::TryLock);
 
 	if (!lm.locked()) {
 		return;
@@ -4970,7 +4975,7 @@ TriggerBox::add_custom_midi_binding (std::vector<uint8_t> const & msg, int x, in
 void
 TriggerBox::remove_custom_midi_binding (int x, int y)
 {
-	Glib::Threads::Mutex::Lock lm (_bindings_mutex);
+	PBD::Mutex::Lock lm (_bindings_mutex);
 
 	/* this searches the whole map in case there are multiple entries
 	 *(keyed by note/channel) for the same pad (x,y)
@@ -4986,7 +4991,7 @@ TriggerBox::remove_custom_midi_binding (int x, int y)
 void
 TriggerBox::clear_custom_midi_bindings ()
 {
-	Glib::Threads::Mutex::Lock lm (_bindings_mutex);
+	PBD::Mutex::Lock lm (_bindings_mutex);
 	_custom_midi_map.clear ();
 }
 
@@ -5630,7 +5635,7 @@ TriggerBox::get_state () const
 	XMLNode* trigger_child (new XMLNode (X_("Triggers")));
 
 	{
-		Glib::Threads::RWLock::ReaderLock lm (trigger_lock);
+		PBD::RWLock::ReaderLock lm (trigger_lock);
 		for (auto const & t : all_triggers) {
 			trigger_child->add_child_nocopy (t->get_state());
 		}
@@ -5659,7 +5664,7 @@ TriggerBox::set_state (const XMLNode& node, int version)
 	drop_triggers ();
 
 	{
-		Glib::Threads::RWLock::WriterLock lm (trigger_lock);
+		PBD::RWLock::WriterLock lm (trigger_lock);
 
 		for (XMLNodeList::const_iterator t = tchildren.begin(); t != tchildren.end(); ++t) {
 			TriggerPtr trig;
@@ -6081,7 +6086,7 @@ TriggerBoxThread::build_midi_source (MIDITrigger* t, Temporal::timecnt_t const &
 std::shared_ptr<MidiBuffer>
 TriggerBox::get_gui_feed_buffer () const
 {
-	Glib::Threads::Mutex::Lock lm (_gui_feed_reset_mutex);
+	PBD::Mutex::Lock lm (_gui_feed_reset_mutex);
 	std::shared_ptr<MidiBuffer> b (new MidiBuffer (AudioEngine::instance()->raw_buffer_size (DataType::MIDI)));
 
 	std::vector<MIDI::byte> buffer (_gui_feed_fifo.capacity());

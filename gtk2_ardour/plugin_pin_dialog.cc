@@ -1762,7 +1762,7 @@ PluginPinWidget::add_sidechain_port (DataType dt)
 
 	// this triggers a PluginIoReConfigure with process and processor write lock held
 	// from /this/ thread.
-	io->add_port ("", this, dt);
+	io->add_port ("", dt);
 }
 
 void
@@ -1778,7 +1778,7 @@ PluginPinWidget::remove_port (std::weak_ptr<ARDOUR::Port> wp)
 	if (!io || !p) {
 		return;
 	}
-	io->remove_port (p, this);
+	io->remove_port (p);
 }
 
 void
@@ -1838,8 +1838,8 @@ PluginPinWidget::add_send_from (std::weak_ptr<ARDOUR::Port> wp, std::weak_ptr<AR
 	std::shared_ptr<Send> send (new Send (*_session, r->pannable (), r->mute_master ()));
 	const ChanCount& outs (r->amp ()->input_streams ());
 	try {
-		Glib::Threads::Mutex::Lock lm (AudioEngine::instance ()->process_lock ());
-		send->output()->ensure_io (outs, false, this);
+		PBD::Mutex::Lock lm (AudioEngine::instance ()->process_lock ());
+		send->output()->ensure_io (outs, false);
 	} catch (AudioEngine::PortRegistrationFailure& err) {
 		error << string_compose (_("Cannot set up new send: %1"), err.what ()) << endmsg;
 		return;

@@ -225,7 +225,7 @@ Session::locate (samplepos_t target_sample, bool for_loop_end, bool force, bool 
 
 		/* this is functionally what clear_clicks() does but with a tentative lock */
 
-		Glib::Threads::RWLock::WriterLock clickm (click_lock, Glib::Threads::TRY_LOCK);
+		PBD::RWLock::WriterLock clickm (_click_lock, PBD::RWLock::TryLock);
 
 		if (clickm.locked()) {
 
@@ -1198,7 +1198,7 @@ Session::butler_transport_work (bool have_process_lock)
 	if (ptw & PostTransportAdjustPlaybackBuffering) {
 		/* need to prevent concurrency with ARDOUR::Reader::run(),
 		 * DiskWriter::adjust_buffering() re-allocates the ringbuffer */
-		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock (), Glib::Threads::NOT_LOCK);
+		PBD::Mutex::Lock lx (AudioEngine::instance()->process_lock (), PBD::Mutex::NotLock);
 		if (!have_process_lock) {
 			lx.acquire ();
 		}
@@ -1222,7 +1222,7 @@ Session::butler_transport_work (bool have_process_lock)
 	if (ptw & PostTransportAdjustCaptureBuffering) {
 		/* need to prevent concurrency with ARDOUR::DiskWriter::run(),
 		 * DiskWriter::adjust_buffering() re-allocates the ringbuffer */
-		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock (), Glib::Threads::NOT_LOCK);
+		PBD::Mutex::Lock lx (AudioEngine::instance()->process_lock (), PBD::Mutex::NotLock);
 		if (!have_process_lock) {
 			lx.acquire ();
 		}

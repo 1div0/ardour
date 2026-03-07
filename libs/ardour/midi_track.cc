@@ -116,7 +116,7 @@ MidiTrack::init ()
 	_velocity_control.reset (new VelocityControl (_session));
 	add_control (_velocity_control);
 
-	_input->changed.connect_same_thread (*this, std::bind (&MidiTrack::track_input_active, this, _1, _2));
+	_input->changed.connect_same_thread (*this, std::bind (&MidiTrack::track_input_active, this, _1));
 
 	_disk_writer->set_note_mode (_note_mode);
 	_disk_reader->reset_tracker ();
@@ -427,7 +427,7 @@ MidiTrack::no_roll_unlocked (pframes_t nframes, samplepos_t start_sample, sample
 void
 MidiTrack::realtime_locate (bool for_loop_end)
 {
-	Glib::Threads::RWLock::ReaderLock lm (_processor_lock, Glib::Threads::TRY_LOCK);
+	PBD::RWLock::ReaderLock lm (_processor_lock, PBD::RWLock::TryLock);
 
 	if (!lm.locked ()) {
 		return;
@@ -466,7 +466,7 @@ MidiTrack::non_realtime_locate (samplepos_t spos)
 		_disk_reader->midi_chase (spos);
 	}
 
-	Glib::Threads::Mutex::Lock lm (_control_lock, Glib::Threads::TRY_LOCK);
+	PBD::Mutex::Lock lm (_control_lock, PBD::Mutex::TryLock);
 	if (!lm.locked()) {
 		return;
 	}
@@ -590,7 +590,7 @@ MidiTrack::export_stuff (BufferSet&                   buffers,
 		return -1;
 	}
 
-	Glib::Threads::RWLock::ReaderLock rlock (_processor_lock);
+	PBD::RWLock::ReaderLock rlock (_processor_lock);
 
 	std::shared_ptr<MidiPlaylist> mpl = _disk_writer->midi_playlist();
 	if (!mpl) {
@@ -907,7 +907,7 @@ MidiTrack::map_input_active (bool yn)
 }
 
 void
-MidiTrack::track_input_active (IOChange change, void* /* src */)
+MidiTrack::track_input_active (IOChange change)
 {
 	if (change.type & IOChange::ConfigurationChanged) {
 		map_input_active (_input_active);
@@ -1005,7 +1005,7 @@ MidiTrack::playlist_contents_changed ()
 }
 
 void
-MidiTrack::input_change_handler (IOChange change, void *src)
+MidiTrack::input_change_handler (IOChange change)
 {
 	note_connections.drop_connections ();
 	_last_seen_external_midi_note = -1;
@@ -1017,7 +1017,7 @@ MidiTrack::input_change_handler (IOChange change, void *src)
 		}
 	}
 
-	Track::input_change_handler (change, src);
+	Track::input_change_handler (change);
 }
 
 void

@@ -30,7 +30,6 @@
 #include <set>
 
 #include <glibmm/fileutils.h>
-#include <glibmm/threads.h>
 
 #include "pbd/gstdio_compat.h"
 #include "pbd/basename.h"
@@ -286,7 +285,7 @@ AudioRegion::copy_plugin_state (std::shared_ptr<const AudioRegion> other)
 	 * the AudioRegion does not yet exist, and virtual _add_plugin
 	 * of the parent class is called
 	 */
-	Glib::Threads::RWLock::ReaderLock lm (other->_fx_lock);
+	PBD::RWLock::ReaderLock lm (other->_fx_lock);
 	for (auto const& i : other->_plugins) {
 		XMLNode& state = i->get_state ();
 		state.remove_property ("count");
@@ -743,9 +742,9 @@ AudioRegion::read_at (Sample*     buf,
 	 *  (envelope/fades/regionFX) will not make a
 	 *  significant difference.
 	 */
-	Glib::Threads::Mutex::Lock crl (_read_lock);
+	PBD::Mutex::Lock crl (_read_lock);
 
-	Glib::Threads::Mutex::Lock cl (_cache_lock);
+	PBD::Mutex::Lock cl (_cache_lock);
 	if (chan_n == 0 && _invalidated.exchange (false)) {
 		_cache_start = _cache_end = -1;
 		_cache_tail  = 0;
@@ -762,7 +761,7 @@ AudioRegion::read_at (Sample*     buf,
 		copy_vector (mixdown_buffer, _readcache.get_audio (chan_n).data (internal_offset + suffix - _cache_start), can_read);
 		cl.release ();
 	} else {
-		Glib::Threads::RWLock::ReaderLock lm (_fx_lock);
+		PBD::RWLock::ReaderLock lm (_fx_lock);
 		bool have_fx        = !_plugins.empty ();
 		uint32_t fx_latency = _fx_latency;
 		lm.release ();
@@ -2519,7 +2518,7 @@ AudioRegion::_add_plugin (std::shared_ptr<RegionFxPlugin> rfx, std::shared_ptr<R
 
 	ChanCount fx_cc;
 	{
-		Glib::Threads::RWLock::ReaderLock lm (_fx_lock, Glib::Threads::NOT_LOCK);
+		PBD::RWLock::ReaderLock lm (_fx_lock, PBD::RWLock::NotLock);
 		if (!from_set_state) {
 			lm.acquire();
 		}
@@ -2576,7 +2575,7 @@ AudioRegion::_add_plugin (std::shared_ptr<RegionFxPlugin> rfx, std::shared_ptr<R
 	}
 
 	{
-		Glib::Threads::RWLock::WriterLock lm (_fx_lock);
+		PBD::RWLock::WriterLock lm (_fx_lock);
 		RegionFxList::iterator loc = _plugins.end ();
 		if (before) {
 			loc = find (_plugins.begin (), _plugins.end (), before);
@@ -2600,7 +2599,7 @@ AudioRegion::_add_plugin (std::shared_ptr<RegionFxPlugin> rfx, std::shared_ptr<R
 bool
 AudioRegion::remove_plugin (std::shared_ptr<RegionFxPlugin> fx)
 {
-	Glib::Threads::RWLock::WriterLock lm (_fx_lock);
+	PBD::RWLock::WriterLock lm (_fx_lock);
 	auto i = find (_plugins.begin(), _plugins.end(), fx);
 	if (i == _plugins.end ()) {
 		return false;
@@ -2608,7 +2607,7 @@ AudioRegion::remove_plugin (std::shared_ptr<RegionFxPlugin> fx)
 	_plugins.erase (i);
 
 	if (_plugins.empty ()) {
-		Glib::Threads::Mutex::Lock cl (_cache_lock);
+		PBD::Mutex::Lock cl (_cache_lock);
 		_cache_start = _cache_end = -1;
 		_cache_tail  = 0;
 		_readcache.clear ();
@@ -2685,7 +2684,7 @@ AudioRegion::fx_tail_changed (bool no_emit)
 void
 AudioRegion::apply_region_fx (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, samplecnt_t n_samples)
 {
-	Glib::Threads::RWLock::ReaderLock lm (_fx_lock);
+	PBD::RWLock::ReaderLock lm (_fx_lock);
 
 	if (_plugins.empty ()) {
 		return;

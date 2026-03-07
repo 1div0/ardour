@@ -110,7 +110,7 @@ PluginInsert::drop_references ()
 	 * controllable, but that runs after ~PluginInsert.
 	 */
 	{
-		Glib::Threads::Mutex::Lock lm (_control_lock);
+		PBD::Mutex::Lock lm (_control_lock);
 		for (Controls::const_iterator li = _controls.begin(); li != _controls.end(); ++li) {
 			std::dynamic_pointer_cast<AutomationControl>(li->second)->drop_references ();
 		}
@@ -247,10 +247,10 @@ PluginInsert::add_sidechain (uint32_t n_audio, uint32_t n_midi)
 	_sidechain.reset (new SideChain (_session, n.str ()));
 	_sidechain->activate ();
 	for (uint32_t n = 0; n < n_audio; ++n) {
-		_sidechain->input()->add_port ("", owner(), DataType::AUDIO); // add a port, don't connect.
+		_sidechain->input()->add_port ("", DataType::AUDIO); // add a port, don't connect.
 	}
 	for (uint32_t n = 0; n < n_midi; ++n) {
-		_sidechain->input()->add_port ("", owner(), DataType::MIDI); // add a port, don't connect.
+		_sidechain->input()->add_port ("", DataType::MIDI); // add a port, don't connect.
 	}
 	PluginConfigChanged (); /* EMIT SIGNAL */
 	return true;
@@ -1331,7 +1331,7 @@ PluginInsert::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 		_timing_stats.reset ();
 	}
 
-	if (_active != _pending_active && !_pending_active) {
+	if (_active && !_pending_active) {
 		/* deactivate */
 		for (Plugins::iterator i = _plugins.begin(); i != _plugins.end(); ++i) {
 			(*i)->deactivate ();
@@ -1358,7 +1358,7 @@ PluginInsert::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sa
 		if (_session.transport_rolling() || _session.bounce_processing()) {
 			automate_and_run (bufs, start_sample, end_sample, speed, nframes);
 		} else {
-			Glib::Threads::Mutex::Lock lm (control_lock(), Glib::Threads::TRY_LOCK);
+			PBD::Mutex::Lock lm (control_lock(), PBD::Mutex::TryLock);
 			connect_and_run (bufs, start_sample, end_sample, speed, nframes, 0, lm.locked());
 		}
 #if defined MIXBUS && defined NDEBUG
@@ -1389,7 +1389,7 @@ PluginInsert::automate_and_run (BufferSet& bufs, samplepos_t start, samplepos_t 
 	Evoral::ControlEvent next_event (timepos_t (Temporal::AudioTime), 0.0f);
 	samplecnt_t offset = 0;
 
-	Glib::Threads::Mutex::Lock lm (control_lock(), Glib::Threads::TRY_LOCK);
+	PBD::Mutex::Lock lm (control_lock(), PBD::Mutex::TryLock);
 
 	if (!lm.locked()) {
 		connect_and_run (bufs, start, end, speed, nframes, offset, false);
