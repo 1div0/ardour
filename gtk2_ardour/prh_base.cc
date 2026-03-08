@@ -182,7 +182,7 @@ PianoRollHeaderBase::render (ArdourCanvas::Rect const & self, ArdourCanvas::Rect
 	//Reduce the frequency of Pango layout resizing
 	//if (int(_old_context_note_height) != int(context_note_height)) {
 	//Set Pango layout keyboard c's size
-	_font_descript.set_absolute_size (context_note_height * 0.5 * Pango::SCALE);
+	_font_descript.set_absolute_size (min(15.0 * Pango::SCALE, max(10.0 * Pango::SCALE, (int)context_note_height * 0.5 * Pango::SCALE)));
 	_layout->set_font_description(_font_descript);
 
 	//change mode of midnam display
@@ -382,13 +382,13 @@ PianoRollHeaderBase::render (ArdourCanvas::Rect const & self, ArdourCanvas::Rect
 	   so that the top of the C is shown to maintain visual context
 	 */
 
-	int bc_height, c_height, ignore;
+	int bc_height, c_height, c_width;
 
 	_big_c_layout->set_text ("C1");
 	_layout->set_text ("C1");
 
-	pango_layout_get_pixel_size (_big_c_layout->gobj(), &ignore, &bc_height);
-	pango_layout_get_pixel_size (_layout->gobj(), &ignore, &c_height);
+	pango_layout_get_pixel_size (_big_c_layout->gobj(), &c_width, &bc_height);
+	pango_layout_get_pixel_size (_layout->gobj(), &c_width, &c_height);
 
 	for (std::vector<int>::size_type n = 0; n < numbers.size(); ++n) {
 
@@ -412,7 +412,7 @@ PianoRollHeaderBase::render (ArdourCanvas::Rect const & self, ArdourCanvas::Rect
 				/* Cn text shown in keys */
 				set_source_rgba (cr, black);
 				_layout->set_text (str.str());
-				cr->move_to (x, y);
+				cr->move_to (x + kbd_width / 2 - c_width / 2, y + context_note_height / 2 - c_height / 2);
 				_layout->show_in_cairo_context (cr);
 			} else {
 				/* Cn text shown to left of keys */
@@ -458,7 +458,7 @@ PianoRollHeaderBase::render_scroomer (Cairo::RefPtr<Cairo::Context> cr) const
 	cr->line_to (1.f, scroomer_top);
 	cr->fill();
 
-	if (entered) {
+	if (entered || _scroomer_drag) {
 		cr->save ();
 		c = HSV (save_color).lighter (0.9).color();
 		set_source_rgba (cr, c);
@@ -467,7 +467,7 @@ PianoRollHeaderBase::render_scroomer (Cairo::RefPtr<Cairo::Context> cr) const
 		cr->line_to (_scroomer_size - 1.f, scroomer_top + 2.);
 		cr->stroke ();
 		cr->line_to (_scroomer_size - 1.f, scroomer_bottom - 2.);
-		cr->line_to (2.f, scroomer_bottom - 2.);
+		cr->line_to (1.f, scroomer_bottom - 2.);
 		cr->stroke ();
 		cr->restore ();
 	}
@@ -651,6 +651,11 @@ PianoRollHeaderBase::motion_handler (GdkEventMotion* ev)
 
 	}
 
+	if (!_scroomer_drag && !in_scroomer) {
+		set_cursor (nullptr);
+		_scroomer_state = NONE;
+	}
+
 	_old_y = ev->y;
 
 	return true;
@@ -798,7 +803,11 @@ PianoRollHeaderBase::enter_handler (GdkEventCrossing* ev)
 		set_note_highlight (_midi_context.y_to_note (ev->y));
 	}
 
-	set_cursor (_midi_context.editing_context().cursors()->selector);
+	if (!_scroomer_drag) {
+		set_cursor (nullptr);
+		_scroomer_state = NONE;
+	}
+
 	entered = true;
 	redraw ();
 	return true;
@@ -807,7 +816,9 @@ PianoRollHeaderBase::enter_handler (GdkEventCrossing* ev)
 bool
 PianoRollHeaderBase::leave_handler (GdkEventCrossing*)
 {
-	set_cursor (nullptr);
+	if (!_scroomer_drag) {
+		set_cursor (nullptr);
+	}
 
 	invalidate_note_range(_highlighted_note, _highlighted_note);
 
